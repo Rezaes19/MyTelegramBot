@@ -2,38 +2,28 @@ import subprocess
 import sys
 import os
 
-# ====== نصب خودکار ======
-def install_packages():
-    print("🔧 Checking dependencies...")
-    try:
-        import telethon
-        print("✅ Telethon already installed")
-        return True
-    except ImportError:
-        print("📦 Installing telethon...")
-        try:
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", 
-                "telethon==1.34.0", 
-                "--no-cache-dir",
-                "--disable-pip-version-check"
-            ])
-            print("✅ Telethon installed successfully!")
-            return True
-        except Exception as e:
-            print(f"❌ Installation failed: {e}")
-            return False
+# ============================================
+# نصب خودکار telethon - این بخش حتماً باشه
+# ============================================
+try:
+    import telethon
+    print("✅ Telethon already installed!")
+except ImportError:
+    print("📦 Installing telethon...")
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install",
+        "telethon==1.34.0",
+        "--no-cache-dir",
+        "--disable-pip-version-check"
+    ])
+    print("✅ Telethon installed!")
 
-if not install_packages():
-    print("❌ Can't continue without telethon!")
-    sys.exit(1)
-
-# حالا می‌توانیم import کنیم
+# حالا ایمپورت کن
 import asyncio
 import sqlite3
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError, UserNotParticipantError, PeerIdInvalidError, RPCError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 import re
 import random
 import time
@@ -50,21 +40,15 @@ except:
     except:
         pass
 
-# ====== تنظیمات ربات ======
 API_ID = 34996139
 API_HASH = 'a1f3db16cae2919cfb05e61d1e968b8d'
 BOT_TOKEN = '8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg'
-
-# ====== لیست ادمین‌ها ======
-ADMINS = [6691993264, 7831049189]  # اصلاح شد
-
+ADMINS = [6691993264, 7831049189]
 GROUP_INSTALL_TARGET_ID = 7831049189
 SELF_PRICE = 1440
-
 active_games = {}
 BOT_IMAGE_PATH = '1782502761872.jpg'
 
-# ====== بقیه کد شما ======
 if not os.path.exists('database_users'):
     os.makedirs('database_users')
 
@@ -232,12 +216,10 @@ async def handle_game_cancel(chat_id, message_id, organizer_id, event_to_edit):
         return True
     return False
 
-# ایجاد دیتابیس برای همه ادمین‌ها
 for admin_id in ADMINS:
     init_user_db(admin_id)
 
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
 user_clients = {}
 user_purchase_amount = {}
 
@@ -305,7 +287,6 @@ async def handle_login_success(user_id, sub_type):
     if user_id in user_clients:
         del user_clients[user_id]
 
-# ====== بقیه هندلرها ======
 @bot.on(events.NewMessage)
 async def handle_all_messages(event):
     if event.is_private:

@@ -7,4 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python", "main.py"]
+# با تاخیر ۳۰ ثانیه شروع کن
+CMD ["sh", "-c", "sleep 30 && python main.py"]

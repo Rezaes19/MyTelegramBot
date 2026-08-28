@@ -2,26 +2,30 @@ import subprocess
 import sys
 import os
 
-# ====== نصب خودکار telethon در زمان اجرا ======
-def install_telethon():
+# ====== نصب خودکار ======
+def install_packages():
+    print("🔧 Checking dependencies...")
     try:
         import telethon
-        print("✅ telethon already installed")
+        print("✅ Telethon already installed")
         return True
     except ImportError:
         print("📦 Installing telethon...")
         try:
-            # نصب با pip
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon==1.34.0", "--no-cache-dir"])
-            print("✅ telethon installed successfully")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", 
+                "telethon==1.34.0", 
+                "--no-cache-dir",
+                "--disable-pip-version-check"
+            ])
+            print("✅ Telethon installed successfully!")
             return True
         except Exception as e:
-            print(f"❌ Failed to install telethon: {e}")
+            print(f"❌ Installation failed: {e}")
             return False
 
-# نصب قبل از هر چیزی
-if not install_telethon():
-    print("❌ Cannot continue without telethon")
+if not install_packages():
+    print("❌ Can't continue without telethon!")
     sys.exit(1)
 
 # حالا می‌توانیم import کنیم

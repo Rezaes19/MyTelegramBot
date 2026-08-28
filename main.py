@@ -1006,13 +1006,12 @@ async def delete_game_on_timeout(chat_id, message_id, organizer_id, amount):
         db.close()
         try:
             await telethon_bot.delete_messages(chat_id, message_id)
-            await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس با تعداد {amount:,} الماس در گروه به دلیل عدم حضور حریف در طول ۵ دقیقه لغو شد.')
+            await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس VIP MR با تعداد {amount:,} الماس در گروه به دلیل عدم حضور حریف در طول ۵ دقیقه لغو شد.')
         except:
             pass
         del active_games[game_key]
 
 async def safe_edit(event, text, buttons=None, parse_mode='md'):
-    """ادیت امن پیام با مدیریت خطای MessageNotModifiedError"""
     try:
         if buttons:
             await event.edit(text, buttons=buttons, parse_mode=parse_mode)
@@ -1645,7 +1644,7 @@ async def reject_payment(event):
     await safe_edit(event, f'❌ پرداخت کاربر {user_id} رد شد.')
 
 # =============================================
-# تابع اصلی
+# تابع اصلی (بدون run_until_disconnected)
 # =============================================
 async def main():
     # شروع Pyrogram Bots

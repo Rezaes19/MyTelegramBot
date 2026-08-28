@@ -1,3 +1,13 @@
+import subprocess
+import sys
+
+# نصب خودکار telethon در صورت نبودن
+try:
+import telethon
+except ImportError:
+    print("Installing telethon...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon==1.34.0"])
+import telethon
 import asyncio
 import os
 import sqlite3

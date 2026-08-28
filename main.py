@@ -1551,7 +1551,7 @@ async def handle_private_messages(event):
             await event.reply(f'❌ رمز اشتباه است: {str(e)}')
         return
     
-    # ====== مدیریت ادمین‌ها ======
+    # ====== مدیریت ورودی ادمین‌ها ======
     if user_id in user_clients and user_id in ADMINS:
         step = user_clients[user_id].get('step')
         
@@ -1563,21 +1563,34 @@ async def handle_private_messages(event):
                 await event.reply('💎 لطفاً مقدار الماس مورد نظر را وارد کنید:')
             except ValueError:
                 await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
+                user_clients[user_id]['step'] = 'add_balance_user'
         
         elif step == 'add_balance_amount':
             try:
                 amount = int(text.strip())
                 if amount <= 0:
                     await event.reply('❌ مقدار باید بیشتر از صفر باشد.')
+                    user_clients[user_id]['step'] = 'add_balance_amount'
                     return
-                target_id = user_clients[user_id]['target_id']
+                
+                target_id = user_clients[user_id].get('target_id')
+                if not target_id:
+                    await event.reply('❌ خطا: کاربر مورد نظر یافت نشد. لطفاً مجدد تلاش کنید.')
+                    del user_clients[user_id]
+                    return
+                
                 init_user_db(target_id)
                 db = get_user_db(target_id)
                 cursor = db.cursor()
                 cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, target_id))
                 db.commit()
+                
+                cursor.execute('SELECT balance FROM users WHERE user_id = ?', (target_id,))
+                new_balance = cursor.fetchone()[0]
                 db.close()
-                await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.')
+                
+                await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.\n\n💎 موجودی جدید: {new_balance:,} الماس')
+                
                 del user_clients[user_id]
                 
                 buttons = [
@@ -1587,9 +1600,18 @@ async def handle_private_messages(event):
                 ]
                 if user_id in ADMINS:
                     buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
-                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                
+                if os.path.exists(BOT_IMAGE_PATH):
+                    await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                else:
+                    await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                    
             except ValueError:
                 await event.reply('❌ مقدار نامعتبر است. لطفاً یک عدد وارد کنید.')
+                user_clients[user_id]['step'] = 'add_balance_amount'
+            except Exception as e:
+                await event.reply(f'❌ خطا در اضافه کردن الماس: {str(e)}')
+                del user_clients[user_id]
         
         elif step == 'ban_user':
             try:
@@ -1610,9 +1632,18 @@ async def handle_private_messages(event):
                 ]
                 if user_id in ADMINS:
                     buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
-                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                
+                if os.path.exists(BOT_IMAGE_PATH):
+                    await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                else:
+                    await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                    
             except ValueError:
                 await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
+                user_clients[user_id]['step'] = 'ban_user'
+            except Exception as e:
+                await event.reply(f'❌ خطا در مسدود کردن کاربر: {str(e)}')
+                del user_clients[user_id]
 
 # =============================================
 # بقیه دکمه‌های Telethon
@@ -1822,8 +1853,9 @@ async def add_balance_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await safe_edit(event, '➕ **اضافه کردن الماس VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    
     user_clients[user_id] = {'step': 'add_balance_user'}
+    await safe_edit(event, '➕ **اضافه کردن الماس VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'ban_user_admin'))
 async def ban_user_admin(event):
@@ -1831,8 +1863,9 @@ async def ban_user_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await safe_edit(event, '🚫 **مسدود کردن کاربر VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    
     user_clients[user_id] = {'step': 'ban_user'}
+    await safe_edit(event, '🚫 **مسدود کردن کاربر VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
 
 # =============================================
 # تابع اصلی

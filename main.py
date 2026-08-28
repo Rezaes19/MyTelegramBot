@@ -354,7 +354,7 @@ FONT_STYLES = {
     "monospace": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
     "normal": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "circled": {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':'∶'},
-    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'۹',':':'：'},
     "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
     "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
     "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
@@ -744,7 +744,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     logger.info(f"✅ Bot started for user {user_id}")
 
 # =============================================
-# Manager Bot (Pyrogram)
+# Manager Bot (Pyrogram) - ربات مدیریت
 # =============================================
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -870,13 +870,14 @@ async def callback_panel_handler(client, callback):
         await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
     except: pass
 
+# =============================================
+# دستورات ربات مدیریت (Pyrogram)
+# =============================================
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
-    if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
-        buttons.append([KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")])
     kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
-    await message.reply_text("👋 خوش آمدید.", reply_markup=kb)
+    await message.reply_text("👋 خوش آمدید.\n\nبرای لاگین شماره خود را ارسال کنید:", reply_markup=kb)
 
 @manager_bot.on_message(filters.contact)
 async def contact_handler(client, message):
@@ -935,29 +936,64 @@ async def finalize_login(message, user_c, phone):
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
-@manager_bot.on_message(filters.regex("^📢 پیام همگانی$") & filters.private)
-async def broadcast_request_handler(client, message):
-    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
-        return
-    ADMIN_STATES[message.from_user.id] = "broadcast"
-    await message.reply_text("لطفاً پیام مورد نظر را بفرستید:", reply_markup=ReplyKeyboardRemove())
-
-@manager_bot.on_message(filters.text & filters.private & filters.regex("^📊 وضعیت ربات$"))
-async def admin_status_handler(client, message):
-    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
-        return
-        
-    active_count = len(ACTIVE_BOTS)
-    total_users = len(data_manager.data.get("users", {}))
-    total_sessions = len(data_manager.data.get("sessions", {}))
+# =============================================
+# فقط ادمین‌ها به این دستورات دسترسی دارن
+# =============================================
+@manager_bot.on_message(filters.private & filters.user(GOD_ADMIN_IDS))
+async def admin_commands(client, message):
+    user_id = message.from_user.id
     
-    text = (
-        "**📊 آمار و وضعیت VIP MR**\n\n"
-        f"🟢 ربات‌های فعال: `{active_count}`\n"
-        f"👥 کل کاربران: `{total_users}`\n"
-        f"📱 نشست‌ها: `{total_sessions}`\n"
-    )
-    await message.reply_text(text)
+    if message.text == "📊 وضعیت ربات":
+        active_count = len(ACTIVE_BOTS)
+        total_users = len(data_manager.data.get("users", {}))
+        total_sessions = len(data_manager.data.get("sessions", {}))
+        
+        text = (
+            "**📊 آمار و وضعیت VIP MR**\n\n"
+            f"🟢 ربات‌های فعال: `{active_count}`\n"
+            f"👥 کل کاربران: `{total_users}`\n"
+            f"📱 نشست‌ها: `{total_sessions}`\n"
+        )
+        await message.reply_text(text)
+    
+    elif message.text == "📢 پیام همگانی":
+        ADMIN_STATES[user_id] = "broadcast"
+        await message.reply_text("📤 لطفاً پیام مورد نظر برای ارسال همگانی را بفرستید:", reply_markup=ReplyKeyboardRemove())
+    
+    elif ADMIN_STATES.get(user_id) == "broadcast":
+        if message.text and message.text.strip() == "لغو":
+            del ADMIN_STATES[user_id]
+            await message.reply_text("❌ عملیات لغو شد.")
+            return
+        
+        await message.reply_text("⏳ در حال ارسال پیام همگانی...")
+        success = 0
+        failed = 0
+        users = data_manager.get_all_users()
+        
+        for u_id_str in users.keys():
+            try:
+                await client.send_message(int(u_id_str), message.text)
+                success += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+        
+        del ADMIN_STATES[user_id]
+        await message.reply_text(f"✅ پیام همگانی ارسال شد.\n\nموفق: {success}\nناموفق: {failed}")
+
+# =============================================
+# دکمه‌های ادمین در منوی اصلی (برای ربات سلف)
+# =============================================
+@manager_bot.on_message(filters.private & filters.user(GOD_ADMIN_IDS) & filters.regex("^🛠 پنل مدیریت$"))
+async def admin_panel_button(client, message):
+    buttons = [
+        [KeyboardButton("➕ اضافه کردن الماس")],
+        [KeyboardButton("🚫 مسدود کردن کاربر")],
+        [KeyboardButton("🔙 برگشت")]
+    ]
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    await message.reply_text("🛠 **پنل مدیریت VIP MR**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=kb)
 
 # =============================================
 # Telethon Bot (سلف VIP MR)
@@ -1253,6 +1289,9 @@ async def handle_callbacks(event):
             await event.answer("❌ این نبرد قبلاً به پایان رسیده یا لغو شده است!", alert=True)
         return
 
+# =============================================
+# منوی سلف VIP MR
+# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'buy_self'))
 async def buy_self(event):
     user_id = event.sender_id
@@ -1578,6 +1617,8 @@ async def admin_panel_handler(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
+    
+    # دکمه‌های پنل مدیریت (فقط برای ادمین‌ها)
     buttons = [
         [Button.inline('➕ اضافه کردن الماس', b'add_balance')],
         [Button.inline('🚫 مسدود کردن کاربر', b'ban_user_admin')],
@@ -1603,48 +1644,81 @@ async def ban_user_admin(event):
     await safe_edit(event, '🚫 **مسدود کردن کاربر VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
     user_clients[user_id] = {'step': 'ban_user'}
 
-@telethon_bot.on(events.CallbackQuery(pattern=b'confirm_(\\d+)_(\\d+)_(\\d+)'))
-async def confirm_payment(event):
-    if event.sender_id not in ADMINS:
+# =============================================
+# مدیریت پیام‌های ادمین در ربات سلف (Telethon)
+# =============================================
+@telethon_bot.on(events.NewMessage(pattern=r'^\d+$', func=lambda e: e.is_private))
+async def admin_input_handler(event):
+    user_id = event.sender_id
+    text = event.text
+    
+    if user_id not in ADMINS:
         return
-    try:
-        data_parts = event.data.decode().split('_')
-        user_id = int(data_parts[1])
-        amount = int(data_parts[2])
-        black_amount = int(data_parts[3])
-    except:
-        await event.answer('خطای داده!', alert=True)
-        return
-    init_user_db(user_id)
-    db = get_user_db(user_id)
-    cursor = db.cursor()
-    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (black_amount, user_id))
-    db.commit()
-    db.close()
-    try:
-        await telethon_bot.send_message(user_id, f'✅ پرداخت شما تأیید شد!\n💎 {black_amount:,} الماس به حساب شما اضافه شد.')
-    except Exception as e:
-        logger.error(f"Error sending message to user {user_id}: {e}")
-    await safe_edit(event, f'✅ پرداخت کاربر {user_id} برای {black_amount:,} الماس تأیید شد.')
-
-@telethon_bot.on(events.CallbackQuery(pattern=b'reject_(\\d+)_(\\d+)'))
-async def reject_payment(event):
-    if event.sender_id not in ADMINS:
-        return
-    try:
-        data_parts = event.data.decode().split('_')
-        user_id = int(data_parts[1])
-    except:
-        await event.answer('خطای داده!', alert=True)
-        return
-    try:
-        await telethon_bot.send_message(user_id, '❌ پرداخت شما رد شد. لطفاً با پشتیبانی تماس بگیرید.')
-    except Exception as e:
-        logger.error(f"Error sending message to user {user_id}: {e}")
-    await safe_edit(event, f'❌ پرداخت کاربر {user_id} رد شد.')
+    
+    if user_id in user_clients:
+        step = user_clients[user_id].get('step')
+        
+        if step == 'add_balance_user':
+            try:
+                target_id = int(text.strip())
+                user_clients[user_id]['target_id'] = target_id
+                user_clients[user_id]['step'] = 'add_balance_amount'
+                await event.reply('💎 لطفاً مقدار الماس مورد نظر را وارد کنید:')
+            except ValueError:
+                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
+        
+        elif step == 'add_balance_amount':
+            try:
+                amount = int(text.strip())
+                if amount <= 0:
+                    await event.reply('❌ مقدار باید بیشتر از صفر باشد.')
+                    return
+                target_id = user_clients[user_id]['target_id']
+                init_user_db(target_id)
+                db = get_user_db(target_id)
+                cursor = db.cursor()
+                cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, target_id))
+                db.commit()
+                db.close()
+                await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.')
+                del user_clients[user_id]
+                # برگشت به منوی اصلی
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            except ValueError:
+                await event.reply('❌ مقدار نامعتبر است. لطفاً یک عدد وارد کنید.')
+        
+        elif step == 'ban_user':
+            try:
+                target_id = int(text.strip())
+                init_user_db(target_id)
+                db = get_user_db(target_id)
+                cursor = db.cursor()
+                cursor.execute('UPDATE users SET banned = 1 WHERE user_id = ?', (target_id,))
+                db.commit()
+                db.close()
+                await event.reply(f'✅ کاربر {target_id} با موفقیت مسدود شد.')
+                del user_clients[user_id]
+                # برگشت به منوی اصلی
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            except ValueError:
+                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
 
 # =============================================
-# تابع اصلی (بدون run_until_disconnected)
+# تابع اصلی
 # =============================================
 async def main():
     # شروع Pyrogram Bots

@@ -48,7 +48,8 @@ from telethon.sessions import StringSession
 from telethon.errors import (
     SessionPasswordNeededError, PhoneCodeInvalidError,
     PhoneCodeExpiredError, UserNotParticipantError,
-    PeerIdInvalidError, RPCError
+    PeerIdInvalidError, RPCError, AuthKeyUnregisteredError,
+    FloodWaitError
 )
 from pyrogram import Client, filters, idle
 from pyrogram.handlers import MessageHandler
@@ -59,7 +60,7 @@ from pyrogram.types import (
     InlineQueryResultArticle, InputTextMessageContent
 )
 from pyrogram.raw import functions
-from pyrogram.errors import SessionPasswordNeeded, ChatSendInlineForbidden
+from pyrogram.errors import SessionPasswordNeeded, ChatSendInlineForbidden, AuthKeyUnregistered
 from pyrogram import utils as pyrogram_utils
 from zoneinfo import ZoneInfo
 
@@ -354,7 +355,7 @@ FONT_STYLES = {
     "monospace": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
     "normal": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "circled": {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':'∶'},
-    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'۹',':':'：'},
+    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
     "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
     "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
     "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
@@ -416,13 +417,22 @@ async def translate_text(text: str, target_lang: str) -> str:
     return text
 
 # =============================================
-# توابع Pyrogram
+# توابع Pyrogram با مدیریت خطا
 # =============================================
 async def perform_clock_update_now(client, user_id):
     try:
         if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
             current_font_style = USER_FONT_CHOICES.get(user_id, 'stylized')
-            me = await client.get_me()
+            try:
+                me = await client.get_me()
+            except (AuthKeyUnregistered, AuthKeyUnregisteredError):
+                logger.error(f"⚠️ Auth key unregistered for user {user_id}, restarting...")
+                if user_id in ACTIVE_BOTS:
+                    _, tasks = ACTIVE_BOTS.pop(user_id)
+                    for task in tasks:
+                        task.cancel()
+                return
+            
             current_name = me.first_name
             base_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', current_name).strip()
             
@@ -433,6 +443,9 @@ async def perform_clock_update_now(client, user_id):
             
             if new_name != current_name:
                 await client.update_profile(first_name=new_name)
+    except FloodWaitError as e:
+        logger.warning(f"⏳ Flood wait {e.seconds} seconds")
+        await asyncio.sleep(e.seconds)
     except Exception as e:
         logger.error(f"Clock update failed: {e}")
 
@@ -486,6 +499,65 @@ async def status_action_task(client: Client, user_id: int):
         except Exception:
             await asyncio.sleep(60)
 
+# =============================================
+# شروع Pyrogram Bot Instance با مدیریت خطا
+# =============================================
+async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'stylized'):
+    client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
+    
+    try:
+        await client.start()
+        user_id = (await client.get_me()).id
+    except (AuthKeyUnregistered, AuthKeyUnregisteredError):
+        logger.error(f"❌ Auth key unregistered for {phone}, removing session...")
+        # حذف نشست نامعتبر
+        for phone_num, data in list(data_manager.data["sessions"].items()):
+            if data.get("user_id") == user_id:
+                del data_manager.data["sessions"][phone_num]
+                break
+        if str(user_id) in data_manager.data["users"]:
+            del data_manager.data["users"][str(user_id)]
+        data_manager.save_data()
+        return
+    except Exception as e:
+        logger.error(f"Failed to start bot for {phone}: {e}")
+        return
+
+    if user_id in ACTIVE_BOTS:
+        for t in ACTIVE_BOTS[user_id][1]:
+            t.cancel()
+    
+    USER_FONT_CHOICES[user_id] = font_style
+    
+    # فقط هندلرهای Pyrogram رو اضافه کن (بدون تداخل با Telethon)
+    client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
+    client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, 
+                                    filters.private & ~filters.me & ~filters.bot), group=-5)
+    client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, 
+                                    filters.private & ~filters.me), group=-4)
+    client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
+    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me & ~filters.reply), group=-1)
+    client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
+    client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
+    client.add_handler(MessageHandler(reply_based_controller, filters.me))
+    
+    enemy_filter = filters.create(lambda _, c, m: bool(m.from_user and 
+                               ((m.from_user.id, m.chat.id) in ACTIVE_ENEMIES.get(c.me.id, set()) or 
+                                GLOBAL_ENEMY_STATUS.get(c.me.id))))
+    client.add_handler(MessageHandler(enemy_handler, enemy_filter & ~filters.me), group=1)
+    client.add_handler(MessageHandler(secretary_auto_reply_handler, filters.private & ~filters.me), group=1)
+
+    tasks = [
+        asyncio.create_task(update_profile_clock(client, user_id)),
+        asyncio.create_task(anti_login_task(client, user_id)),
+        asyncio.create_task(status_action_task(client, user_id))
+    ]
+    ACTIVE_BOTS[user_id] = (client, tasks)
+    logger.info(f"✅ Bot started for user {user_id}")
+
+# =============================================
+# توابع Pyrogram (ادامه)
+# =============================================
 async def outgoing_message_modifier(client, message):
     user_id = client.me.id
     if not message.text or re.match(COMMAND_REGEX, message.text.strip(), re.IGNORECASE): return
@@ -698,50 +770,6 @@ async def reply_based_controller(client, message):
                 t.pop(str(target_id), None)
                 AUTO_REACTION_TARGETS[user_id] = t
                 await message.edit_text("❌ واکنش حذف شد.")
-
-# =============================================
-# شروع Pyrogram Bot Instance
-# =============================================
-async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'stylized'):
-    client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
-    
-    try:
-        await client.start()
-        user_id = (await client.get_me()).id
-    except Exception as e:
-        logger.error(f"Failed to start bot for {phone}: {e}")
-        return
-
-    if user_id in ACTIVE_BOTS:
-        for t in ACTIVE_BOTS[user_id][1]:
-            t.cancel()
-    
-    USER_FONT_CHOICES[user_id] = font_style
-    
-    client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
-    client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, 
-                                    filters.private & ~filters.me & ~filters.bot), group=-5)
-    client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, 
-                                    filters.private & ~filters.me), group=-4)
-    client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
-    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me & ~filters.reply), group=-1)
-    client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
-    client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
-    client.add_handler(MessageHandler(reply_based_controller, filters.me))
-    
-    enemy_filter = filters.create(lambda _, c, m: bool(m.from_user and 
-                               ((m.from_user.id, m.chat.id) in ACTIVE_ENEMIES.get(c.me.id, set()) or 
-                                GLOBAL_ENEMY_STATUS.get(c.me.id))))
-    client.add_handler(MessageHandler(enemy_handler, enemy_filter & ~filters.me), group=1)
-    client.add_handler(MessageHandler(secretary_auto_reply_handler, filters.private & ~filters.me), group=1)
-
-    tasks = [
-        asyncio.create_task(update_profile_clock(client, user_id)),
-        asyncio.create_task(anti_login_task(client, user_id)),
-        asyncio.create_task(status_action_task(client, user_id))
-    ]
-    ACTIVE_BOTS[user_id] = (client, tasks)
-    logger.info(f"✅ Bot started for user {user_id}")
 
 # =============================================
 # Manager Bot (Pyrogram) - ربات مدیریت
@@ -983,19 +1011,6 @@ async def admin_commands(client, message):
         await message.reply_text(f"✅ پیام همگانی ارسال شد.\n\nموفق: {success}\nناموفق: {failed}")
 
 # =============================================
-# دکمه‌های ادمین در منوی اصلی (برای ربات سلف)
-# =============================================
-@manager_bot.on_message(filters.private & filters.user(GOD_ADMIN_IDS) & filters.regex("^🛠 پنل مدیریت$"))
-async def admin_panel_button(client, message):
-    buttons = [
-        [KeyboardButton("➕ اضافه کردن الماس")],
-        [KeyboardButton("🚫 مسدود کردن کاربر")],
-        [KeyboardButton("🔙 برگشت")]
-    ]
-    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    await message.reply_text("🛠 **پنل مدیریت VIP MR**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=kb)
-
-# =============================================
 # Telethon Bot (سلف VIP MR)
 # =============================================
 telethon_bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
@@ -1057,8 +1072,16 @@ async def safe_edit(event, text, buttons=None, parse_mode='md'):
         if "MessageNotModifiedError" not in str(type(e)):
             logger.error(f"Error in safe_edit: {e}")
 
+# =============================================
+# هندلرهای Telethon با جلوگیری از تداخل
+# =============================================
 @telethon_bot.on(events.NewMessage)
 async def handle_all_messages(event):
+    # جلوگیری از پردازش دوبار پیام
+    if hasattr(event, '_processed') and event._processed:
+        return
+    event._processed = True
+    
     if event.is_private:
         await handle_private_messages(event)
     elif event.is_group or event.is_channel:
@@ -1069,6 +1092,11 @@ async def handle_group_commands(event):
     text = event.text
     if not text:
         return
+    
+    # جلوگیری از پردازش دوبار
+    if hasattr(event, '_group_processed') and event._group_processed:
+        return
+    event._group_processed = True
     
     if text and str(GROUP_INSTALL_TARGET_ID) in text:
         try:
@@ -1290,7 +1318,7 @@ async def handle_callbacks(event):
         return
 
 # =============================================
-# منوی سلف VIP MR
+# منوی سلف VIP MR (ادامه)
 # =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'buy_self'))
 async def buy_self(event):
@@ -1312,6 +1340,11 @@ async def handle_private_messages(event):
     text = event.text
     if not text:
         return
+    
+    # جلوگیری از پردازش دوبار
+    if hasattr(event, '_private_processed') and event._private_processed:
+        return
+    event._private_processed = True
     
     if text == "/start":
         init_user_db(user_id)
@@ -1483,6 +1516,9 @@ async def referral_system(event):
     buttons = [[Button.inline('🔙 برگشت', b'back')]]
     await safe_edit(event, referral_text, buttons=buttons, parse_mode='md')
 
+# =============================================
+# خرید موجودی و مدیریت مالی
+# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'buy_balance_menu'))
 async def buy_balance_menu(event):
     user_id = event.sender_id
@@ -1611,6 +1647,9 @@ async def cancel_payment(event):
     await safe_edit(event, '❌ خرید لغو شد.', buttons=buttons)
     await event.answer('❌ خرید لغو شد.')
 
+# =============================================
+# پنل مدیریت ادمین‌ها (Telethon)
+# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'admin_panel'))
 async def admin_panel_handler(event):
     user_id = event.sender_id
@@ -1618,7 +1657,6 @@ async def admin_panel_handler(event):
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
     
-    # دکمه‌های پنل مدیریت (فقط برای ادمین‌ها)
     buttons = [
         [Button.inline('➕ اضافه کردن الماس', b'add_balance')],
         [Button.inline('🚫 مسدود کردن کاربر', b'ban_user_admin')],
@@ -1645,7 +1683,7 @@ async def ban_user_admin(event):
     user_clients[user_id] = {'step': 'ban_user'}
 
 # =============================================
-# مدیریت پیام‌های ادمین در ربات سلف (Telethon)
+# مدیریت ورودی ادمین‌ها (Telethon)
 # =============================================
 @telethon_bot.on(events.NewMessage(pattern=r'^\d+$', func=lambda e: e.is_private))
 async def admin_input_handler(event):

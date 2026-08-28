@@ -789,7 +789,7 @@ async def inline_panel_handler(client, query):
     if query.query == "panel":
         result = InlineQueryResultArticle(
             title="پنل مدیریت", 
-            input_message_content=InputTextMessageContent(f"⚡️ **مدیریت پیشرفته سلف بات**\n👤 کاربر: {user_id}"),
+            input_message_content=InputTextMessageContent(f"⚡️ **مدیریت پیشرفته سلف بات VIP MR**\n👤 کاربر: {user_id}"),
             reply_markup=generate_panel_markup(user_id), 
             thumb_url="https://telegra.ph/file/1e3b567786f7800e80816.jpg"
         )
@@ -952,7 +952,7 @@ async def admin_status_handler(client, message):
     total_sessions = len(data_manager.data.get("sessions", {}))
     
     text = (
-        "**📊 آمار و وضعیت**\n\n"
+        "**📊 آمار و وضعیت VIP MR**\n\n"
         f"🟢 ربات‌های فعال: `{active_count}`\n"
         f"👥 کل کاربران: `{total_users}`\n"
         f"📱 نشست‌ها: `{total_sessions}`\n"
@@ -960,7 +960,7 @@ async def admin_status_handler(client, message):
     await message.reply_text(text)
 
 # =============================================
-# Telethon Bot (سلف)
+# Telethon Bot (سلف VIP MR)
 # =============================================
 telethon_bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
@@ -990,10 +990,10 @@ async def get_user_info_for_group(user_id):
         elapsed_time = int(time.time()) - self_start_time
         days = elapsed_time // 86400
         hours = (elapsed_time % 86400) // 3600
-        time_info = f"\n⏱ آمار سلف: {days} روز و {hours} ساعت"
+        time_info = f"\n⏱ آمار سلف VIP MR: {days} روز و {hours} ساعت"
     else:
         time_info = ""
-    return f"👤 **اطلاعات حساب شما**\n\n🆔 **آیدی عددی :** `{user_id}`\n\n💎 **موجودی :** `{balance:,}` الماس\n\n🔐 **وضعیت سلف :** `{has_active_self}`{time_info}"
+    return f"👤 **اطلاعات حساب شما**\n\n🆔 **آیدی عددی :** `{user_id}`\n\n💎 **موجودی :** `{balance:,}` الماس\n\n🔐 **وضعیت سلف VIP MR :** `{has_active_self}`{time_info}"
 
 async def delete_game_on_timeout(chat_id, message_id, organizer_id, amount):
     await asyncio.sleep(300)
@@ -1039,7 +1039,7 @@ async def handle_group_commands(event):
         try:
             entity = await telethon_bot.get_entity(chat_id)
             if entity.megagroup or entity.gigagroup:
-                await event.reply(f'✅ ربات سلف الماس در گروه نصب شد.')
+                await event.reply(f'✅ ربات سلف الماس VIP MR در گروه نصب شد.')
         except:
             pass
         return
@@ -1059,7 +1059,7 @@ async def handle_group_commands(event):
         result = cursor.fetchone()
         balance = result[0] if result else 0
         db.close()
-        message = f"🎖️ **موجودی الماس**"
+        message = f"🎖️ **موجودی الماس VIP MR**"
         buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{target_user_id}')]]
         if os.path.exists(BOT_IMAGE_PATH):
             await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=message, buttons=buttons, parse_mode='md', reply_to=event.id)
@@ -1090,7 +1090,7 @@ async def handle_group_commands(event):
         db.commit()
         db.close()
         organizer_mention = f"[{event.sender.first_name}](tg://user?id={organizer_id})"
-        game_text = f"⚔️ **نبرد الماس**\n\n👤 **برگزار کننده :** {organizer_mention}\n💰 **مبلغ نبرد :** {amount:,} الماس\n🏆 **جایزه کل :** {amount * 2:,} الماس\n\n📌 جهت پیوستن به نبرد الماس لطفا روی دکمه زیر کلیک کنید."
+        game_text = f"⚔️ **نبرد الماس VIP MR**\n\n👤 **برگزار کننده :** {organizer_mention}\n💰 **مبلغ نبرد :** {amount:,} الماس\n🏆 **جایزه کل :** {amount * 2:,} الماس\n\n📌 جهت پیوستن به نبرد الماس لطفا روی دکمه زیر کلیک کنید."
         buttons = [[Button.inline('⚔️ پیوستن به نبرد', f'game_join_{amount}_{organizer_id}'.encode())], [Button.inline('❌ لغو نبرد', f'game_cancel_{amount}_{organizer_id}'.encode())]]
         if os.path.exists(BOT_IMAGE_PATH):
             sent_message = await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=game_text, buttons=buttons, parse_mode='md', reply_to=event.id)
@@ -1154,7 +1154,7 @@ async def handle_group_commands(event):
         cursor.execute('SELECT balance FROM users WHERE user_id = ?', (receiver_id,))
         new_receiver_balance = cursor.fetchone()[0]
         db.close()
-        transfer_message = f"✅ **انتقال الماس انجام شد.**\n\n👤 **از:** `{sender_id}`\n👥 **به:** `{receiver_id}`\n💎 **مبلغ انتقال (خالص):** {amount:,}\n🧾 **مالیات (۱۰%):** {tax:,}\n📉 **مجموع کسر از فرستنده:** {total_deduct:,}\n✨ **موجودی جدید فرستنده:** {new_sender_balance:,}\n✨ **موجودی جدید گیرنده:** {new_receiver_balance:,}"
+        transfer_message = f"✅ **انتقال الماس VIP MR انجام شد.**\n\n👤 **از:** `{sender_id}`\n👥 **به:** `{receiver_id}`\n💎 **مبلغ انتقال (خالص):** {amount:,}\n🧾 **مالیات (۱۰%):** {tax:,}\n📉 **مجموع کسر از فرستنده:** {total_deduct:,}\n✨ **موجودی جدید فرستنده:** {new_sender_balance:,}\n✨ **موجودی جدید گیرنده:** {new_receiver_balance:,}"
         await event.reply(transfer_message, parse_mode='md')
         return
 
@@ -1170,7 +1170,7 @@ async def handle_callbacks(event):
         result = cursor.fetchone()
         balance = result[0] if result else 0
         db.close()
-        message = f"🎖️ **موجودی الماس**"
+        message = f"🎖️ **موجودی الماس VIP MR**"
         buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{user_id}')]]
         await safe_edit(event, message, buttons=buttons, parse_mode='md')
         await event.answer("✅ موجودی به‌روز شد")
@@ -1211,7 +1211,7 @@ async def handle_callbacks(event):
         db.close()
         winner_name = await get_user_display(winner_id)
         loser_name = await get_user_display(loser_id)
-        result_text = f"◈ ━━━ 𝐕𝐈𝐏 𝐌𝐦𝐝 ━━━ ◈\n𝐕𝐈𝐏 | نتیجه بازی :\n𝐕𝐈𝐏 | برنده : {winner_name}\n𝐕𝐈𝐏 | بازنده : {loser_name}\n𝐕𝐈𝐏 | جایزه: {prize:,} الماس\n𝐕𝐈𝐏 | مالیات: {tax:,} الماس\n◈ ━━━ 𝐕𝐈𝐏 𝐌𝐦𝐝 ━━━ ◈"
+        result_text = f"◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈\n𝐕𝐈𝐏 | نتیجه بازی :\n𝐕𝐈𝐏 | برنده : {winner_name}\n𝐕𝐈𝐏 | بازنده : {loser_name}\n𝐕𝐈𝐏 | جایزه: {prize:,} الماس\n𝐕𝐈𝐏 | مالیات: {tax:,} الماس\n◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈"
         try:
             await telethon_bot.delete_messages(event.chat_id, event.message_id)
         except:
@@ -1245,7 +1245,7 @@ async def handle_callbacks(event):
             db.close()
             try:
                 await telethon_bot.delete_messages(event.chat_id, event.message_id)
-                await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس با تعداد {amount:,} الماس لغو شد.')
+                await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس VIP MR با تعداد {amount:,} الماس لغو شد.')
             except:
                 pass
             del active_games[game_key]
@@ -1266,7 +1266,7 @@ async def buy_self(event):
     if balance < SELF_PRICE:
         await event.answer(f'❌ الماس کافی ندارید!\n💎 الماس شما: {balance:,}\n💎 الماس مورد نیاز: {SELF_PRICE:,}', alert=True)
         return
-    await safe_edit(event, f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
+    await safe_edit(event, f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف VIP MR ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
     user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
 
 async def handle_private_messages(event):
@@ -1286,16 +1286,16 @@ async def handle_private_messages(event):
             await event.reply('🚫 شما توسط ادمین مسدود شده‌اید!')
             return
         buttons = [
-            [Button.inline('💎 خرید سلف', b'buy_self')],
-            [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف', b'manage_self')],
+            [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+            [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
             [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
         ]
         if user_id in ADMINS:
             buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
         if os.path.exists(BOT_IMAGE_PATH):
-            await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز خوش آمدید', buttons=buttons)
+            await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
         else:
-            await event.reply('به سلف ساز خوش آمدید', buttons=buttons)
+            await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
         return
     
     if user_id in user_clients and user_clients[user_id].get('step') == 'phone':
@@ -1336,9 +1336,9 @@ async def handle_private_messages(event):
                     cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (SELF_PRICE, user_id))
                     db.commit()
                     db.close()
-                    await event.reply(f'✅ سلف با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
+                    await event.reply(f'✅ سلف VIP MR با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
                 else:
-                    await event.reply('❌ خطا در راه اندازی سلف.')
+                    await event.reply('❌ خطا در راه اندازی سلف VIP MR.')
             else:
                 await event.reply('❌ خطا: سشن استرینگ ایجاد نشد.')
         except SessionPasswordNeededError:
@@ -1372,9 +1372,9 @@ async def handle_private_messages(event):
                     cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (SELF_PRICE, user_id))
                     db.commit()
                     db.close()
-                    await event.reply(f'✅ سلف با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
+                    await event.reply(f'✅ سلف VIP MR با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
                 else:
-                    await event.reply('❌ خطا در راه اندازی سلف.')
+                    await event.reply('❌ خطا در راه اندازی سلف VIP MR.')
             else:
                 await event.reply('❌ خطا: سشن استرینگ ایجاد نشد.')
         except Exception as e:
@@ -1400,36 +1400,36 @@ async def manage_self(event):
     user_id = event.sender_id
     session_data = get_self_session(user_id)
     if not session_data:
-        await event.answer("❌ سلف فعال نیست!", alert=True)
+        await event.answer("❌ سلف VIP MR فعال نیست!", alert=True)
         return
     buttons = [
-        [Button.inline('🔓 غیرفعال‌سازی سلف', b'disable_self')],
+        [Button.inline('🔓 غیرفعال‌سازی سلف VIP MR', b'disable_self')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    await safe_edit(event, "⚙️ **مدیریت سلف**\n\nسلف شما فعال است.", buttons=buttons, parse_mode='md')
+    await safe_edit(event, "⚙️ **مدیریت سلف VIP MR**\n\nسلف شما فعال است.", buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'disable_self'))
 async def disable_self(event):
     user_id = event.sender_id
     deactivate_self_session(user_id)
     stop_self_py(user_id)
-    await safe_edit(event, '✅ سلف با موفقیت خاموش شد.')
-    await event.answer('✅ سلف خاموش شد.')
+    await safe_edit(event, '✅ سلف VIP MR با موفقیت خاموش شد.')
+    await event.answer('✅ سلف VIP MR خاموش شد.')
 
 @telethon_bot.on(events.CallbackQuery(data=b'back'))
 async def back(event):
     user_id = event.sender_id
     buttons = [
-        [Button.inline('💎 خرید سلف', b'buy_self')],
-        [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف', b'manage_self')],
+        [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+        [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
         [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
     ]
     if user_id in ADMINS:
         buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
     if os.path.exists(BOT_IMAGE_PATH):
-        await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز خوش آمدید', buttons=buttons)
+        await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
     else:
-        await safe_edit(event, 'به سلف ساز خوش آمدید', buttons=buttons)
+        await safe_edit(event, 'به سلف ساز VIP MR خوش آمدید', buttons=buttons)
 
 @telethon_bot.on(events.CallbackQuery(data=b'referral_system'))
 async def referral_system(event):
@@ -1441,7 +1441,7 @@ async def referral_system(event):
     db.close()
     bot_username = (await telethon_bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start={user_id}"
-    referral_text = f"👥 **سیستم زیرمجموعه گیری**\n\nبا دعوت دوستان خود به ربات، ۲۵ الماس دریافت کنید.\n\n📊 **کل دعوتی‌ها:** {total_referrals}\n🎁 **پاداش هر نفر:** ۲۵ الماس\n\n🔗 **لینک دعوت:** \n`{referral_link}`"
+    referral_text = f"👥 **سیستم زیرمجموعه گیری VIP MR**\n\nبا دعوت دوستان خود به ربات، ۲۵ الماس دریافت کنید.\n\n📊 **کل دعوتی‌ها:** {total_referrals}\n🎁 **پاداش هر نفر:** ۲۵ الماس\n\n🔗 **لینک دعوت:** \n`{referral_link}`"
     buttons = [[Button.inline('🔙 برگشت', b'back')]]
     await safe_edit(event, referral_text, buttons=buttons, parse_mode='md')
 
@@ -1465,7 +1465,7 @@ async def buy_balance_menu(event):
         [Button.inline('تایید', b'confirm_amount'), Button.inline('حذف', b'clear_amount')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
+    display_text = f"💳 **خرید موجودی VIP MR**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(pattern=b'num_(.+)$'))
@@ -1506,7 +1506,7 @@ async def number_input(event):
     except ValueError:
         black_amount = 0
     amount = black_amount * 40
-    display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
+    display_text = f"💳 **خرید موجودی VIP MR**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
     await event.answer()
 
@@ -1522,7 +1522,7 @@ async def clear_amount(event):
         [Button.inline('تایید', b'confirm_amount'), Button.inline('حذف', b'clear_amount')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: 0\nمبلغ: 0 تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
+    display_text = f"💳 **خرید موجودی VIP MR**\n\nتعداد الماس: 0\nمبلغ: 0 تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
     await event.answer()
 
@@ -1542,7 +1542,7 @@ async def confirm_amount(event):
         return
     amount = black_amount * 40
     card_number = get_setting(ADMINS[0], 'card_number', 'تنظیم نشده')
-    invoice_text = f"💳 **فاکتور خرید موجودی**\n\n**اطلاعات خریدار:**\n🆔 آیدی: {user_id}\n\n💎 تعداد الماس: {black_amount:,}\n💰 مبلغ قابل پرداخت: {amount:,} تومان\n💳 شماره کارت: {card_number}\n\nلطفاً پس از پرداخت، عکس فیش واریزی را ارسال نمایید."
+    invoice_text = f"💳 **فاکتور خرید موجودی VIP MR**\n\n**اطلاعات خریدار:**\n🆔 آیدی: {user_id}\n\n💎 تعداد الماس: {black_amount:,}\n💰 مبلغ قابل پرداخت: {amount:,} تومان\n💳 شماره کارت: {card_number}\n\nلطفاً پس از پرداخت، عکس فیش واریزی را ارسال نمایید."
     buttons = [[Button.inline('پرداخت', b'proceed_payment')], [Button.inline('لغو', b'cancel_payment')]]
     user_purchase_amount[user_id] = {'black_amount': black_amount, 'amount': amount}
     await safe_edit(event, invoice_text, buttons=buttons, parse_mode='md')
@@ -1584,7 +1584,7 @@ async def admin_panel_handler(event):
         [Button.inline('🚫 مسدود کردن کاربر', b'ban_user_admin')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    await safe_edit(event, '🛠 **پنل مدیریت**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:', buttons=buttons, parse_mode='md')
+    await safe_edit(event, '🛠 **پنل مدیریت VIP MR**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:', buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'add_balance'))
 async def add_balance_admin(event):
@@ -1592,7 +1592,7 @@ async def add_balance_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await safe_edit(event, '➕ **اضافه کردن الماس**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    await safe_edit(event, '➕ **اضافه کردن الماس VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
     user_clients[user_id] = {'step': 'add_balance_user'}
 
 @telethon_bot.on(events.CallbackQuery(data=b'ban_user_admin'))
@@ -1601,7 +1601,7 @@ async def ban_user_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await safe_edit(event, '🚫 **مسدود کردن کاربر**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    await safe_edit(event, '🚫 **مسدود کردن کاربر VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
     user_clients[user_id] = {'step': 'ban_user'}
 
 @telethon_bot.on(events.CallbackQuery(pattern=b'confirm_(\\d+)_(\\d+)_(\\d+)'))

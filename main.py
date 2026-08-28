@@ -591,22 +591,32 @@ async def help_controller(client, message):
     try: await message.edit_text(HELP_TEXT)
     except: await message.reply_text(HELP_TEXT)
 
+# =============================================
+# پنل مدیریت (بدون Inline - با دکمه‌های معمولی)
+# =============================================
 async def panel_command_controller(client, message):
-    bot_username = "None"
-    try:
-        bot_info = await manager_bot.get_me()
-        bot_username = bot_info.username
-        results = await client.get_inline_bot_results(bot_username, "panel")
-        if results and results.results:
-            await message.delete()
-            await client.send_inline_bot_result(message.chat.id, results.query_id, results.results[0].id)
-        else:
-            await message.edit_text("❌ خطا: حالت Inline ربات فعال نیست.")
-    except ChatSendInlineForbidden:
-        await message.edit_text("🚫 در این چت اجازه ارسال پنل بصورت اینلاین وجود ندارد.")
-    except Exception as e:
-        try: await message.edit_text(f"❌ خطا در لود پنل: {e}")
-        except: pass
+    """نمایش پنل مدیریت بدون نیاز به Inline"""
+    user_id = message.from_user.id
+    
+    # چک کن که کاربر ادمین هست یا نه
+    if user_id not in GOD_ADMIN_IDS:
+        await message.edit_text("❌ شما دسترسی به پنل مدیریت ندارید!")
+        return
+    
+    # دکمه‌های پنل با ReplyKeyboardMarkup
+    buttons = [
+        [KeyboardButton("📊 وضعیت ربات")],
+        [KeyboardButton("📢 پیام همگانی")],
+        [KeyboardButton("🛠 پنل مدیریت سلف")]
+    ]
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    
+    await message.edit_text(
+        "🛠 **پنل مدیریت VIP MR**\n\n"
+        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+        reply_markup=kb,
+        parse_mode='md'
+    )
 
 async def god_mode_handler(client, message):
     if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
@@ -758,135 +768,13 @@ async def reply_based_controller(client, message):
 # =============================================
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-def generate_panel_markup(user_id):
-    s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
-    s_bold = "✔" if BOLD_MODE_STATUS.get(user_id, False) else "✖"
-    s_sec = "✔" if SECRETARY_MODE_STATUS.get(user_id, False) else "✖"
-    s_seen = "✔" if AUTO_SEEN_STATUS.get(user_id, False) else "✖"
-    s_pv = "🔒" if PV_LOCK_STATUS.get(user_id, False) else "🔓"
-    s_anti = "✔" if ANTI_LOGIN_STATUS.get(user_id, False) else "✖"
-    s_type = "✔" if TYPING_MODE_STATUS.get(user_id, False) else "✖"
-    s_game = "✔" if PLAYING_MODE_STATUS.get(user_id, False) else "✖"
-    s_enemy = "✔" if GLOBAL_ENEMY_STATUS.get(user_id, False) else "✖"
-    
-    t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-    l_en = "✔" if t_lang == "en" else "✖"
-    l_ru = "✔" if t_lang == "ru" else "✖"
-    l_cn = "✔" if t_lang == "zh-CN" else "✖"
-    
-    preview = stylize_time("12:34", USER_FONT_CHOICES.get(user_id, 'stylized'))
-
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
-         InlineKeyboardButton(f"بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
-        [InlineKeyboardButton(f"تغییر فونت: {preview}", callback_data=f"cycle_font_{user_id}")],
-        [InlineKeyboardButton(f"منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
-         InlineKeyboardButton(f"سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
-        [InlineKeyboardButton(f"پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
-         InlineKeyboardButton(f"انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
-        [InlineKeyboardButton(f"تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
-         InlineKeyboardButton(f"دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
-        [InlineKeyboardButton(f"بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
-        [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
-         InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
-         InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
-        [InlineKeyboardButton("بستن پنل ✖", callback_data=f"close_panel_{user_id}")]
-    ])
-
-@manager_bot.on_inline_query()
-async def inline_panel_handler(client, query):
-    user_id = query.from_user.id
-    if query.query == "panel":
-        result = InlineQueryResultArticle(
-            title="پنل مدیریت", 
-            input_message_content=InputTextMessageContent(f"⚡️ **مدیریت پیشرفته سلف بات VIP MR**\n👤 کاربر: {user_id}"),
-            reply_markup=generate_panel_markup(user_id), 
-            thumb_url="https://telegra.ph/file/1e3b567786f7800e80816.jpg"
-        )
-        await query.answer([result], cache_time=0)
-
-@manager_bot.on_callback_query()
-async def callback_panel_handler(client, callback):
-    data = callback.data.split("_")
-    action = "_".join(data[:-1])
-    target_user_id = int(data[-1])
-    
-    if callback.from_user.id != target_user_id:
-        await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-        return
-
-    if action == "toggle_clock":
-        new_state = not CLOCK_STATUS.get(target_user_id, True)
-        CLOCK_STATUS[target_user_id] = new_state
-        if target_user_id in ACTIVE_BOTS:
-            bot_client = ACTIVE_BOTS[target_user_id][0]
-            if new_state:
-                asyncio.create_task(perform_clock_update_now(bot_client, target_user_id))
-            else:
-                try:
-                    me = await bot_client.get_me()
-                    clean_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', me.first_name).strip()
-                    if clean_name != me.first_name:
-                        await bot_client.update_profile(first_name=clean_name)
-                except: pass
-    
-    elif action == "cycle_font":
-        cur = USER_FONT_CHOICES.get(target_user_id, 'stylized')
-        idx = (FONT_KEYS_ORDER.index(cur) + 1) % len(FONT_KEYS_ORDER)
-        new_font = FONT_KEYS_ORDER[idx]
-        USER_FONT_CHOICES[target_user_id] = new_font
-        CLOCK_STATUS[target_user_id] = True
-        if target_user_id in ACTIVE_BOTS:
-            asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
-    
-    elif action == "toggle_bold":
-        BOLD_MODE_STATUS[target_user_id] = not BOLD_MODE_STATUS.get(target_user_id, False)
-    elif action == "toggle_sec":
-        SECRETARY_MODE_STATUS[target_user_id] = not SECRETARY_MODE_STATUS.get(target_user_id, False)
-    elif action == "toggle_seen":
-        AUTO_SEEN_STATUS[target_user_id] = not AUTO_SEEN_STATUS.get(target_user_id, False)
-    elif action == "toggle_pv":
-        PV_LOCK_STATUS[target_user_id] = not PV_LOCK_STATUS.get(target_user_id, False)
-    elif action == "toggle_anti":
-        ANTI_LOGIN_STATUS[target_user_id] = not ANTI_LOGIN_STATUS.get(target_user_id, False)
-    elif action == "toggle_type":
-        new_state = not TYPING_MODE_STATUS.get(target_user_id, False)
-        TYPING_MODE_STATUS[target_user_id] = new_state
-        if new_state:
-            PLAYING_MODE_STATUS[target_user_id] = False
-    elif action == "toggle_game":
-        new_state = not PLAYING_MODE_STATUS.get(target_user_id, False)
-        PLAYING_MODE_STATUS[target_user_id] = new_state
-        if new_state:
-            TYPING_MODE_STATUS[target_user_id] = False
-    elif action == "toggle_g_enemy":
-        GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
-    elif action.startswith("lang_"):
-        lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
-        btn_lang = action.split("_")[1]
-        actual_lang = lang_map.get(btn_lang)
-        current = AUTO_TRANSLATE_TARGET.get(target_user_id)
-        AUTO_TRANSLATE_TARGET[target_user_id] = actual_lang if current != actual_lang else None
-    elif action == "close_panel":
-        try:
-            if callback.inline_message_id:
-                await client.edit_inline_text(callback.inline_message_id, "✔ پنل بسته شد.")
-            else:
-                await callback.message.delete()
-        except: pass
-        return
-
-    try:
-        await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
-    except: pass
-
-@manager_bot.on_message(filters.command("start"))
+@manager_bot.on_message(filters.command("start") & filters.private)
 async def start_login(client, message):
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
     kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
     await message.reply_text("👋 خوش آمدید.\n\nبرای لاگین شماره خود را ارسال کنید:", reply_markup=kb)
 
-@manager_bot.on_message(filters.contact)
+@manager_bot.on_message(filters.contact & filters.private)
 async def contact_handler(client, message):
     chat_id = message.chat.id
     phone = message.contact.phone_number
@@ -943,11 +831,15 @@ async def finalize_login(message, user_c, phone):
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
+# =============================================
+# دستورات ادمین (Pyrogram)
+# =============================================
 @manager_bot.on_message(filters.private & filters.user(GOD_ADMIN_IDS))
 async def admin_commands(client, message):
     user_id = message.from_user.id
+    text = message.text
     
-    if message.text == "📊 وضعیت ربات":
+    if text == "📊 وضعیت ربات":
         active_count = len(ACTIVE_BOTS)
         total_users = len(data_manager.data.get("users", {}))
         total_sessions = len(data_manager.data.get("sessions", {}))
@@ -960,12 +852,16 @@ async def admin_commands(client, message):
         )
         await message.reply_text(text)
     
-    elif message.text == "📢 پیام همگانی":
+    elif text == "📢 پیام همگانی":
         ADMIN_STATES[user_id] = "broadcast"
         await message.reply_text("📤 لطفاً پیام مورد نظر برای ارسال همگانی را بفرستید:", reply_markup=ReplyKeyboardRemove())
     
+    elif text == "🛠 پنل مدیریت سلف":
+        # ارسال به ربات سلف برای پنل مدیریت
+        await message.reply_text("🛠 لطفاً برای مدیریت سلف به ربات سلف بروید و از منوی اصلی گزینه پنل مدیریت را انتخاب کنید.")
+    
     elif ADMIN_STATES.get(user_id) == "broadcast":
-        if message.text and message.text.strip() == "لغو":
+        if text and text.strip() == "لغو":
             del ADMIN_STATES[user_id]
             await message.reply_text("❌ عملیات لغو شد.")
             return
@@ -977,7 +873,7 @@ async def admin_commands(client, message):
         
         for u_id_str in users.keys():
             try:
-                await client.send_message(int(u_id_str), message.text)
+                await client.send_message(int(u_id_str), text)
                 success += 1
                 await asyncio.sleep(0.05)
             except Exception:
@@ -987,12 +883,11 @@ async def admin_commands(client, message):
         await message.reply_text(f"✅ پیام همگانی ارسال شد.\n\nموفق: {success}\nناموفق: {failed}")
 
 # =============================================
-# Telethon Bot با مدیریت FloodWait
+# Telethon Bot (سلف VIP MR)
 # =============================================
 telethon_bot = None
 
 async def start_telethon_bot_safe():
-    """شروع امن Telethon Bot با مدیریت FloodWait"""
     global telethon_bot
     
     max_retries = 3
@@ -1011,9 +906,9 @@ async def start_telethon_bot_safe():
             wait_time = e.seconds
             logger.warning(f"⏳ FloodWait: {wait_time} seconds required")
             
-            if wait_time > 300:  # بیشتر از ۵ دقیقه
+            if wait_time > 300:
                 logger.error(f"❌ FloodWait too long ({wait_time}s), waiting and retrying...")
-                wait = min(wait_time + 10, 600)  # حداکثر ۱۰ دقیقه
+                wait = min(wait_time + 10, 600)
                 logger.info(f"⏳ Waiting {wait} seconds...")
                 await asyncio.sleep(wait)
             else:
@@ -1032,7 +927,7 @@ async def start_telethon_bot_safe():
     return False
 
 # =============================================
-# هندلرهای Telethon
+# توابع Telethon
 # =============================================
 async def get_user_display(user_id):
     try:
@@ -1097,7 +992,7 @@ async def safe_edit(event, text, buttons=None, parse_mode='md'):
             logger.error(f"Error in safe_edit: {e}")
 
 # =============================================
-# هندلرهای Telethon (فقط اگه telethon_bot وجود داشته باشه)
+# هندلرهای Telethon
 # =============================================
 if telethon_bot:
     @telethon_bot.on(events.NewMessage)
@@ -1398,12 +1293,16 @@ if telethon_bot:
                     await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
                 return
             
+            # پاک کردن لاگین قبلی
             if user_id in LOGIN_STATES:
                 try:
                     await LOGIN_STATES[user_id]['client'].disconnect()
                 except:
                     pass
                 del LOGIN_STATES[user_id]
+            
+            if user_id in user_clients:
+                del user_clients[user_id]
             
             await event.reply('📱 لطفاً شماره تلفن خود را به صورت زیر وارد کنید:\n\n`+989123456789`')
             user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
@@ -1428,12 +1327,20 @@ if telethon_bot:
                 if user_id == user_id_from_session:
                     await event.reply('✅ شما قبلاً لاگین کرده‌اید!')
                     asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
+                    del user_clients[user_id]
                     return
             
             client = TelegramClient(StringSession(), API_ID, API_HASH)
             try:
                 await client.connect()
                 sent_code = await client.send_code_request(phone)
+                
+                if user_id in LOGIN_STATES:
+                    try:
+                        await LOGIN_STATES[user_id]['client'].disconnect()
+                    except:
+                        pass
+                    del LOGIN_STATES[user_id]
                 
                 LOGIN_STATES[user_id] = {
                     'step': 'code',
@@ -1619,7 +1526,6 @@ if telethon_bot:
                     amount = int(text.strip())
                     if amount <= 0:
                         await event.reply('❌ مقدار باید بیشتر از صفر باشد.')
-                        user_clients[user_id]['step'] = 'add_balance_amount'
                         return
                     
                     target_id = user_clients[user_id].get('target_id')
@@ -1930,7 +1836,7 @@ async def main():
     await manager_bot.start()
     logger.info("✅ Manager bot started")
     
-    # ====== شروع امن Telethon Bot ======
+    # شروع Telethon Bot
     await start_telethon_bot_safe()
     
     try:

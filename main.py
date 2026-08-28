@@ -366,13 +366,13 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 ENEMY_REPLIES = [
     "کیرم تو رحم اجاره ای و خونی مالی مادرت",
-    "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام و اب کوسشو بریزم کف خونه تا فردا صبح کارگرای افغانی برای نظافت اومدن با بوی اب کس مادرت بجقن و ابکیراشون نثار قبر مرده هات بشه",
+    "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام",
     "احمق مادر کونی من کس مادرت گذاشتم تو بازم داری کسشر میگی",
     "حروم زاده باک کص ننت با ابکیرم پر میکنم",
-    "خارکسته میخای مادرتو بگام بعد بیای ادعای شرف کنی کیرم تو شرف مادرت",
+    "خارکسته میخای مادرتو بگام بعد بیای ادعای شرف کنی",
 ]
 
-SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم و پیام شما را دریافت کردم. در اولین فرصت پاسخ خواهم داد."
+SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
 HELP_TEXT = """
 **[ 🛠 دستورات دستی و ریپلای ]**
@@ -1011,24 +1011,16 @@ async def delete_game_on_timeout(chat_id, message_id, organizer_id, amount):
             pass
         del active_games[game_key]
 
-async def handle_game_cancel(chat_id, message_id, organizer_id, event_to_edit):
-    game_key = (chat_id, message_id)
-    if game_key in active_games:
-        active_games[game_key]['timer'].cancel()
-        amount = active_games[game_key]['amount']
-        db = get_user_db(organizer_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
-        db.commit()
-        db.close()
-        try:
-            await telethon_bot.delete_messages(chat_id, message_id)
-            await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس با تعداد {amount:,} الماس لغو شد.')
-        except:
-            pass
-        del active_games[game_key]
-        return True
-    return False
+async def safe_edit(event, text, buttons=None, parse_mode='md'):
+    """ادیت امن پیام با مدیریت خطای MessageNotModifiedError"""
+    try:
+        if buttons:
+            await event.edit(text, buttons=buttons, parse_mode=parse_mode)
+        else:
+            await event.edit(text, parse_mode=parse_mode)
+    except Exception as e:
+        if "MessageNotModifiedError" not in str(type(e)):
+            logger.error(f"Error in safe_edit: {e}")
 
 @telethon_bot.on(events.NewMessage)
 async def handle_all_messages(event):
@@ -1180,7 +1172,7 @@ async def handle_callbacks(event):
         db.close()
         message = f"🎖️ **موجودی الماس**"
         buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{user_id}')]]
-        await event.edit(message, buttons=buttons, parse_mode='md')
+        await safe_edit(event, message, buttons=buttons, parse_mode='md')
         await event.answer("✅ موجودی به‌روز شد")
         return
     
@@ -1274,7 +1266,7 @@ async def buy_self(event):
     if balance < SELF_PRICE:
         await event.answer(f'❌ الماس کافی ندارید!\n💎 الماس شما: {balance:,}\n💎 الماس مورد نیاز: {SELF_PRICE:,}', alert=True)
         return
-    await event.edit(f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
+    await safe_edit(event, f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
     user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
 
 async def handle_private_messages(event):
@@ -1401,10 +1393,7 @@ async def user_account(event):
     user_id = event.sender_id
     account_text = await get_user_info_for_group(user_id)
     buttons = [[Button.inline('💳 خرید موجودی', b'buy_balance_menu')], [Button.inline('🔙 برگشت', b'back')]]
-    try:
-        await event.edit(account_text, buttons=buttons, parse_mode='md')
-    except Exception as e:
-        logger.error(f"Error editing user account: {e}")
+    await safe_edit(event, account_text, buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'manage_self'))
 async def manage_self(event):
@@ -1417,14 +1406,14 @@ async def manage_self(event):
         [Button.inline('🔓 غیرفعال‌سازی سلف', b'disable_self')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    await event.edit("⚙️ **مدیریت سلف**\n\nسلف شما فعال است.", buttons=buttons, parse_mode='md')
+    await safe_edit(event, "⚙️ **مدیریت سلف**\n\nسلف شما فعال است.", buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'disable_self'))
 async def disable_self(event):
     user_id = event.sender_id
     deactivate_self_session(user_id)
     stop_self_py(user_id)
-    await event.edit('✅ سلف با موفقیت خاموش شد.')
+    await safe_edit(event, '✅ سلف با موفقیت خاموش شد.')
     await event.answer('✅ سلف خاموش شد.')
 
 @telethon_bot.on(events.CallbackQuery(data=b'back'))
@@ -1440,7 +1429,7 @@ async def back(event):
     if os.path.exists(BOT_IMAGE_PATH):
         await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز خوش آمدید', buttons=buttons)
     else:
-        await event.edit('به سلف ساز خوش آمدید', buttons=buttons)
+        await safe_edit(event, 'به سلف ساز خوش آمدید', buttons=buttons)
 
 @telethon_bot.on(events.CallbackQuery(data=b'referral_system'))
 async def referral_system(event):
@@ -1454,10 +1443,7 @@ async def referral_system(event):
     referral_link = f"https://t.me/{bot_username}?start={user_id}"
     referral_text = f"👥 **سیستم زیرمجموعه گیری**\n\nبا دعوت دوستان خود به ربات، ۲۵ الماس دریافت کنید.\n\n📊 **کل دعوتی‌ها:** {total_referrals}\n🎁 **پاداش هر نفر:** ۲۵ الماس\n\n🔗 **لینک دعوت:** \n`{referral_link}`"
     buttons = [[Button.inline('🔙 برگشت', b'back')]]
-    try:
-        await event.edit(referral_text, buttons=buttons, parse_mode='md')
-    except Exception as e:
-        logger.error(f"Error editing referral system: {e}")
+    await safe_edit(event, referral_text, buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'buy_balance_menu'))
 async def buy_balance_menu(event):
@@ -1480,10 +1466,7 @@ async def buy_balance_menu(event):
         [Button.inline('🔙 برگشت', b'back')]
     ]
     display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
-    try:
-        await event.edit(display_text, buttons=buttons, parse_mode='md')
-    except Exception as e:
-        logger.error(f"Error editing buy balance menu: {e}")
+    await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(pattern=b'num_(.+)$'))
 async def number_input(event):
@@ -1524,11 +1507,8 @@ async def number_input(event):
         black_amount = 0
     amount = black_amount * 40
     display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
-    try:
-        await event.edit(display_text, buttons=buttons, parse_mode='md')
-        await event.answer()
-    except Exception as e:
-        logger.error(f"Error editing number input: {e}")
+    await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
+    await event.answer()
 
 @telethon_bot.on(events.CallbackQuery(data=b'clear_amount'))
 async def clear_amount(event):
@@ -1543,11 +1523,8 @@ async def clear_amount(event):
         [Button.inline('🔙 برگشت', b'back')]
     ]
     display_text = f"💳 **خرید موجودی**\n\nتعداد الماس: 0\nمبلغ: 0 تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
-    try:
-        await event.edit(display_text, buttons=buttons, parse_mode='md')
-        await event.answer()
-    except Exception as e:
-        logger.error(f"Error editing clear amount: {e}")
+    await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
+    await event.answer()
 
 @telethon_bot.on(events.CallbackQuery(data=b'confirm_amount'))
 async def confirm_amount(event):
@@ -1568,11 +1545,8 @@ async def confirm_amount(event):
     invoice_text = f"💳 **فاکتور خرید موجودی**\n\n**اطلاعات خریدار:**\n🆔 آیدی: {user_id}\n\n💎 تعداد الماس: {black_amount:,}\n💰 مبلغ قابل پرداخت: {amount:,} تومان\n💳 شماره کارت: {card_number}\n\nلطفاً پس از پرداخت، عکس فیش واریزی را ارسال نمایید."
     buttons = [[Button.inline('پرداخت', b'proceed_payment')], [Button.inline('لغو', b'cancel_payment')]]
     user_purchase_amount[user_id] = {'black_amount': black_amount, 'amount': amount}
-    try:
-        await event.edit(invoice_text, buttons=buttons, parse_mode='md')
-        await event.answer()
-    except Exception as e:
-        logger.error(f"Error editing confirm amount: {e}")
+    await safe_edit(event, invoice_text, buttons=buttons, parse_mode='md')
+    await event.answer()
 
 @telethon_bot.on(events.CallbackQuery(data=b'proceed_payment'))
 async def proceed_payment(event):
@@ -1585,14 +1559,10 @@ async def proceed_payment(event):
     amount = purchase_data['amount']
     user_clients[user_id] = {'step': 'receipt', 'amount': amount, 'black_amount': black_amount}
     card_number = get_setting(ADMINS[0], 'card_number', 'تنظیم نشده')
-    try:
-        await event.edit(f'💳 لطفاً مبلغ {amount:,} تومان (معادل {black_amount:,} الماس) را به کارت {card_number} واریز کنید و عکس فیش واریزی خود را ارسال نمایید.')
-        await event.answer()
-    except Exception as e:
-        logger.error(f"Error editing proceed payment: {e}")
-    finally:
-        if user_id in user_purchase_amount and not isinstance(user_purchase_amount[user_id], str):
-            del user_purchase_amount[user_id]
+    await safe_edit(event, f'💳 لطفاً مبلغ {amount:,} تومان (معادل {black_amount:,} الماس) را به کارت {card_number} واریز کنید و عکس فیش واریزی خود را ارسال نمایید.')
+    await event.answer()
+    if user_id in user_purchase_amount and not isinstance(user_purchase_amount[user_id], str):
+        del user_purchase_amount[user_id]
 
 @telethon_bot.on(events.CallbackQuery(data=b'cancel_payment'))
 async def cancel_payment(event):
@@ -1600,11 +1570,8 @@ async def cancel_payment(event):
     if user_id in user_purchase_amount:
         del user_purchase_amount[user_id]
     buttons = [[Button.inline('💳 خرید موجودی', b'buy_balance_menu')], [Button.inline('🔙 برگشت', b'back')]]
-    try:
-        await event.edit('❌ خرید لغو شد.', buttons=buttons)
-        await event.answer('❌ خرید لغو شد.')
-    except Exception as e:
-        logger.error(f"Error editing cancel payment: {e}")
+    await safe_edit(event, '❌ خرید لغو شد.', buttons=buttons)
+    await event.answer('❌ خرید لغو شد.')
 
 @telethon_bot.on(events.CallbackQuery(data=b'admin_panel'))
 async def admin_panel_handler(event):
@@ -1617,7 +1584,7 @@ async def admin_panel_handler(event):
         [Button.inline('🚫 مسدود کردن کاربر', b'ban_user_admin')],
         [Button.inline('🔙 برگشت', b'back')]
     ]
-    await event.edit('🛠 **پنل مدیریت**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:', buttons=buttons, parse_mode='md')
+    await safe_edit(event, '🛠 **پنل مدیریت**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:', buttons=buttons, parse_mode='md')
 
 @telethon_bot.on(events.CallbackQuery(data=b'add_balance'))
 async def add_balance_admin(event):
@@ -1625,7 +1592,7 @@ async def add_balance_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await event.edit('➕ **اضافه کردن الماس**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    await safe_edit(event, '➕ **اضافه کردن الماس**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
     user_clients[user_id] = {'step': 'add_balance_user'}
 
 @telethon_bot.on(events.CallbackQuery(data=b'ban_user_admin'))
@@ -1634,7 +1601,7 @@ async def ban_user_admin(event):
     if user_id not in ADMINS:
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
-    await event.edit('🚫 **مسدود کردن کاربر**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
+    await safe_edit(event, '🚫 **مسدود کردن کاربر**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
     user_clients[user_id] = {'step': 'ban_user'}
 
 @telethon_bot.on(events.CallbackQuery(pattern=b'confirm_(\\d+)_(\\d+)_(\\d+)'))
@@ -1659,10 +1626,7 @@ async def confirm_payment(event):
         await telethon_bot.send_message(user_id, f'✅ پرداخت شما تأیید شد!\n💎 {black_amount:,} الماس به حساب شما اضافه شد.')
     except Exception as e:
         logger.error(f"Error sending message to user {user_id}: {e}")
-    try:
-        await event.edit(f'✅ پرداخت کاربر {user_id} برای {black_amount:,} الماس تأیید شد.')
-    except Exception as e:
-        logger.error(f"Error editing confirm: {e}")
+    await safe_edit(event, f'✅ پرداخت کاربر {user_id} برای {black_amount:,} الماس تأیید شد.')
 
 @telethon_bot.on(events.CallbackQuery(pattern=b'reject_(\\d+)_(\\d+)'))
 async def reject_payment(event):
@@ -1678,10 +1642,7 @@ async def reject_payment(event):
         await telethon_bot.send_message(user_id, '❌ پرداخت شما رد شد. لطفاً با پشتیبانی تماس بگیرید.')
     except Exception as e:
         logger.error(f"Error sending message to user {user_id}: {e}")
-    try:
-        await event.edit(f'❌ پرداخت کاربر {user_id} رد شد.')
-    except Exception as e:
-        logger.error(f"Error editing reject: {e}")
+    await safe_edit(event, f'❌ پرداخت کاربر {user_id} رد شد.')
 
 # =============================================
 # تابع اصلی
@@ -1693,7 +1654,7 @@ async def main():
         user_id = session_data["user_id"]
         asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
     
-    # شروع Manager Bot
+    # شروع Manager Bot (Pyrogram)
     await manager_bot.start()
     logger.info("✅ Manager bot started")
     
@@ -1701,11 +1662,15 @@ async def main():
     await telethon_bot.start()
     logger.info("✅ Telethon bot started")
     
-    # Wait for all tasks
-    await asyncio.gather(
-        manager_bot.run_until_disconnected(),
-        telethon_bot.run_until_disconnected()
-    )
+    # نگه داشتن هر دو بات با idle
+    try:
+        await idle()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    finally:
+        await manager_bot.stop()
+        await telethon_bot.disconnect()
+        logger.info("✅ Both bots stopped")
 
 if __name__ == "__main__":
     try:

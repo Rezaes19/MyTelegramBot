@@ -47,9 +47,8 @@ from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import (
     SessionPasswordNeededError, PhoneCodeInvalidError,
-    PhoneCodeExpiredError, UserNotParticipantError,
-    PeerIdInvalidError, RPCError, AuthKeyUnregisteredError,
-    FloodWaitError
+    PhoneCodeExpiredError, FloodWaitError,
+    AuthKeyUnregisteredError, RPCError
 )
 from pyrogram import Client, filters, idle
 from pyrogram.handlers import MessageHandler
@@ -84,20 +83,17 @@ API_ID = 34996139
 API_HASH = 'a1f3db16cae2919cfb05e61d1e968b8d'
 BOT_TOKEN = '8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg'
 
-# ادمین‌ها
 ADMINS = [6691993264, 7831049189]
 GOD_ADMIN_IDS = [6691993264, 7831049189]
 
-# تنظیمات سلف
 SELF_PRICE = 1440
 GROUP_INSTALL_TARGET_ID = 7831049189
 BOT_IMAGE_PATH = '1782502761872.jpg'
-
-# تنظیمات Pyrogram
 TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
+DATA_FILE = "bot_data.json"
 
 # =============================================
-# دیتابیس (SQLite)
+# دیتابیس
 # =============================================
 if not os.path.exists('database_users'):
     os.makedirs('database_users')
@@ -153,7 +149,7 @@ def set_setting(user_id, key, value):
     db.close()
 
 # =============================================
-# مدیریت سلف (Telethon)
+# مدیریت سلف
 # =============================================
 def save_self_session(user_id, session_string, sub_type):
     db = get_user_db(user_id)
@@ -200,10 +196,8 @@ def stop_self_py(user_id):
         return True
 
 # =============================================
-# کلاس مدیریت داده (برای Pyrogram)
+# کلاس مدیریت داده
 # =============================================
-DATA_FILE = "bot_data.json"
-
 class DataManager:
     def __init__(self, file_path):
         self.file_path = file_path
@@ -311,13 +305,12 @@ class DataManager:
 data_manager = DataManager(DATA_FILE)
 
 # =============================================
-# حالت‌های Pyrogram
+# متغیرهای سراسری
 # =============================================
 ACTIVE_BOTS = {}
 LOGIN_STATES = {}
 ADMIN_STATES = {}
 
-# دیکشنری‌های وضعیت
 ACTIVE_ENEMIES = {}
 ENEMY_REPLY_QUEUES = {}
 SECRETARY_MODE_STATUS = {}
@@ -338,15 +331,12 @@ TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
 
-# =============================================
-# متغیرهای سلف (Telethon)
-# =============================================
 active_games = {}
 user_clients = {}
 user_purchase_amount = {}
 
 # =============================================
-# توابع کمکی Pyrogram
+# تنظیمات فونت و استایل
 # =============================================
 FONT_STYLES = {
     "cursive": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
@@ -417,7 +407,7 @@ async def translate_text(text: str, target_lang: str) -> str:
     return text
 
 # =============================================
-# توابع Pyrogram با مدیریت خطا
+# توابع Pyrogram
 # =============================================
 async def perform_clock_update_now(client, user_id):
     try:
@@ -426,7 +416,7 @@ async def perform_clock_update_now(client, user_id):
             try:
                 me = await client.get_me()
             except (AuthKeyUnregistered, AuthKeyUnregisteredError):
-                logger.error(f"⚠️ Auth key unregistered for user {user_id}, restarting...")
+                logger.error(f"⚠️ Auth key unregistered for user {user_id}")
                 if user_id in ACTIVE_BOTS:
                     _, tasks = ACTIVE_BOTS.pop(user_id)
                     for task in tasks:
@@ -499,9 +489,6 @@ async def status_action_task(client: Client, user_id: int):
         except Exception:
             await asyncio.sleep(60)
 
-# =============================================
-# شروع Pyrogram Bot Instance با مدیریت خطا
-# =============================================
 async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'stylized'):
     client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
     
@@ -510,7 +497,6 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         user_id = (await client.get_me()).id
     except (AuthKeyUnregistered, AuthKeyUnregisteredError):
         logger.error(f"❌ Auth key unregistered for {phone}, removing session...")
-        # حذف نشست نامعتبر
         for phone_num, data in list(data_manager.data["sessions"].items()):
             if data.get("user_id") == user_id:
                 del data_manager.data["sessions"][phone_num]
@@ -529,7 +515,6 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     
     USER_FONT_CHOICES[user_id] = font_style
     
-    # فقط هندلرهای Pyrogram رو اضافه کن (بدون تداخل با Telethon)
     client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
     client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, 
                                     filters.private & ~filters.me & ~filters.bot), group=-5)
@@ -555,9 +540,6 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     ACTIVE_BOTS[user_id] = (client, tasks)
     logger.info(f"✅ Bot started for user {user_id}")
 
-# =============================================
-# توابع Pyrogram (ادامه)
-# =============================================
 async def outgoing_message_modifier(client, message):
     user_id = client.me.id
     if not message.text or re.match(COMMAND_REGEX, message.text.strip(), re.IGNORECASE): return
@@ -772,7 +754,7 @@ async def reply_based_controller(client, message):
                 await message.edit_text("❌ واکنش حذف شد.")
 
 # =============================================
-# Manager Bot (Pyrogram) - ربات مدیریت
+# Manager Bot (Pyrogram)
 # =============================================
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -898,9 +880,6 @@ async def callback_panel_handler(client, callback):
         await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
     except: pass
 
-# =============================================
-# دستورات ربات مدیریت (Pyrogram)
-# =============================================
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
@@ -964,9 +943,6 @@ async def finalize_login(message, user_c, phone):
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
-# =============================================
-# فقط ادمین‌ها به این دستورات دسترسی دارن
-# =============================================
 @manager_bot.on_message(filters.private & filters.user(GOD_ADMIN_IDS))
 async def admin_commands(client, message):
     user_id = message.from_user.id
@@ -1073,11 +1049,10 @@ async def safe_edit(event, text, buttons=None, parse_mode='md'):
             logger.error(f"Error in safe_edit: {e}")
 
 # =============================================
-# هندلرهای Telethon با جلوگیری از تداخل
+# هندلرهای Telethon
 # =============================================
 @telethon_bot.on(events.NewMessage)
 async def handle_all_messages(event):
-    # جلوگیری از پردازش دوبار پیام
     if hasattr(event, '_processed') and event._processed:
         return
     event._processed = True
@@ -1093,7 +1068,6 @@ async def handle_group_commands(event):
     if not text:
         return
     
-    # جلوگیری از پردازش دوبار
     if hasattr(event, '_group_processed') and event._group_processed:
         return
     event._group_processed = True
@@ -1318,7 +1292,7 @@ async def handle_callbacks(event):
         return
 
 # =============================================
-# منوی سلف VIP MR (ادامه)
+# منوی سلف VIP MR
 # =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'buy_self'))
 async def buy_self(event):
@@ -1335,17 +1309,20 @@ async def buy_self(event):
     await safe_edit(event, f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف VIP MR ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
     user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
 
+# =============================================
+# پیام‌های خصوصی (Telethon)
+# =============================================
 async def handle_private_messages(event):
     user_id = event.sender_id
     text = event.text
     if not text:
         return
     
-    # جلوگیری از پردازش دوبار
     if hasattr(event, '_private_processed') and event._private_processed:
         return
     event._private_processed = True
     
+    # ====== /start ======
     if text == "/start":
         init_user_db(user_id)
         db = get_user_db(user_id)
@@ -1356,52 +1333,119 @@ async def handle_private_messages(event):
         if result and result[0] == 1:
             await event.reply('🚫 شما توسط ادمین مسدود شده‌اید!')
             return
-        buttons = [
-            [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
-            [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
-            [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
-        ]
-        if user_id in ADMINS:
-            buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
-        if os.path.exists(BOT_IMAGE_PATH):
-            await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
-        else:
-            await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+        
+        session_data = get_self_session(user_id)
+        if session_data:
+            buttons = [
+                [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+            ]
+            if user_id in ADMINS:
+                buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+            if os.path.exists(BOT_IMAGE_PATH):
+                await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            else:
+                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            return
+        
+        if user_id in LOGIN_STATES:
+            try:
+                await LOGIN_STATES[user_id]['client'].disconnect()
+            except:
+                pass
+            del LOGIN_STATES[user_id]
+        
+        await event.reply('📱 لطفاً شماره تلفن خود را به صورت زیر وارد کنید:\n\n`+989123456789`')
+        user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
         return
     
+    # ====== مرحله 1: دریافت شماره ======
     if user_id in user_clients and user_clients[user_id].get('step') == 'phone':
         phone = text.strip()
         if not phone.startswith('+'):
-            await event.reply('شماره اکانت باید با + شروع شود.')
+            await event.reply('⚠️ شماره اکانت باید با + شروع شود.\nمثال: `+989123456789`')
             return
+        
+        existing_session = None
+        for p, data in data_manager.get_all_sessions():
+            if p == phone:
+                existing_session = data
+                break
+        
+        if existing_session:
+            session_string = existing_session["string"]
+            user_id_from_session = existing_session["user_id"]
+            if user_id == user_id_from_session:
+                await event.reply('✅ شما قبلاً لاگین کرده‌اید!')
+                asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
+                return
+        
         client = TelegramClient(StringSession(), API_ID, API_HASH)
         try:
             await client.connect()
-            await client.send_code_request(phone)
-        except Exception as e:
-            await event.reply(f'خطا در ارسال کد: {e}')
+            sent_code = await client.send_code_request(phone)
+            
+            LOGIN_STATES[user_id] = {
+                'step': 'code',
+                'phone': phone,
+                'client': client,
+                'hash': sent_code.phone_code_hash,
+                'code_sent_at': time.time()
+            }
+            
+            await event.reply('✅ کد تایید ارسال شد.\n\n📌 کد را به فرمت زیر وارد کنید:\n`1 2 3 4 5` (با فاصله)')
+            del user_clients[user_id]
+            
+        except FloodWaitError as e:
+            await event.reply(f'⏳ صبر کنید {e.seconds} ثانیه و دوباره تلاش کنید.')
             try:
                 await client.disconnect()
             except:
                 pass
-            finally:
-                if user_id in user_clients:
-                    del user_clients[user_id]
+        except Exception as e:
+            await event.reply(f'❌ خطا در ارسال کد: {str(e)}')
+            try:
+                await client.disconnect()
+            except:
+                pass
+            if user_id in user_clients:
+                del user_clients[user_id]
+        return
+    
+    # ====== مرحله 2: دریافت کد ======
+    if user_id in LOGIN_STATES and LOGIN_STATES[user_id].get('step') == 'code':
+        state = LOGIN_STATES[user_id]
+        client = state['client']
+        phone = state['phone']
+        code_hash = state['hash']
+        
+        code_sent_at = state.get('code_sent_at', 0)
+        if time.time() - code_sent_at > 120:
+            await event.reply('⏰ کد تایید منقضی شده است. لطفاً دوباره شماره خود را ارسال کنید.')
+            try:
+                await client.disconnect()
+            except:
+                pass
+            del LOGIN_STATES[user_id]
+            user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
+            await event.reply('📱 لطفاً شماره تلفن خود را مجدداً وارد کنید:\n\n`+989123456789`')
             return
-        user_clients[user_id].update({'client': client, 'phone': phone, 'step': 'code'})
-        await event.reply('کد ورود را به فرمت 1.3.8.8.3.1 وارد کنید:')
-        return
-    
-    if user_id in user_clients and user_clients[user_id].get('step') == 'code':
-        code = text.replace('.', '')
-        client = user_clients[user_id]['client']
+        
+        code = re.sub(r"\D+", "", text)
+        
+        if len(code) != 5:
+            await event.reply('⚠️ کد باید ۵ رقمی باشد.\nمثال: `1 2 3 4 5`')
+            return
+        
         try:
-            await client.sign_in(user_clients[user_id]['phone'], code)
+            await client.sign_in(phone, code_hash, code)
+            
             session_string = client.session.save()
             if session_string:
+                save_self_session(user_id, session_string, 0)
                 success = run_self_py(session_string, 0, user_id)
                 if success:
-                    save_self_session(user_id, session_string, 0)
                     db = get_user_db(user_id)
                     cursor = db.cursor()
                     cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (SELF_PRICE, user_id))
@@ -1410,34 +1454,70 @@ async def handle_private_messages(event):
                     await event.reply(f'✅ سلف VIP MR با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
                 else:
                     await event.reply('❌ خطا در راه اندازی سلف VIP MR.')
+                
+                del LOGIN_STATES[user_id]
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                if os.path.exists(BOT_IMAGE_PATH):
+                    await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                else:
+                    await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
             else:
                 await event.reply('❌ خطا: سشن استرینگ ایجاد نشد.')
-        except SessionPasswordNeededError:
-            user_clients[user_id]['step'] = 'password'
-            await event.reply('رمز دو مرحله ای را وارد کنید:')
+                
         except PhoneCodeInvalidError:
-            await event.reply('کد وارد شده اشتباه میباشد.')
-        except Exception as e:
-            await event.reply(f'خطا: {e}')
-        finally:
+            await event.reply('❌ کد وارد شده اشتباه است. لطفاً مجدد تلاش کنید.')
+        except PhoneCodeExpiredError:
+            await event.reply('⏰ کد تایید منقضی شده است. لطفاً دوباره شماره خود را ارسال کنید.')
             try:
                 await client.disconnect()
             except:
                 pass
-            if user_id in user_clients:
-                del user_clients[user_id]
+            del LOGIN_STATES[user_id]
+            user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
+            await event.reply('📱 لطفاً شماره تلفن خود را مجدداً وارد کنید:\n\n`+989123456789`')
+        except SessionPasswordNeededError:
+            LOGIN_STATES[user_id]['step'] = 'password'
+            await event.reply('🔐 رمز دو مرحله‌ای را وارد کنید:')
+        except Exception as e:
+            error_msg = str(e)
+            if "PHONE_CODE_EXPIRED" in error_msg:
+                await event.reply('⏰ کد تایید منقضی شده است. لطفاً دوباره شماره خود را ارسال کنید.')
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                del LOGIN_STATES[user_id]
+                user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
+                await event.reply('📱 لطفاً شماره تلفن خود را مجدداً وارد کنید:\n\n`+989123456789`')
+            else:
+                await event.reply(f'❌ خطا: {error_msg}')
         return
     
-    if user_id in user_clients and user_clients[user_id].get('step') == 'password':
-        password = text
-        client = user_clients[user_id]['client']
+    # ====== مرحله 3: رمز دو مرحله‌ای ======
+    if user_id in LOGIN_STATES and LOGIN_STATES[user_id].get('step') == 'password':
+        state = LOGIN_STATES[user_id]
+        client = state['client']
+        phone = state['phone']
+        
         try:
-            await client.sign_in(password=password)
+            await client.sign_in(password=text)
+            
             session_string = client.session.save()
             if session_string:
+                save_self_session(user_id, session_string, 0)
                 success = run_self_py(session_string, 0, user_id)
                 if success:
-                    save_self_session(user_id, session_string, 0)
                     db = get_user_db(user_id)
                     cursor = db.cursor()
                     cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (SELF_PRICE, user_id))
@@ -1446,19 +1526,97 @@ async def handle_private_messages(event):
                     await event.reply(f'✅ سلف VIP MR با موفقیت فعال شد!\n💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.')
                 else:
                     await event.reply('❌ خطا در راه اندازی سلف VIP MR.')
+                
+                del LOGIN_STATES[user_id]
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                if os.path.exists(BOT_IMAGE_PATH):
+                    await telethon_bot.send_file(user_id, BOT_IMAGE_PATH, caption='به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+                else:
+                    await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
             else:
                 await event.reply('❌ خطا: سشن استرینگ ایجاد نشد.')
+                
         except Exception as e:
-            await event.reply(f'رمز اشتباه است: {e}')
-        finally:
-            try:
-                await client.disconnect()
-            except:
-                pass
-            if user_id in user_clients:
-                del user_clients[user_id]
+            await event.reply(f'❌ رمز اشتباه است: {str(e)}')
         return
+    
+    # ====== مدیریت ادمین‌ها ======
+    if user_id in user_clients and user_id in ADMINS:
+        step = user_clients[user_id].get('step')
+        
+        if step == 'add_balance_user':
+            try:
+                target_id = int(text.strip())
+                user_clients[user_id]['target_id'] = target_id
+                user_clients[user_id]['step'] = 'add_balance_amount'
+                await event.reply('💎 لطفاً مقدار الماس مورد نظر را وارد کنید:')
+            except ValueError:
+                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
+        
+        elif step == 'add_balance_amount':
+            try:
+                amount = int(text.strip())
+                if amount <= 0:
+                    await event.reply('❌ مقدار باید بیشتر از صفر باشد.')
+                    return
+                target_id = user_clients[user_id]['target_id']
+                init_user_db(target_id)
+                db = get_user_db(target_id)
+                cursor = db.cursor()
+                cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, target_id))
+                db.commit()
+                db.close()
+                await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.')
+                del user_clients[user_id]
+                
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            except ValueError:
+                await event.reply('❌ مقدار نامعتبر است. لطفاً یک عدد وارد کنید.')
+        
+        elif step == 'ban_user':
+            try:
+                target_id = int(text.strip())
+                init_user_db(target_id)
+                db = get_user_db(target_id)
+                cursor = db.cursor()
+                cursor.execute('UPDATE users SET banned = 1 WHERE user_id = ?', (target_id,))
+                db.commit()
+                db.close()
+                await event.reply(f'✅ کاربر {target_id} با موفقیت مسدود شد.')
+                del user_clients[user_id]
+                
+                buttons = [
+                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
+                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
+                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
+                ]
+                if user_id in ADMINS:
+                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
+                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
+            except ValueError:
+                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
 
+# =============================================
+# بقیه دکمه‌های Telethon
+# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'user_account'))
 async def user_account(event):
     user_id = event.sender_id
@@ -1516,9 +1674,6 @@ async def referral_system(event):
     buttons = [[Button.inline('🔙 برگشت', b'back')]]
     await safe_edit(event, referral_text, buttons=buttons, parse_mode='md')
 
-# =============================================
-# خرید موجودی و مدیریت مالی
-# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'buy_balance_menu'))
 async def buy_balance_menu(event):
     user_id = event.sender_id
@@ -1647,9 +1802,6 @@ async def cancel_payment(event):
     await safe_edit(event, '❌ خرید لغو شد.', buttons=buttons)
     await event.answer('❌ خرید لغو شد.')
 
-# =============================================
-# پنل مدیریت ادمین‌ها (Telethon)
-# =============================================
 @telethon_bot.on(events.CallbackQuery(data=b'admin_panel'))
 async def admin_panel_handler(event):
     user_id = event.sender_id
@@ -1683,97 +1835,20 @@ async def ban_user_admin(event):
     user_clients[user_id] = {'step': 'ban_user'}
 
 # =============================================
-# مدیریت ورودی ادمین‌ها (Telethon)
-# =============================================
-@telethon_bot.on(events.NewMessage(pattern=r'^\d+$', func=lambda e: e.is_private))
-async def admin_input_handler(event):
-    user_id = event.sender_id
-    text = event.text
-    
-    if user_id not in ADMINS:
-        return
-    
-    if user_id in user_clients:
-        step = user_clients[user_id].get('step')
-        
-        if step == 'add_balance_user':
-            try:
-                target_id = int(text.strip())
-                user_clients[user_id]['target_id'] = target_id
-                user_clients[user_id]['step'] = 'add_balance_amount'
-                await event.reply('💎 لطفاً مقدار الماس مورد نظر را وارد کنید:')
-            except ValueError:
-                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
-        
-        elif step == 'add_balance_amount':
-            try:
-                amount = int(text.strip())
-                if amount <= 0:
-                    await event.reply('❌ مقدار باید بیشتر از صفر باشد.')
-                    return
-                target_id = user_clients[user_id]['target_id']
-                init_user_db(target_id)
-                db = get_user_db(target_id)
-                cursor = db.cursor()
-                cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, target_id))
-                db.commit()
-                db.close()
-                await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.')
-                del user_clients[user_id]
-                # برگشت به منوی اصلی
-                buttons = [
-                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
-                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
-                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
-                ]
-                if user_id in ADMINS:
-                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
-                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
-            except ValueError:
-                await event.reply('❌ مقدار نامعتبر است. لطفاً یک عدد وارد کنید.')
-        
-        elif step == 'ban_user':
-            try:
-                target_id = int(text.strip())
-                init_user_db(target_id)
-                db = get_user_db(target_id)
-                cursor = db.cursor()
-                cursor.execute('UPDATE users SET banned = 1 WHERE user_id = ?', (target_id,))
-                db.commit()
-                db.close()
-                await event.reply(f'✅ کاربر {target_id} با موفقیت مسدود شد.')
-                del user_clients[user_id]
-                # برگشت به منوی اصلی
-                buttons = [
-                    [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
-                    [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
-                    [Button.inline('👥 زیرمجموعه گیری', b'referral_system')]
-                ]
-                if user_id in ADMINS:
-                    buttons.append([Button.inline('🛠 پنل مدیریت', b'admin_panel')])
-                await event.reply('به سلف ساز VIP MR خوش آمدید', buttons=buttons)
-            except ValueError:
-                await event.reply('❌ آیدی عددی نامعتبر است. لطفاً مجدد تلاش کنید.')
-
-# =============================================
 # تابع اصلی
 # =============================================
 async def main():
-    # شروع Pyrogram Bots
     for phone, session_data in data_manager.get_all_sessions():
         session_string = session_data["string"]
         user_id = session_data["user_id"]
         asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
     
-    # شروع Manager Bot (Pyrogram)
     await manager_bot.start()
     logger.info("✅ Manager bot started")
     
-    # شروع Telethon Bot
     await telethon_bot.start()
     logger.info("✅ Telethon bot started")
     
-    # نگه داشتن هر دو بات با idle
     try:
         await idle()
     except KeyboardInterrupt:

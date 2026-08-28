@@ -366,24 +366,28 @@ ENEMY_REPLIES = [
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
 HELP_TEXT = """
-**[ 🛠 دستورات دستی و ریپلای ]**
+**[ 🛠 دستورات دستی و ریپلای VIP MR ]**
 ━━━━━━━━━━━━━━━━━━━━
 **✦ مدیریت پیام و چت**
-  » `حذف [تعداد]` 
-  » `ذخیره` (ریپلای روی پیام)
-  » `تکرار [تعداد]` (ریپلای روی پیام)
-  » `تنظیم منشی [متن]`
+  » `حذف [تعداد]` - حذف پیام‌ها
+  » `ذخیره` - ذخیره پیام (ریپلای)
+  » `تکرار [تعداد]` - تکرار پیام (ریپلای)
+  » `تنظیم منشی [متن]` - تنظیم پیام منشی
 
 **✦ دفاعی و امنیتی**
   » `دشمن روشن` | `خاموش` (ریپلای روی کاربر)
-  » `لیست دشمن`
-  » `بلاک روشن` | `بلاک خاموش`
-  » `سکوت روشن` | `سکوت خاموش`
-  » `ریاکشن [شکلک]` | `خاموش`
+  » `لیست دشمن` - مشاهده لیست دشمنان
+  » `بلاک روشن` | `بلاک خاموش` - بلاک/آنبلاک کاربر
+  » `سکوت روشن` | `سکوت خاموش` - سکوت/خروج از سکوت
+  » `ریاکشن [شکلک]` | `خاموش` - واکنش خودکار
 
 **✦ سرگرمی**
-  » `تاس` | `تاس [عدد]`
-  » `بولینگ`
+  » `تاس` | `تاس [عدد]` - پرتاب تاس
+  » `بولینگ` - بازی بولینگ
+
+**✦ مدیریت**
+  » `پنل` - پنل مدیریت
+  » `راهنما` - نمایش این پیام
 ━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -601,7 +605,6 @@ async def panel_command_controller(client, message):
         await message.edit_text("❌ شما دسترسی به پنل مدیریت ندارید!")
         return
     
-    # ====== پنل کامل با همه گزینه‌ها ======
     buttons = [
         [KeyboardButton("📊 وضعیت ربات")],
         [KeyboardButton("📢 پیام همگانی")],
@@ -862,7 +865,6 @@ async def admin_commands(client, message):
         await message.reply_text("🛠 لطفاً برای مدیریت سلف به ربات سلف بروید و از منوی اصلی گزینه پنل مدیریت را انتخاب کنید.")
     
     elif text == "🔙 برگشت به منو":
-        # برگشت به منوی اصلی ربات مدیریت
         buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
         kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
         await message.reply_text("👋 خوش آمدید.\n\nبرای لاگین شماره خود را ارسال کنید:", reply_markup=kb)
@@ -911,7 +913,6 @@ async def start_telethon_bot_safe():
             logger.info("✅ Telethon bot started successfully")
             telethon_bot = bot
             
-            # ====== ثبت هندلرها بعد از استارت ======
             await register_telethon_handlers()
             
             return True
@@ -942,156 +943,346 @@ async def start_telethon_bot_safe():
 # ثبت هندلرهای Telethon
 # =============================================
 async def register_telethon_handlers():
-    """ثبت تمام هندلرهای Telethon بعد از استارت بات"""
     if telethon_bot is None:
         logger.error("❌ Cannot register handlers: telethon_bot is None")
         return
     
-    # ====== هندلر NewMessage ======
-    @telethon_bot.on(events.NewMessage)
-    async def handle_all_messages(event):
-        if hasattr(event, '_processed') and event._processed:
-            return
-        event._processed = True
-        
-        if event.is_private:
-            await handle_private_messages(event)
-        elif event.is_group or event.is_channel:
-            await handle_group_commands(event)
+    telethon_bot.add_event_handler(handle_all_messages, events.NewMessage)
+    telethon_bot.add_event_handler(handle_callbacks, events.CallbackQuery)
+    telethon_bot.add_event_handler(handle_buy_self, events.CallbackQuery(data=b'buy_self'))
+    telethon_bot.add_event_handler(handle_user_account, events.CallbackQuery(data=b'user_account'))
+    telethon_bot.add_event_handler(handle_manage_self, events.CallbackQuery(data=b'manage_self'))
+    telethon_bot.add_event_handler(handle_disable_self, events.CallbackQuery(data=b'disable_self'))
+    telethon_bot.add_event_handler(handle_back, events.CallbackQuery(data=b'back'))
+    telethon_bot.add_event_handler(handle_referral_system, events.CallbackQuery(data=b'referral_system'))
+    telethon_bot.add_event_handler(handle_buy_balance_menu, events.CallbackQuery(data=b'buy_balance_menu'))
+    telethon_bot.add_event_handler(handle_clear_amount, events.CallbackQuery(data=b'clear_amount'))
+    telethon_bot.add_event_handler(handle_confirm_amount, events.CallbackQuery(data=b'confirm_amount'))
+    telethon_bot.add_event_handler(handle_proceed_payment, events.CallbackQuery(data=b'proceed_payment'))
+    telethon_bot.add_event_handler(handle_cancel_payment, events.CallbackQuery(data=b'cancel_payment'))
+    telethon_bot.add_event_handler(handle_admin_panel, events.CallbackQuery(data=b'admin_panel'))
+    telethon_bot.add_event_handler(handle_add_balance, events.CallbackQuery(data=b'add_balance'))
+    telethon_bot.add_event_handler(handle_ban_user_admin, events.CallbackQuery(data=b'ban_user_admin'))
+    telethon_bot.add_event_handler(handle_number_input, events.CallbackQuery(pattern=b'num_(.+)$'))
     
-    # ====== هندلر CallbackQuery ======
-    @telethon_bot.on(events.CallbackQuery)
-    async def handle_callbacks(event):
-        data = event.data.decode()
-        
-        if data.startswith("balance_show_"):
-            user_id = int(data.split("_")[2])
-            db = get_user_db(user_id)
-            cursor = db.cursor()
-            cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            balance = result[0] if result else 0
-            db.close()
-            message = f"🎖️ **موجودی الماس VIP MR**"
-            buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{user_id}')]]
-            await safe_edit(event, message, buttons=buttons, parse_mode='md')
-            await event.answer("✅ موجودی به‌روز شد")
+    logger.info("✅ Telethon handlers registered")
+
+# =============================================
+# توابع Telethon
+# =============================================
+async def get_user_display(user_id):
+    try:
+        if telethon_bot is None:
+            return "کاربر"
+        entity = await telethon_bot.get_entity(user_id)
+        if hasattr(entity, 'username') and entity.username:
+            return f"@{entity.username}"
+        else:
+            name = entity.first_name or "کاربر"
+            return name[:18] + "..." if len(name) > 20 else name
+    except:
+        return "کاربر"
+
+async def get_user_info_for_group(user_id):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT balance, self_start_time FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    balance = result[0] if result else 0
+    self_start_time = result[1] if result else 0
+    db.close()
+    session_data = get_self_session(user_id)
+    has_active_self = "فعال ✅" if session_data else "غیرفعال ❌"
+    if self_start_time and self_start_time > 0:
+        elapsed_time = int(time.time()) - self_start_time
+        days = elapsed_time // 86400
+        hours = (elapsed_time % 86400) // 3600
+        time_info = f"\n⏱ آمار سلف VIP MR: {days} روز و {hours} ساعت"
+    else:
+        time_info = ""
+    return f"👤 **اطلاعات حساب شما**\n\n🆔 **آیدی عددی :** `{user_id}`\n\n💎 **موجودی :** `{balance:,}` الماس\n\n🔐 **وضعیت سلف VIP MR :** `{has_active_self}`{time_info}"
+
+async def delete_game_on_timeout(chat_id, message_id, organizer_id, amount):
+    await asyncio.sleep(300)
+    game_key = (chat_id, message_id)
+    if game_key in active_games:
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
+        db.commit()
+        db.close()
+        try:
+            if telethon_bot:
+                await telethon_bot.delete_messages(chat_id, message_id)
+                await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس VIP MR با تعداد {amount:,} الماس در گروه به دلیل عدم حضور حریف در طول ۵ دقیقه لغو شد.')
+        except:
+            pass
+        del active_games[game_key]
+
+async def safe_edit(event, text, buttons=None, parse_mode='md'):
+    try:
+        if telethon_bot is None:
             return
-        
-        if data.startswith("game_join_"):
-            parts = data.split("_")
-            amount = int(parts[2])
-            organizer_id = int(parts[3])
-            joiner_id = event.sender_id
-            if joiner_id == organizer_id:
-                await event.answer("❌ شما برگزار کننده هستید!", alert=True)
-                return
-            init_user_db(joiner_id)
-            db = get_user_db(joiner_id)
+        if buttons:
+            await event.edit(text, buttons=buttons, parse_mode=parse_mode)
+        else:
+            await event.edit(text, parse_mode=parse_mode)
+    except Exception as e:
+        if "MessageNotModifiedError" not in str(type(e)):
+            logger.error(f"Error in safe_edit: {e}")
+
+# =============================================
+# هندلرهای Telethon
+# =============================================
+async def handle_all_messages(event):
+    if telethon_bot is None:
+        return
+    if hasattr(event, '_processed') and event._processed:
+        return
+    event._processed = True
+    
+    if event.is_private:
+        await handle_private_messages(event)
+    elif event.is_group or event.is_channel:
+        await handle_group_commands(event)
+
+async def handle_group_commands(event):
+    if telethon_bot is None:
+        return
+    chat_id = event.chat_id
+    text = event.text
+    if not text:
+        return
+    
+    if hasattr(event, '_group_processed') and event._group_processed:
+        return
+    event._group_processed = True
+    
+    if text and str(GROUP_INSTALL_TARGET_ID) in text:
+        try:
+            entity = await telethon_bot.get_entity(chat_id)
+            if entity.megagroup or entity.gigagroup:
+                await event.reply(f'✅ ربات سلف الماس VIP MR در گروه نصب شد.')
+        except:
+            pass
+        return
+    
+    if text and text.strip() == 'موجودی':
+        user_id = event.sender_id
+        target_user_id = None
+        if event.is_reply:
+            reply_message = await event.get_reply_message()
+            if reply_message and reply_message.sender_id:
+                target_user_id = reply_message.sender_id
+        if target_user_id is None:
+            target_user_id = user_id
+        db = get_user_db(target_user_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (target_user_id,))
+        result = cursor.fetchone()
+        balance = result[0] if result else 0
+        db.close()
+        message = f"🎖️ **موجودی الماس VIP MR**"
+        buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{target_user_id}')]]
+        if os.path.exists(BOT_IMAGE_PATH):
+            await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=message, buttons=buttons, parse_mode='md', reply_to=event.id)
+        else:
+            await event.reply(message, buttons=buttons, parse_mode='md')
+        return
+    
+    game_match = re.match(r'بازی\s+(\d+)$', text.strip(), re.IGNORECASE)
+    if game_match:
+        organizer_id = event.sender_id
+        amount = int(game_match.group(1))
+        if amount < 20:
+            await event.reply('❌ مبلغ نبرد باید حداقل 20 الماس باشد.')
+            return
+        init_user_db(organizer_id)
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (organizer_id,))
+        result = cursor.fetchone()
+        organizer_balance = result[0] if result else 0
+        db.close()
+        if organizer_balance < amount:
+            await event.reply(f'❌ موجودی الماس شما ({organizer_balance:,}) برای شروع نبرد با مبلغ {amount:,} کافی نیست.')
+            return
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, organizer_id))
+        db.commit()
+        db.close()
+        organizer_mention = f"[{event.sender.first_name}](tg://user?id={organizer_id})"
+        game_text = f"⚔️ **نبرد الماس VIP MR**\n\n👤 **برگزار کننده :** {organizer_mention}\n💰 **مبلغ نبرد :** {amount:,} الماس\n🏆 **جایزه کل :** {amount * 2:,} الماس\n\n📌 جهت پیوستن به نبرد الماس لطفا روی دکمه زیر کلیک کنید."
+        buttons = [[Button.inline('⚔️ پیوستن به نبرد', f'game_join_{amount}_{organizer_id}'.encode())], [Button.inline('❌ لغو نبرد', f'game_cancel_{amount}_{organizer_id}'.encode())]]
+        if os.path.exists(BOT_IMAGE_PATH):
+            sent_message = await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=game_text, buttons=buttons, parse_mode='md', reply_to=event.id)
+        else:
+            sent_message = await event.reply(game_text, buttons=buttons, parse_mode='md')
+        game_key = (chat_id, sent_message.id)
+        timer_task = asyncio.create_task(delete_game_on_timeout(chat_id, sent_message.id, organizer_id, amount))
+        active_games[game_key] = {'organizer_id': organizer_id, 'amount': amount, 'timer': timer_task}
+        return
+    
+    transfer_match = re.match(r'انتقال\s+الماس\s+(\d+)$', text.strip(), re.IGNORECASE)
+    if transfer_match:
+        amount = int(transfer_match.group(1))
+        sender_id = event.sender_id
+        if not event.is_reply:
+            await event.reply('❌ لطفاً روی پیام کاربر مورد نظر ریپلی کنید و سپس دستور انتقال را وارد کنید.')
+            return
+        reply_message = await event.get_reply_message()
+        if not reply_message or not reply_message.sender_id:
+            await event.reply('❌ کاربر مورد نظر پیدا نشد.')
+            return
+        receiver_id = reply_message.sender_id
+        if sender_id == receiver_id:
+            await event.reply('❌ نمی‌توانید به خودتان الماس انتقال دهید.')
+            return
+        if amount < 10:
+            await event.reply('❌ حداقل مبلغ انتقال ۱۰ الماس است.')
+            return
+        init_user_db(sender_id)
+        db = get_user_db(sender_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (sender_id,))
+        result = cursor.fetchone()
+        sender_balance = result[0] if result else 0
+        db.close()
+        tax = int(amount * 0.1)
+        if tax < 1:
+            tax = 1
+        total_deduct = amount + tax
+        if sender_balance < total_deduct:
+            await event.reply(f'❌ موجودی شما کافی نیست.\n\n💎 موجودی: {sender_balance:,}\n💎 مبلغ انتقال: {amount:,}\n🧾 مالیات: {tax:,}\n📉 مجموع کسر: {total_deduct:,}')
+            return
+        db = get_user_db(sender_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (total_deduct, sender_id))
+        db.commit()
+        db.close()
+        init_user_db(receiver_id)
+        db = get_user_db(receiver_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, receiver_id))
+        db.commit()
+        db.close()
+        db = get_user_db(sender_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (sender_id,))
+        new_sender_balance = cursor.fetchone()[0]
+        db.close()
+        db = get_user_db(receiver_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (receiver_id,))
+        new_receiver_balance = cursor.fetchone()[0]
+        db.close()
+        transfer_message = f"✅ **انتقال الماس VIP MR انجام شد.**\n\n👤 **از:** `{sender_id}`\n👥 **به:** `{receiver_id}`\n💎 **مبلغ انتقال (خالص):** {amount:,}\n🧾 **مالیات (۱۰%):** {tax:,}\n📉 **مجموع کسر از فرستنده:** {total_deduct:,}\n✨ **موجودی جدید فرستنده:** {new_sender_balance:,}\n✨ **موجودی جدید گیرنده:** {new_receiver_balance:,}"
+        await event.reply(transfer_message, parse_mode='md')
+        return
+
+async def handle_callbacks(event):
+    if telethon_bot is None:
+        return
+    data = event.data.decode()
+    
+    if data.startswith("balance_show_"):
+        user_id = int(data.split("_")[2])
+        db = get_user_db(user_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        balance = result[0] if result else 0
+        db.close()
+        message = f"🎖️ **موجودی الماس VIP MR**"
+        buttons = [[Button.inline(f'💎 {balance:,}', f'balance_show_{user_id}')]]
+        await safe_edit(event, message, buttons=buttons, parse_mode='md')
+        await event.answer("✅ موجودی به‌روز شد")
+        return
+    
+    if data.startswith("game_join_"):
+        parts = data.split("_")
+        amount = int(parts[2])
+        organizer_id = int(parts[3])
+        joiner_id = event.sender_id
+        if joiner_id == organizer_id:
+            await event.answer("❌ شما برگزار کننده هستید!", alert=True)
+            return
+        init_user_db(joiner_id)
+        db = get_user_db(joiner_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (joiner_id,))
+        result = cursor.fetchone()
+        joiner_balance = result[0] if result else 0
+        db.close()
+        if joiner_balance < amount:
+            await event.answer(f"❌ موجودی شما کافی نیست! ({joiner_balance:,})", alert=True)
+            return
+        db = get_user_db(joiner_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, joiner_id))
+        db.commit()
+        db.close()
+        total_prize = amount * 2
+        tax = int(total_prize * 0.05)
+        prize = total_prize - tax
+        winner_id = random.choice([organizer_id, joiner_id])
+        loser_id = organizer_id if winner_id == joiner_id else joiner_id
+        db = get_user_db(winner_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (prize, winner_id))
+        db.commit()
+        db.close()
+        winner_name = await get_user_display(winner_id)
+        loser_name = await get_user_display(loser_id)
+        result_text = f"◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈\n𝐕𝐈𝐏 | نتیجه بازی :\n𝐕𝐈𝐏 | برنده : {winner_name}\n𝐕𝐈𝐏 | بازنده : {loser_name}\n𝐕𝐈𝐏 | جایزه: {prize:,} الماس\n𝐕𝐈𝐏 | مالیات: {tax:,} الماس\n◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈"
+        try:
+            await telethon_bot.delete_messages(event.chat_id, event.message_id)
+        except:
+            pass
+        if os.path.exists(BOT_IMAGE_PATH):
+            await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=result_text, parse_mode='md')
+        else:
+            await telethon_bot.send_message(event.chat_id, result_text, parse_mode='md')
+        await event.answer("✅ بازی به پایان رسید!")
+        game_key = (event.chat_id, event.message_id)
+        if game_key in active_games:
+            active_games[game_key]['timer'].cancel()
+            del active_games[game_key]
+        return
+    
+    if data.startswith("game_cancel_"):
+        parts = data.split("_")
+        amount = int(parts[2])
+        organizer_id = int(parts[3])
+        user_id = event.sender_id
+        if user_id != organizer_id:
+            await event.answer("❌ فقط برگزار کننده می‌تواند نبرد را لغو کند!", alert=True)
+            return
+        game_key = (event.chat_id, event.message_id)
+        if game_key in active_games:
+            active_games[game_key]['timer'].cancel()
+            db = get_user_db(organizer_id)
             cursor = db.cursor()
-            cursor.execute('SELECT balance FROM users WHERE user_id = ?', (joiner_id,))
-            result = cursor.fetchone()
-            joiner_balance = result[0] if result else 0
-            db.close()
-            if joiner_balance < amount:
-                await event.answer(f"❌ موجودی شما کافی نیست! ({joiner_balance:,})", alert=True)
-                return
-            db = get_user_db(joiner_id)
-            cursor = db.cursor()
-            cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, joiner_id))
+            cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
             db.commit()
             db.close()
-            total_prize = amount * 2
-            tax = int(total_prize * 0.05)
-            prize = total_prize - tax
-            winner_id = random.choice([organizer_id, joiner_id])
-            loser_id = organizer_id if winner_id == joiner_id else joiner_id
-            db = get_user_db(winner_id)
-            cursor = db.cursor()
-            cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (prize, winner_id))
-            db.commit()
-            db.close()
-            winner_name = await get_user_display(winner_id)
-            loser_name = await get_user_display(loser_id)
-            result_text = f"◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈\n𝐕𝐈𝐏 | نتیجه بازی :\n𝐕𝐈𝐏 | برنده : {winner_name}\n𝐕𝐈𝐏 | بازنده : {loser_name}\n𝐕𝐈𝐏 | جایزه: {prize:,} الماس\n𝐕𝐈𝐏 | مالیات: {tax:,} الماس\n◈ ━━━ 𝐕𝐈𝐏 𝐌𝐑 ━━━ ◈"
             try:
                 await telethon_bot.delete_messages(event.chat_id, event.message_id)
+                await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس VIP MR با تعداد {amount:,} الماس لغو شد.')
             except:
                 pass
-            if os.path.exists(BOT_IMAGE_PATH):
-                await telethon_bot.send_file(event.chat_id, BOT_IMAGE_PATH, caption=result_text, parse_mode='md')
-            else:
-                await telethon_bot.send_message(event.chat_id, result_text, parse_mode='md')
-            await event.answer("✅ بازی به پایان رسید!")
-            game_key = (event.chat_id, event.message_id)
-            if game_key in active_games:
-                active_games[game_key]['timer'].cancel()
-                del active_games[game_key]
-            return
-        
-        if data.startswith("game_cancel_"):
-            parts = data.split("_")
-            amount = int(parts[2])
-            organizer_id = int(parts[3])
-            user_id = event.sender_id
-            if user_id != organizer_id:
-                await event.answer("❌ فقط برگزار کننده می‌تواند نبرد را لغو کند!", alert=True)
-                return
-            game_key = (event.chat_id, event.message_id)
-            if game_key in active_games:
-                active_games[game_key]['timer'].cancel()
-                db = get_user_db(organizer_id)
-                cursor = db.cursor()
-                cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
-                db.commit()
-                db.close()
-                try:
-                    await telethon_bot.delete_messages(event.chat_id, event.message_id)
-                    await telethon_bot.send_message(organizer_id, f'❌ نبرد الماس VIP MR با تعداد {amount:,} الماس لغو شد.')
-                except:
-                    pass
-                del active_games[game_key]
-                await event.answer("✅ نبرد لغو شد!")
-            else:
-                await event.answer("❌ این نبرد قبلاً به پایان رسیده یا لغو شده است!", alert=True)
-            return
-        
-        # ====== دکمه‌های منو ======
-        if data == b'buy_self':
-            await handle_buy_self(event)
-        elif data == b'user_account':
-            await handle_user_account(event)
-        elif data == b'manage_self':
-            await handle_manage_self(event)
-        elif data == b'disable_self':
-            await handle_disable_self(event)
-        elif data == b'back':
-            await handle_back(event)
-        elif data == b'referral_system':
-            await handle_referral_system(event)
-        elif data == b'buy_balance_menu':
-            await handle_buy_balance_menu(event)
-        elif data == b'clear_amount':
-            await handle_clear_amount(event)
-        elif data == b'confirm_amount':
-            await handle_confirm_amount(event)
-        elif data == b'proceed_payment':
-            await handle_proceed_payment(event)
-        elif data == b'cancel_payment':
-            await handle_cancel_payment(event)
-        elif data == b'admin_panel':
-            await handle_admin_panel(event)
-        elif data == b'add_balance':
-            await handle_add_balance(event)
-        elif data == b'ban_user_admin':
-            await handle_ban_user_admin(event)
-        elif data.startswith("num_"):
-            await handle_number_input(event)
+            del active_games[game_key]
+            await event.answer("✅ نبرد لغو شد!")
+        else:
+            await event.answer("❌ این نبرد قبلاً به پایان رسیده یا لغو شده است!", alert=True)
+        return
+
 # =============================================
-# منوی سلف VIP MR (کامل)
+# دکمه‌های منو (Telethon)
 # =============================================
-@telethon_bot.on(events.CallbackQuery(data=b'buy_self'))
-async def buy_self(event):
+async def handle_buy_self(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1107,8 +1298,7 @@ async def buy_self(event):
     await safe_edit(event, f'📱 لطفاً شماره اکانت خود را برای فعال‌سازی سلف VIP MR ارسال نمایید (با + شروع شود):\n\n💎 هزینه فعال‌سازی: {SELF_PRICE:,} الماس')
     user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
 
-@telethon_bot.on(events.CallbackQuery(data=b'user_account'))
-async def user_account(event):
+async def handle_user_account(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1116,8 +1306,7 @@ async def user_account(event):
     buttons = [[Button.inline('💳 خرید موجودی', b'buy_balance_menu')], [Button.inline('🔙 برگشت', b'back')]]
     await safe_edit(event, account_text, buttons=buttons, parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(data=b'manage_self'))
-async def manage_self(event):
+async def handle_manage_self(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1131,8 +1320,7 @@ async def manage_self(event):
     ]
     await safe_edit(event, "⚙️ **مدیریت سلف VIP MR**\n\nسلف شما فعال است.", buttons=buttons, parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(data=b'disable_self'))
-async def disable_self(event):
+async def handle_disable_self(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1141,13 +1329,11 @@ async def disable_self(event):
     await safe_edit(event, '✅ سلف VIP MR با موفقیت خاموش شد.')
     await event.answer('✅ سلف VIP MR خاموش شد.')
 
-@telethon_bot.on(events.CallbackQuery(data=b'back'))
-async def back(event):
+async def handle_back(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
     
-    # ====== منوی کامل سلف ======
     buttons = [
         [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
         [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
@@ -1161,8 +1347,7 @@ async def back(event):
     else:
         await safe_edit(event, 'به سلف ساز VIP MR خوش آمدید', buttons=buttons)
 
-@telethon_bot.on(events.CallbackQuery(data=b'referral_system'))
-async def referral_system(event):
+async def handle_referral_system(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1177,8 +1362,7 @@ async def referral_system(event):
     buttons = [[Button.inline('🔙 برگشت', b'back')]]
     await safe_edit(event, referral_text, buttons=buttons, parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(data=b'buy_balance_menu'))
-async def buy_balance_menu(event):
+async def handle_buy_balance_menu(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1202,8 +1386,7 @@ async def buy_balance_menu(event):
     display_text = f"💳 **خرید موجودی VIP MR**\n\nتعداد الماس: {black_amount:,}\nمبلغ: {amount:,} تومان\n\nلطفاً تعداد الماس مورد نظر را انتخاب کنید:"
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(pattern=b'num_(.+)$'))
-async def number_input(event):
+async def handle_number_input(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1246,8 +1429,7 @@ async def number_input(event):
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
     await event.answer()
 
-@telethon_bot.on(events.CallbackQuery(data=b'clear_amount'))
-async def clear_amount(event):
+async def handle_clear_amount(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1264,8 +1446,7 @@ async def clear_amount(event):
     await safe_edit(event, display_text, buttons=buttons, parse_mode='md')
     await event.answer()
 
-@telethon_bot.on(events.CallbackQuery(data=b'confirm_amount'))
-async def confirm_amount(event):
+async def handle_confirm_amount(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1288,8 +1469,7 @@ async def confirm_amount(event):
     await safe_edit(event, invoice_text, buttons=buttons, parse_mode='md')
     await event.answer()
 
-@telethon_bot.on(events.CallbackQuery(data=b'proceed_payment'))
-async def proceed_payment(event):
+async def handle_proceed_payment(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1306,8 +1486,7 @@ async def proceed_payment(event):
     if user_id in user_purchase_amount and not isinstance(user_purchase_amount[user_id], str):
         del user_purchase_amount[user_id]
 
-@telethon_bot.on(events.CallbackQuery(data=b'cancel_payment'))
-async def cancel_payment(event):
+async def handle_cancel_payment(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1320,8 +1499,7 @@ async def cancel_payment(event):
 # =============================================
 # پنل مدیریت ادمین (Telethon)
 # =============================================
-@telethon_bot.on(events.CallbackQuery(data=b'admin_panel'))
-async def admin_panel_handler(event):
+async def handle_admin_panel(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1336,8 +1514,7 @@ async def admin_panel_handler(event):
     ]
     await safe_edit(event, '🛠 **پنل مدیریت VIP MR**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:', buttons=buttons, parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(data=b'add_balance'))
-async def add_balance_admin(event):
+async def handle_add_balance(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1345,12 +1522,10 @@ async def add_balance_admin(event):
         await event.answer('❌ شما دسترسی ندارید!', alert=True)
         return
     
-    # ====== تنظیم مرحله برای دریافت آیدی ======
     user_clients[user_id] = {'step': 'add_balance_user'}
     await safe_edit(event, '➕ **اضافه کردن الماس VIP MR**\n\nلطفاً آیدی عددی کاربر مورد نظر را وارد کنید:', parse_mode='md')
 
-@telethon_bot.on(events.CallbackQuery(data=b'ban_user_admin'))
-async def ban_user_admin(event):
+async def handle_ban_user_admin(event):
     if telethon_bot is None:
         return
     user_id = event.sender_id
@@ -1376,7 +1551,6 @@ async def handle_private_messages(event):
         return
     event._private_processed = True
     
-    # ====== /start ======
     if text == "/start":
         init_user_db(user_id)
         db = get_user_db(user_id)
@@ -1417,7 +1591,6 @@ async def handle_private_messages(event):
         user_clients[user_id] = {'step': 'phone', 'sub_type': 0}
         return
     
-    # ====== مرحله 1: دریافت شماره ======
     if user_id in user_clients and user_clients[user_id].get('step') == 'phone':
         phone = text.strip()
         if not phone.startswith('+'):
@@ -1479,7 +1652,6 @@ async def handle_private_messages(event):
                 del user_clients[user_id]
         return
     
-    # ====== مرحله 2: دریافت کد ======
     if user_id in LOGIN_STATES and LOGIN_STATES[user_id].get('step') == 'code':
         state = LOGIN_STATES[user_id]
         client = state['client']
@@ -1593,7 +1765,6 @@ async def handle_private_messages(event):
                 await event.reply(f'❌ خطا: {error_msg}')
         return
     
-    # ====== مرحله 3: رمز دو مرحله‌ای ======
     if user_id in LOGIN_STATES and LOGIN_STATES[user_id].get('step') == 'password':
         state = LOGIN_STATES[user_id]
         client = state['client']
@@ -1667,7 +1838,6 @@ async def handle_private_messages(event):
                     del user_clients[user_id]
                     return
                 
-                # ====== اضافه کردن الماس ======
                 init_user_db(target_id)
                 db = get_user_db(target_id)
                 cursor = db.cursor()
@@ -1680,10 +1850,8 @@ async def handle_private_messages(event):
                 
                 await event.reply(f'✅ {amount:,} الماس با موفقیت به کاربر {target_id} اضافه شد.\n\n💎 موجودی جدید: {new_balance:,} الماس')
                 
-                # ====== پاک کردن حالت ادمین ======
                 del user_clients[user_id]
                 
-                # ====== نمایش منوی اصلی ======
                 buttons = [
                     [Button.inline('💎 خرید سلف VIP MR', b'buy_self')],
                     [Button.inline('👤 حساب کاربری', b'user_account'), Button.inline('⚙️ مدیریت سلف VIP MR', b'manage_self')],
@@ -1742,18 +1910,15 @@ async def handle_private_messages(event):
 async def main():
     global telethon_bot
     
-    # شروع Pyrogram Bots
     for phone, session_data in data_manager.get_all_sessions():
         session_string = session_data["string"]
         user_id = session_data["user_id"]
         asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
         await asyncio.sleep(0.5)
     
-    # شروع Manager Bot
     await manager_bot.start()
     logger.info("✅ Manager bot started")
     
-    # شروع Telethon Bot
     await start_telethon_bot_safe()
     
     try:

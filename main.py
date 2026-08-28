@@ -1,27 +1,39 @@
 import subprocess
 import sys
-
-# نصب خودکار telethon
-try:
-import telethon
-    print("✅ telethon already installed")
-except ImportError:
-    print("📦 Installing telethon...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon==1.34.0"])
-    print("✅ telethon installed successfully")
-import telethon
-import asyncio
 import os
+
+# ====== نصب خودکار telethon در زمان اجرا ======
+def install_telethon():
+    try:
+        import telethon
+        print("✅ telethon already installed")
+        return True
+    except ImportError:
+        print("📦 Installing telethon...")
+        try:
+            # نصب با pip
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon==1.34.0", "--no-cache-dir"])
+            print("✅ telethon installed successfully")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to install telethon: {e}")
+            return False
+
+# نصب قبل از هر چیزی
+if not install_telethon():
+    print("❌ Cannot continue without telethon")
+    sys.exit(1)
+
+# حالا می‌توانیم import کنیم
+import asyncio
 import sqlite3
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError, UserNotParticipantError, PeerIdInvalidError, RPCError
-import subprocess
 import re
 import random
 import time
 import glob
-import sys
 import json
 from datetime import datetime, timedelta
 import locale
@@ -34,18 +46,21 @@ except:
     except:
         pass
 
+# ====== تنظیمات ربات ======
 API_ID = 34996139
 API_HASH = 'a1f3db16cae2919cfb05e61d1e968b8d'
 BOT_TOKEN = '8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg'
 
 # ====== لیست ادمین‌ها ======
-ADMINS = [6691993264, 7831049189] 
+ADMINS = [6691993264, 7831049189]  # اصلاح شد
+
 GROUP_INSTALL_TARGET_ID = 7831049189
 SELF_PRICE = 1440
 
 active_games = {}
 BOT_IMAGE_PATH = '1782502761872.jpg'
 
+# ====== بقیه کد شما ======
 if not os.path.exists('database_users'):
     os.makedirs('database_users')
 
@@ -286,6 +301,7 @@ async def handle_login_success(user_id, sub_type):
     if user_id in user_clients:
         del user_clients[user_id]
 
+# ====== بقیه هندلرها ======
 @bot.on(events.NewMessage)
 async def handle_all_messages(event):
     if event.is_private:

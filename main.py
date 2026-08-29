@@ -1558,7 +1558,7 @@ class TelegramAuthBot:
 if __name__ == "__main__":
    BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
    API_ID = 34996139   # بدون فاصله در ابتدای خط
-    API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
+   API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
     
     bot = TelegramAuthBot(BOT_TOKEN, API_ID, API_HASH)
     bot.run()

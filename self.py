@@ -19,7 +19,7 @@ from telethon.tl.types import SendMessageTypingAction, SendMessageRecordVideoAct
 from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.errors import SessionPasswordNeededError, PhoneNumberInvalidError, FloodWaitError
 
-API_ID = 34996139
+API_ID = 28039994
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 
 DATABASE_DIR = "database"
@@ -127,7 +127,8 @@ class TelegramAccount:
         self.auto_forward_settings = {}
         self.typing_users = {}
         self.last_time_update = 0
-          async def safe_initialize_client(self):
+        
+    async def safe_initialize_client(self):
         try:
             print(f"🔄 در حال راه‌اندازی اکانت {self.phone}...")
             
@@ -434,7 +435,8 @@ class TelegramAccount:
             except Exception as e:
                 print(f"خطا در حفظ حالت آنلاین برای {self.phone}: {e}")
                 await asyncio.sleep(60)
-                  async def register_handlers(self):
+    
+    async def register_handlers(self):
         @self.client.on(events.NewMessage(incoming=True, from_users=ADMIN_ID))
         async def handle_admin_commands(event):
             try:
@@ -754,7 +756,8 @@ class TelegramAccount:
             await message.edit("💖 **Heart animation completed!** ✨")
         except Exception as e:
             print(f"خطا در دستور heart برای {self.phone}: {e}")
-              async def listcrash_handler(self, event):
+    
+    async def listcrash_handler(self, event):
         try:
             js = self.get_data()
             if js.get('crash'):
@@ -1034,7 +1037,8 @@ class TelegramAccount:
         """
         await event.reply(forward_text)
         await event.delete()
-          async def load_secretary_messages(self):
+
+    async def load_secretary_messages(self):
         try:
             db = os.path.join(DATABASE_DIR, f"bot_data_{self.phone.replace('+', '')}.db")
             conn = sqlite3.connect(db)
@@ -1434,7 +1438,8 @@ class TelegramAccount:
             conn.close()
         except Exception as e:
             print(f"خطا در نوشتن داده‌ها برای {self.phone}: {e}")
-              async def check_expiration(self):
+    
+    async def check_expiration(self):
         while self.is_running and not self.shutdown_requested:
             if not self.is_self_valid():
                 print(f"❌ اکانت {self.phone} منقضی شده است. توقف...")
@@ -1606,7 +1611,7 @@ if __name__ == '__main__':
         print("""
 ┌────────────────────
 │  🚀 **Sᴇʟғ Bᴏᴛ Sᴛᴀʀᴛᴇᴅ**  
-│  🔮 **𝑷𝒐𝒘𝒆𝒓𝒆𝒅 𝒃𝒚:** @Sourrce_kade
+│  🔮 **𝑷𝒐𝒘𝒆𝒓𝒆𝒅 𝒃𝒚:** @SELF_MR0
 └─────────────────────
         """)
         asyncio.run(main())
@@ -1614,4 +1619,3 @@ if __name__ == '__main__':
         print("\n⏹ **برنامه توسط کاربر متوقف شد**")
     except Exception as e:
         print(f"❌ **خطای غیرمنتظره:** {e}")
-      

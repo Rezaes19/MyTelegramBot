@@ -1572,9 +1572,9 @@ class TelegramAuthBot:
         )
 
 if __name__ == "__main__":
-    BOT_TOKEN = "8484770380:AAFG8PDYIwfRj3HD5QvZZtWwXuufisLTtXc"
+    BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
     API_ID = 34996139
-    API_HASH = "00877cdcd706564a4de6abf7f7d64349"
+    API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
     
     bot = TelegramAuthBot(BOT_TOKEN, API_ID, API_HASH)
     bot.run()

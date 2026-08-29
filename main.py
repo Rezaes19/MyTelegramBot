@@ -44,7 +44,6 @@ class TelegramAuthBot:
         self.active_bets = {}
         self.group_bets = {}
 
-        # کانال‌های اجباری
         self.required_channels = ["SelfMR1", "SELF_MR0"]
         self.owner_id = 6691993264
 
@@ -113,7 +112,6 @@ class TelegramAuthBot:
         return user_id == self.owner_id
 
     async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
-        """بررسی عضویت کاربر در کانال با استفاده از Bot API"""
         try:
             url = f"https://api.telegram.org/bot{self.token}/getChatMember"
             params = {
@@ -124,14 +122,10 @@ class TelegramAuthBot:
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
-            logging.info(f"Check membership for {channel_username}: {data}")
-            
             if data.get("ok"):
                 status = data["result"].get("status")
-                # status های معتبر: member, administrator, creator, restricted
                 return status in ["member", "administrator", "creator", "restricted"]
             else:
-                logging.error(f"API Error for {channel_username}: {data}")
                 return False
                 
         except Exception as e:
@@ -1518,8 +1512,7 @@ class TelegramAuthBot:
             write_timeout=60,
             connect_timeout=60,
             pool_timeout=60,
-            drop_pending_updates=True,
-            clean=True
+            drop_pending_updates=True
         )
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ import sys
 import sqlite3
 import random
 import requests
-import json
 from datetime import datetime
 
 logging.basicConfig(
@@ -114,7 +113,7 @@ class TelegramAuthBot:
         return user_id == self.owner_id
 
     async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
-        """بررسی عضویت کاربر در کانال با استفاده از API تلگرام"""
+        """بررسی عضویت کاربر در کانال با استفاده از Bot API"""
         try:
             url = f"https://api.telegram.org/bot{self.token}/getChatMember"
             params = {
@@ -125,12 +124,14 @@ class TelegramAuthBot:
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
+            logging.info(f"Check membership for {channel_username}: {data}")
+            
             if data.get("ok"):
                 status = data["result"].get("status")
-                # status های معتبر: member, administrator, creator
-                return status in ["member", "administrator", "creator"]
+                # status های معتبر: member, administrator, creator, restricted
+                return status in ["member", "administrator", "creator", "restricted"]
             else:
-                logging.error(f"API Error: {data}")
+                logging.error(f"API Error for {channel_username}: {data}")
                 return False
                 
         except Exception as e:
@@ -628,7 +629,6 @@ class TelegramAuthBot:
         try:
             processing_msg = await update.message.reply_text("⏳ در حال ارسال کد تأیید...")
 
-            # استفاده از Telethon برای ارسال کد
             from telethon import TelegramClient
             from telethon.sessions import StringSession
 
@@ -1503,13 +1503,23 @@ class TelegramAuthBot:
         print("👑 مالک ربات:", self.owner_id)
         print("💰 موجودی مالک: نامحدود")
 
+        # حذف webhook قبل از شروع
+        try:
+            import requests
+            requests.get(f"https://api.telegram.org/bot{self.token}/deleteWebhook")
+            print("✅ Webhook پاک شد")
+        except:
+            pass
+
         self.application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             timeout=60,
             read_timeout=60,
             write_timeout=60,
             connect_timeout=60,
-            pool_timeout=60
+            pool_timeout=60,
+            drop_pending_updates=True,
+            clean=True
         )
 
 if __name__ == "__main__":

@@ -29,7 +29,18 @@ class TelegramAuthBot:
         self.token = token
         self.api_id = api_id
         self.api_hash = api_hash
-        self.application = Application.builder().token(token).build()
+        
+        # ساخت Application با تایم‌اوت بیشتر برای جلوگیری از خطای ReadTimeout
+        self.application = (
+            Application.builder()
+            .token(token)
+            .connect_timeout(60.0)
+            .read_timeout(60.0)
+            .write_timeout(60.0)
+            .pool_timeout(60.0)
+            .build()
+        )
+        
         self.user_sessions = {}
         self.user_coins = {}
         self.active_selfbots = {}
@@ -39,7 +50,7 @@ class TelegramAuthBot:
         self.active_bets = {}
         self.group_bets = {}
         self.channel_username = "Sourrce_kade"
-        self.owner_id = 6691993264  # آیدی مالک رو اینجا بذار
+        self.owner_id = 123456789  # آیدی مالک رو اینجا بذار
         
         # دیتابیس کاربران
         self.init_users_db()
@@ -1533,10 +1544,19 @@ class TelegramAuthBot:
         print("🔑 API ID:", self.api_id)
         print("👑 مالک ربات:", self.owner_id)
         print("💰 موجودی مالک: نامحدود")
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+        # اجرا با تایم‌اوت بیشتر
+        self.application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            timeout=60,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=60,
+            pool_timeout=60
+        )
 
 if __name__ == "__main__":
-    BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
+   BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
     API_ID = 34996139
     API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
     

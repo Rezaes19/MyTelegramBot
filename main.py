@@ -272,199 +272,100 @@ class TelegramAuthBot:
         ]
         return InlineKeyboardMarkup(keyboard)
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.message.from_user.id
-        
-        if self.is_owner(user_id):
-            self.user_coins[user_id] = 999999999
-        
-        # بررسی لینک دعوت
-        if context.args and len(context.args) > 0:
-            invite_code = context.args[0]
-            if invite_code in self.invite_links:
-                referrer_id = self.invite_links[invite_code]
-                
-                if referrer_id not in self.user_coins:
-                    self.user_coins[referrer_id] = 0
-                self.user_coins[referrer_id] += 7
-                
-                if referrer_id not in self.user_referrals:
-                    self.user_referrals[referrer_id] = []
-                self.user_referrals[referrer_id].append(user_id)
-                
-                try:
-                    await context.bot.send_message(
-                        chat_id=referrer_id,
-                        text=f"🎉 کاربر جدیدی با لینک دعوت شما وارد ربات شد!\n💰 7 سکه به عنوان پاداش دریافت کردید!"
-                    )
-                except:
-                    pass
-        
-        # هدیه اولیه برای کاربران جدید
-        if user_id not in self.user_first_start and not self.is_owner(user_id):
-            self.user_first_start[user_id] = True
-            if user_id not in self.user_coins:
-                self.user_coins[user_id] = 3
-                await update.message.reply_text(
-                    "🎁 **هدیه ویژه!**\n\n"
-                    "به شما 3 سکه رایگان هدیه داده شد!\n"
-                    "💰 موجودی فعلی: 3 سکه"
+ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    if self.is_owner(user_id):
+        self.user_coins[user_id] = 999999999
+    
+    # بررسی لینک دعوت
+    if context.args and len(context.args) > 0:
+        invite_code = context.args[0]
+        if invite_code in self.invite_links:
+            referrer_id = self.invite_links[invite_code]
+            
+            if referrer_id not in self.user_coins:
+                self.user_coins[referrer_id] = 0
+            self.user_coins[referrer_id] += 7
+            
+            if referrer_id not in self.user_referrals:
+                self.user_referrals[referrer_id] = []
+            self.user_referrals[referrer_id].append(user_id)
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=referrer_id,
+                    text="🎉 کاربر جدیدی با لینک دعوت شما وارد ربات شد!\n💰 7 سکه به عنوان پاداش دریافت کردید!"
                 )
-        
-        welcome_text = (
-            "🔰 **به ربات خوش آمدید!**\n\n"
-            "برای استفاده از ربات باید در کانال‌های زیر عضو شوید:\n"
-            "📌 @SelfMR1\n"
-            "📌 @SELF_MR0\n\n"
-            "پس از عضویت، روی دکمه ✅ بررسی عضویت کلیک کنید."
-        )
-        
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=self.create_welcome_keyboard(),
-            parse_mode='Markdown'
+            except:
+                pass
+    
+    # هدیه اولیه برای کاربران جدید
+    if user_id not in self.user_first_start and not self.is_owner(user_id):
+        self.user_first_start[user_id] = True
+        if user_id not in self.user_coins:
+            self.user_coins[user_id] = 3
+            await update.message.reply_text(
+                "🎁 **هدیه ویژه!**\n\n"
+                "به شما 3 سکه رایگان هدیه داده شد!\n"
+                "💰 موجودی فعلی: 3 سکه"
+            )
+    
+    welcome_text = (
+        "🔰 به ربات خوش آمدید!\n\n"
+        "برای استفاده از ربات باید در کانال های زیر عضو شوید:\n"
+        "@SelfMR1\n"
+        "@SELF_MR0\n\n"
+        "پس از عضویت، روی دکمه ✅ بررسی عضویت کلیک کنید."
+    )
+    
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=self.create_welcome_keyboard()
+    )
+    return CHECK_MEMBERSHIP
+    
+    async def check_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "join" or query.data == "join2":
+        await query.edit_message_text(
+            "📥 در حال انتقال به کانال...\n\n"
+            "پس از پیوستن به هر دو کانال، روی دکمه '✅ بررسی عضویت' کلیک کنید.",
+            reply_markup=self.create_welcome_keyboard()
         )
         return CHECK_MEMBERSHIP
     
-    async def check_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        
-        if query.data == "join" or query.data == "join2":
-            await query.edit_message_text(
-                "📥 در حال انتقال به کانال...\n\n"
-                "پس از پیوستن به هر دو کانال، روی دکمه '✅ بررسی عضویت' کلیک کنید.",
-                reply_markup=self.create_welcome_keyboard()
-            )
-            return CHECK_MEMBERSHIP
-        
-        await query.edit_message_text("🔍 در حال بررسی عضویت شما...")
-        
-        try:
-            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
-            await client.start(bot_token=self.token)
-            
-            all_members = True
-            not_member_channels = []
-            
-            for channel_username in self.required_channels:
-                try:
-                    channel = await client.get_entity(channel_username)
-                    await client(GetParticipantRequest(channel=channel, participant=user_id))
-                except UserNotParticipantError:
-                    all_members = False
-                    not_member_channels.append(f"@{channel_username}")
-                except Exception as e:
-                    logging.error(f"Error checking channel {channel_username}: {e}")
-                    all_members = False
-                    not_member_channels.append(f"@{channel_username}")
-            
-            if all_members:
-                await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
-                
-                activation_text = (
-                    "💡 **پنل اصلی ربات**\n\n"
-                    "از دکمه‌های زیر برای استفاده از ربات استفاده کنید:\n"
-                    "🚀 فعال سازی سلف\n"
-                    "💰 خرید سکه\n"
-                    "📊 آمار و موجودی\n"
-                    "🎫 لینک دعوت"
-                )
-                
-                await query.edit_message_text(
-                    text=activation_text,
-                    reply_markup=self.create_activation_keyboard()
-                )
-                
-                await client.disconnect()
-                return ACTIVATION_PANEL
-            else:
-                channels_text = "\n".join(not_member_channels)
-                await query.edit_message_text(
-                    f"❌ شما هنوز در همه کانال‌ها عضو نشده‌اید!\n\n"
-                    f"کانال‌های مورد نیاز:\n{channels_text}\n\n"
-                    f"لطفاً ابتدا به همه کانال‌ها بپیوندید سپس روی '✅ بررسی عضویت' کلیک کنید.",
-                    reply_markup=self.create_welcome_keyboard()
-                )
-                await client.disconnect()
-                return CHECK_MEMBERSHIP
-                
-        except Exception as e:
-            logging.error(f"Error checking membership: {e}")
-            await query.edit_message_text(
-                "❌ خطا در بررسی عضویت!\n\n"
-                "لطفاً دوباره تلاش کنید.",
-                reply_markup=self.create_welcome_keyboard()
-            )
-            return CHECK_MEMBERSHIP
+    await query.edit_message_text("🔍 در حال بررسی عضویت شما...")
     
-    async def activation_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
+    try:
+        client = TelegramClient(StringSession(), self.api_id, self.api_hash)
+        await client.start(bot_token=self.token)
         
-        user_id = query.from_user.id
+        all_members = True
+        not_member_channels = []
         
-        if query.data == "activate":
-            user_coins = self.user_coins.get(user_id, 0)
-            if user_coins < 3:
-                await query.edit_message_text(
-                    f"❌ موجودی سکه شما کافی نیست!\n\n"
-                    f"💰 موجودی فعلی: {user_coins} سکه\n"
-                    f"💸 برای فعال‌سازی سلف به 3 سکه نیاز دارید.\n\n"
-                    f"لطفاً از بخش '💰 خرید سکه' اقدام به خرید نمایید.",
-                    reply_markup=self.create_activation_keyboard()
-                )
-                return ACTIVATION_PANEL
+        for channel_username in self.required_channels:
+            try:
+                channel = await client.get_entity(channel_username)
+                await client(GetParticipantRequest(channel=channel, participant=user_id))
+            except UserNotParticipantError:
+                all_members = False
+                not_member_channels.append(f"@{channel_username}")
+            except Exception as e:
+                logging.error(f"Error checking channel {channel_username}: {e}")
+                all_members = False
+                not_member_channels.append(f"@{channel_username}")
+        
+        if all_members:
+            await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
             
-            phone_text = (
-                "📱 لطفاً شماره تلفن خود را به صورت دستی ارسال کنید:\n\n"
-                "📝 فرمت پیشنهادی:\n"
-                "• +989123456789\n"
-                "• 09123456789\n\n"
-                "⚠️ شماره باید معتبر و قابل دریافت کد باشد."
-            )
-            
-            await query.edit_message_text(
-                phone_text,
-                reply_markup=self.create_phone_keyboard()
-            )
-            return GET_PHONE
-        
-        elif query.data == "buy_coins":
-            coin_text = (
-                "💌•••خرید سکه(کوین)•••💌\n\n"
-                "💰 هر عدد سکه: 200 تومن\n"
-                "‼️ 𝐂𝐨𝐢𝐧 ➜ تعداد سکه مورد نظر خود را وارد کنید\n\n"
-                "⌨️ از کیبورد زیر برای وارد کردن تعداد سکه استفاده کنید:"
-            )
-            
-            await query.edit_message_text(
-                coin_text,
-                reply_markup=self.create_coin_keyboard()
-            )
-            return COIN_PURCHASE
-        
-        elif query.data == "stats":
-            await self.show_stats_panel(query)
-            return ACTIVATION_PANEL
-        
-        elif query.data == "invite":
-            await self.show_invite_panel(query, context)
-            return ACTIVATION_PANEL
-        
-        elif query.data == "support":
-            await query.edit_message_text(
-                "🛟 در حال انتقال به پشتیبانی...",
-                reply_markup=self.create_activation_keyboard()
-            )
-            return ACTIVATION_PANEL
-        
-        elif query.data == "back":
             activation_text = (
-                "💡 **پنل اصلی ربات**\n\n"
-                "از دکمه‌های زیر برای استفاده از ربات استفاده کنید:\n"
+                "💡 پنل اصلی ربات\n\n"
+                "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
                 "🚀 فعال سازی سلف\n"
                 "💰 خرید سکه\n"
                 "📊 آمار و موجودی\n"
@@ -472,57 +373,153 @@ class TelegramAuthBot:
             )
             
             await query.edit_message_text(
-                activation_text,
+                text=activation_text,
+                reply_markup=self.create_activation_keyboard()
+            )
+            
+            await client.disconnect()
+            return ACTIVATION_PANEL
+        else:
+            channels_text = "\n".join(not_member_channels)
+            await query.edit_message_text(
+                f"❌ شما هنوز در همه کانال ها عضو نشده اید!\n\n"
+                f"کانال های مورد نیاز:\n{channels_text}\n\n"
+                f"لطفاً ابتدا به همه کانال ها بپیوندید سپس روی '✅ بررسی عضویت' کلیک کنید.",
+                reply_markup=self.create_welcome_keyboard()
+            )
+            await client.disconnect()
+            return CHECK_MEMBERSHIP
+            
+    except Exception as e:
+        logging.error(f"Error checking membership: {e}")
+        await query.edit_message_text(
+            "❌ خطا در بررسی عضویت!\n\n"
+            "لطفاً دوباره تلاش کنید.",
+            reply_markup=self.create_welcome_keyboard()
+        )
+        return CHECK_MEMBERSHIP
+    
+    async def activation_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "activate":
+        user_coins = self.user_coins.get(user_id, 0)
+        if user_coins < 3:
+            await query.edit_message_text(
+                f"❌ موجودی سکه شما کافی نیست!\n\n"
+                f"💰 موجودی فعلی: {user_coins} سکه\n"
+                f"💸 برای فعال سازی سلف به 3 سکه نیاز دارید.\n\n"
+                f"لطفاً از بخش '💰 خرید سکه' اقدام به خرید نمایید.",
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
-    
-    async def show_stats_panel(self, query):
-        user_id = query.from_user.id
-        user_coins = self.user_coins.get(user_id, 0)
-        total_value = user_coins * 200
-        referrals_count = len(self.user_referrals.get(user_id, []))
         
-        stats_text = (
-            f"📊 **آمار و موجودی شما**\n\n"
-            f"💰 **موجودی سکه:** {user_coins} سکه\n"
-            f"💎 **ارزش ریالی:** {total_value:,} تومن\n"
-            f"👥 **تعداد دعوت‌ها:** {referrals_count} نفر\n"
-            f"🎁 **سکه از دعوت:** {referrals_count * 7} سکه\n\n"
-            f"💡 **نکته:** به ازای هر دعوت موفق 7 سکه پاداش دریافت می‌کنید!"
+        phone_text = (
+            "📱 لطفاً شماره تلفن خود را به صورت دستی ارسال کنید:\n\n"
+            "📝 فرمت پیشنهادی:\n"
+            "+989123456789\n"
+            "09123456789\n\n"
+            "⚠️ شماره باید معتبر و قابل دریافت کد باشد."
         )
         
         await query.edit_message_text(
-            stats_text,
-            reply_markup=self.create_stats_keyboard()
+            phone_text,
+            reply_markup=self.create_phone_keyboard()
         )
+        return GET_PHONE
     
-    async def show_invite_panel(self, query, context: ContextTypes.DEFAULT_TYPE):
-        user_id = query.from_user.id
-        username = query.from_user.username or f"user_{user_id}"
-        
-        invite_code = secrets.token_urlsafe(8)
-        self.invite_links[invite_code] = user_id
-        
-        invite_link = f"https://t.me/{context.bot.username}?start={invite_code}"
-        referrals_count = len(self.user_referrals.get(user_id, []))
-        
-        invite_text = (
-            f"🎫 **لینک دعوت شما**\n\n"
-            f"🔗 **لینک:** `{invite_link}`\n\n"
-            f"💎 **مزایای دعوت:**\n"
-            f"• به ازای هر دعوت: **7 سکه** پاداش\n"
-            f"• دعوت شده: **3 سکه** هدیه اولیه\n"
-            f"• بدون محدودیت تعداد دعوت\n\n"
-            f"📊 **آمار دعوت‌های شما:** {referrals_count} نفر\n"
-            f"💰 **سکه‌های کسب شده:** {referrals_count * 7} سکه"
+    elif query.data == "buy_coins":
+        coin_text = (
+            "💌 خرید سکه (کوین)\n\n"
+            "💰 هر عدد سکه: 200 تومن\n"
+            "‼️ تعداد سکه مورد نظر خود را وارد کنید\n\n"
+            "⌨️ از کیبورد زیر برای وارد کردن تعداد سکه استفاده کنید:"
         )
         
         await query.edit_message_text(
-            invite_text,
-            reply_markup=self.create_invite_keyboard(),
-            parse_mode='Markdown'
+            coin_text,
+            reply_markup=self.create_coin_keyboard()
         )
+        return COIN_PURCHASE
+    
+    elif query.data == "stats":
+        await self.show_stats_panel(query)
+        return ACTIVATION_PANEL
+    
+    elif query.data == "invite":
+        await self.show_invite_panel(query, context)
+        return ACTIVATION_PANEL
+    
+    elif query.data == "support":
+        await query.edit_message_text(
+            "🛟 در حال انتقال به پشتیبانی...",
+            reply_markup=self.create_activation_keyboard()
+        )
+        return ACTIVATION_PANEL
+    
+    elif query.data == "back":
+        activation_text = (
+            "💡 پنل اصلی ربات\n\n"
+            "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
+            "🚀 فعال سازی سلف\n"
+            "💰 خرید سکه\n"
+            "📊 آمار و موجودی\n"
+            "🎫 لینک دعوت"
+        )
+        
+        await query.edit_message_text(
+            activation_text,
+            reply_markup=self.create_activation_keyboard()
+        )
+        return ACTIVATION_PANEL
+    
+   async def show_stats_panel(self, query):
+    user_id = query.from_user.id
+    user_coins = self.user_coins.get(user_id, 0)
+    total_value = user_coins * 200
+    referrals_count = len(self.user_referrals.get(user_id, []))
+    
+    stats_text = (
+        f"📊 آمار و موجودی شما\n\n"
+        f"💰 موجودی سکه: {user_coins} سکه\n"
+        f"💎 ارزش ریالی: {total_value:,} تومن\n"
+        f"👥 تعداد دعوت ها: {referrals_count} نفر\n"
+        f"🎁 سکه از دعوت: {referrals_count * 7} سکه\n\n"
+        f"💡 نکته: به ازای هر دعوت موفق 7 سکه پاداش دریافت می کنید!"
+    )
+    
+    await query.edit_message_text(
+        stats_text,
+        reply_markup=self.create_stats_keyboard()
+    )
+    
+   async def show_invite_panel(self, query, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    
+    invite_code = secrets.token_urlsafe(8)
+    self.invite_links[invite_code] = user_id
+    
+    invite_link = f"https://t.me/{context.bot.username}?start={invite_code}"
+    referrals_count = len(self.user_referrals.get(user_id, []))
+    
+    invite_text = (
+        f"🎫 لینک دعوت شما\n\n"
+        f"🔗 لینک: {invite_link}\n\n"
+        f"💎 مزایای دعوت:\n"
+        f"• به ازای هر دعوت: 7 سکه پاداش\n"
+        f"• دعوت شده: 3 سکه هدیه اولیه\n"
+        f"• بدون محدودیت تعداد دعوت\n\n"
+        f"📊 آمار دعوت های شما: {referrals_count} نفر\n"
+        f"💰 سکه های کسب شده: {referrals_count * 7} سکه"
+    )
+    
+    await query.edit_message_text(
+        invite_text,
+        reply_markup=self.create_invite_keyboard()
+    )
     
     async def coin_purchase(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query

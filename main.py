@@ -111,26 +111,40 @@ class TelegramAuthBot:
     def is_owner(self, user_id: int) -> bool:
         return user_id == self.owner_id
 
-    async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
-        try:
-            url = f"https://api.telegram.org/bot{self.token}/getChatMember"
-            params = {
-                "chat_id": f"@{channel_username}",
-                "user_id": user_id
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            if data.get("ok"):
-                status = data["result"].get("status")
-                return status in ["member", "administrator", "creator", "restricted"]
+  async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
+    """بررسی عضویت کاربر در کانال با استفاده از Bot API"""
+    try:
+        # روش اول:直接用 Bot API
+        url = f"https://api.telegram.org/bot{self.token}/getChatMember"
+        params = {
+            "chat_id": f"@{channel_username}",
+            "user_id": user_id
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        # لاگ برای دیباگ
+        logging.info(f"Checking {channel_username} for user {user_id}: {data}")
+        
+        if data.get("ok"):
+            status = data["result"].get("status")
+            # وضعیت‌های معتبر: member, administrator, creator, restricted
+            if status in ["member", "administrator", "creator"]:
+                return True
+            elif status == "restricted":
+                # بررسی کنید که کاربر restricted هست اما still member
+                is_member = data["result"].get("is_member", False)
+                return is_member
             else:
                 return False
-                
-        except Exception as e:
-            logging.error(f"Error checking membership for {channel_username}: {e}")
+        else:
+            logging.error(f"API Error: {data}")
             return False
+            
+    except Exception as e:
+        logging.error(f"Error checking membership for {channel_username}: {e}")
+        return False
 
     def create_welcome_keyboard(self):
         keyboard = [

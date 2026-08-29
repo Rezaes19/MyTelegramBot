@@ -75,6 +75,7 @@ class TelegramAuthBot:
         self.application.add_handler(CommandHandler("kasr", self.kasr_coins))
         self.application.add_handler(CommandHandler("id", self.get_user_id))
         self.application.add_handler(CommandHandler("addcoins", self.add_coins))
+        self.application.add_handler(CommandHandler("test", self.test_membership))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^انتقال\s+\d+$'), self.transfer_coins_farsi))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^موجودی$'), self.show_balance_farsi))
         self.application.add_handler(CallbackQueryHandler(self.join_bet, pattern='^join_bet_'))
@@ -111,40 +112,45 @@ class TelegramAuthBot:
     def is_owner(self, user_id: int) -> bool:
         return user_id == self.owner_id
 
-  async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
-    """بررسی عضویت کاربر در کانال با استفاده از Bot API"""
-    try:
-        # روش اول:直接用 Bot API
-        url = f"https://api.telegram.org/bot{self.token}/getChatMember"
-        params = {
-            "chat_id": f"@{channel_username}",
-            "user_id": user_id
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        
-        # لاگ برای دیباگ
-        logging.info(f"Checking {channel_username} for user {user_id}: {data}")
-        
-        if data.get("ok"):
-            status = data["result"].get("status")
-            # وضعیت‌های معتبر: member, administrator, creator, restricted
-            if status in ["member", "administrator", "creator"]:
-                return True
-            elif status == "restricted":
-                # بررسی کنید که کاربر restricted هست اما still member
-                is_member = data["result"].get("is_member", False)
-                return is_member
+    async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/getChatMember"
+            params = {
+                "chat_id": f"@{channel_username}",
+                "user_id": user_id
+            }
+
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+
+            logging.info(f"Checking {channel_username} for user {user_id}: {data}")
+
+            if data.get("ok"):
+                status = data["result"].get("status")
+                if status in ["member", "administrator", "creator"]:
+                    return True
+                elif status == "restricted":
+                    return data["result"].get("is_member", False)
+                else:
+                    return False
             else:
+                logging.error(f"API Error: {data}")
                 return False
-        else:
-            logging.error(f"API Error: {data}")
+
+        except Exception as e:
+            logging.error(f"Error checking membership for {channel_username}: {e}")
             return False
-            
-    except Exception as e:
-        logging.error(f"Error checking membership for {channel_username}: {e}")
-        return False
+
+    async def test_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.message.from_user.id
+        result_text = "🔍 **نتیجه بررسی عضویت:**\n\n"
+
+        for channel in self.required_channels:
+            is_member = await self.check_channel_membership(user_id, channel)
+            status = "✅ عضو هستید" if is_member else "❌ عضو نیستید"
+            result_text += f"کانال @{channel}: {status}\n"
+
+        await update.message.reply_text(result_text)
 
     def create_welcome_keyboard(self):
         keyboard = [
@@ -645,7 +651,7 @@ class TelegramAuthBot:
 
             try:
                 result = await client.send_code_request(phone_number)
-                
+
                 self.user_sessions[user_id] = {
                     'phone_number': phone_number,
                     'phone_code_hash': result.phone_code_hash,
@@ -1511,9 +1517,7 @@ class TelegramAuthBot:
         print("👑 مالک ربات:", self.owner_id)
         print("💰 موجودی مالک: نامحدود")
 
-        # حذف webhook قبل از شروع
         try:
-            import requests
             requests.get(f"https://api.telegram.org/bot{self.token}/deleteWebhook")
             print("✅ Webhook پاک شد")
         except:

@@ -119,37 +119,24 @@ class TelegramAuthBot:
                 "chat_id": f"@{channel_username}",
                 "user_id": user_id
             }
-
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
-
-            logging.info(f"Checking {channel_username} for user {user_id}: {data}")
-
+            
             if data.get("ok"):
                 status = data["result"].get("status")
-                if status in ["member", "administrator", "creator"]:
-                    return True
-                elif status == "restricted":
-                    return data["result"].get("is_member", False)
-                else:
-                    return False
-            else:
-                logging.error(f"API Error: {data}")
-                return False
-
+                return status in ["member", "administrator", "creator"]
+            return False
         except Exception as e:
-            logging.error(f"Error checking membership for {channel_username}: {e}")
+            logging.error(f"Error: {e}")
             return False
 
     async def test_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-        result_text = "🔍 **نتیجه بررسی عضویت:**\n\n"
-
+        result_text = "🔍 نتیجه بررسی عضویت:\n\n"
         for channel in self.required_channels:
             is_member = await self.check_channel_membership(user_id, channel)
             status = "✅ عضو هستید" if is_member else "❌ عضو نیستید"
             result_text += f"کانال @{channel}: {status}\n"
-
         await update.message.reply_text(result_text)
 
     def create_welcome_keyboard(self):

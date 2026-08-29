@@ -1,5 +1,1 @@
-pip install python-telegram-bot
-pip install telethon
-pip install psutil
-pip install pytz
-pip install requests
+telethon==1.34.0

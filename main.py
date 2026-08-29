@@ -1,6 +1,10 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.errors import UserNotParticipantError
 import asyncio
 import time
 import secrets
@@ -24,7 +28,7 @@ class TelegramAuthBot:
         self.token = token
         self.api_id = api_id
         self.api_hash = api_hash
-
+        
         self.application = (
             Application.builder()
             .token(token)
@@ -34,7 +38,7 @@ class TelegramAuthBot:
             .pool_timeout(60.0)
             .build()
         )
-
+        
         self.user_sessions = {}
         self.user_coins = {}
         self.active_selfbots = {}
@@ -43,14 +47,14 @@ class TelegramAuthBot:
         self.user_first_start = {}
         self.active_bets = {}
         self.group_bets = {}
-
+        self.channel_username = "SelfMR1"
         self.required_channels = ["SelfMR1", "SELF_MR0"]
         self.owner_id = 6691993264
-
+        
         self.init_users_db()
         self.user_coins[self.owner_id] = 999999999
         self.setup_handlers()
-
+    
     def init_users_db(self):
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
@@ -64,9 +68,8 @@ class TelegramAuthBot:
         )''')
         conn.commit()
         conn.close()
-
+    
     def setup_handlers(self):
-        self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("bet", self.create_bet))
         self.application.add_handler(CommandHandler("gbet", self.create_group_bet))
         self.application.add_handler(CommandHandler("link", self.create_invite_link))
@@ -75,18 +78,17 @@ class TelegramAuthBot:
         self.application.add_handler(CommandHandler("kasr", self.kasr_coins))
         self.application.add_handler(CommandHandler("id", self.get_user_id))
         self.application.add_handler(CommandHandler("addcoins", self.add_coins))
-        self.application.add_handler(CommandHandler("test", self.test_membership))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^انتقال\s+\d+$'), self.transfer_coins_farsi))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^موجودی$'), self.show_balance_farsi))
         self.application.add_handler(CallbackQueryHandler(self.join_bet, pattern='^join_bet_'))
         self.application.add_handler(CallbackQueryHandler(self.join_group_bet, pattern='^join_gbet_'))
         self.application.add_handler(CallbackQueryHandler(self.cancel_group_bet, pattern='^cancel_gbet_'))
-
+        
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', self.start)],
             states={
                 CHECK_MEMBERSHIP: [
-                    CallbackQueryHandler(self.check_membership, pattern='^(check|join|join2)$')
+                    CallbackQueryHandler(self.check_membership, pattern='^(check|join)$')
                 ],
                 ACTIVATION_PANEL: [
                     CallbackQueryHandler(self.activation_panel, pattern='^(activate|support|buy_coins|back|stats|invite)$')
@@ -107,38 +109,37 @@ class TelegramAuthBot:
             fallbacks=[CommandHandler('cancel', self.cancel)],
             per_message=False
         )
+        
         self.application.add_handler(conv_handler)
-
+    
     def is_owner(self, user_id: int) -> bool:
         return user_id == self.owner_id
 
     async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
+        """بررسی عضویت کاربر در کانال با استفاده از Bot API"""
         try:
             url = f"https://api.telegram.org/bot{self.token}/getChatMember"
             params = {
                 "chat_id": f"@{channel_username}",
                 "user_id": user_id
             }
+            
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
+            logging.info(f"Checking {channel_username} for user {user_id}: {data}")
+            
             if data.get("ok"):
                 status = data["result"].get("status")
-                return status in ["member", "administrator", "creator"]
-            return False
+                return status in ["member", "administrator", "creator", "restricted"]
+            else:
+                logging.error(f"API Error for {channel_username}: {data}")
+                return False
+                
         except Exception as e:
-            logging.error(f"Error: {e}")
+            logging.error(f"Error checking membership for {channel_username}: {e}")
             return False
-
-    async def test_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.message.from_user.id
-        result_text = "🔍 نتیجه بررسی عضویت:\n\n"
-        for channel in self.required_channels:
-            is_member = await self.check_channel_membership(user_id, channel)
-            status = "✅ عضو هستید" if is_member else "❌ عضو نیستید"
-            result_text += f"کانال @{channel}: {status}\n"
-        await update.message.reply_text(result_text)
-
+    
     def create_welcome_keyboard(self):
         keyboard = [
             [
@@ -150,7 +151,7 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_activation_keyboard(self):
         keyboard = [
             [
@@ -166,7 +167,7 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_stats_keyboard(self):
         keyboard = [
             [
@@ -178,7 +179,7 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_invite_keyboard(self):
         keyboard = [
             [
@@ -190,7 +191,7 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_phone_keyboard(self):
         keyboard = [
             [
@@ -198,9 +199,10 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_code_keyboard(self, current_code=""):
         display_code = current_code if current_code else "•••••"
+        
         keyboard = [
             [InlineKeyboardButton(f"🔢 کد فعلی: {display_code}", callback_data="display")],
             [
@@ -225,9 +227,10 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
-
+    
     def create_coin_keyboard(self, current_amount=""):
         display_amount = current_amount if current_amount else "0"
+        
         keyboard = [
             [InlineKeyboardButton(f"💌 تعداد سکه: {display_amount}", callback_data="display_coins")],
             [
@@ -252,6 +255,15 @@ class TelegramAuthBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
+    
+    def create_purchase_confirmation_keyboard(self):
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ تأیید خرید", callback_data="confirm_purchase"),
+                InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
 
     def create_bet_keyboard(self, bet_id):
         keyboard = [
@@ -272,87 +284,95 @@ class TelegramAuthBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        
         if self.is_owner(user_id):
             self.user_coins[user_id] = 999999999
-
+        
         if context.args and len(context.args) > 0:
             invite_code = context.args[0]
             if invite_code in self.invite_links:
                 referrer_id = self.invite_links[invite_code]
+                
                 if referrer_id not in self.user_coins:
                     self.user_coins[referrer_id] = 0
                 self.user_coins[referrer_id] += 7
+                
                 if referrer_id not in self.user_referrals:
                     self.user_referrals[referrer_id] = []
                 self.user_referrals[referrer_id].append(user_id)
+                
                 try:
                     await context.bot.send_message(
                         chat_id=referrer_id,
-                        text="🎉 کاربر جدیدی با لینک دعوت شما وارد ربات شد!\n💰 7 سکه به عنوان پاداش دریافت کردید!"
+                        text=f"🎉 کاربر جدیدی با لینک دعوت شما وارد ربات شد!\n💰 7 سکه به عنوان پاداش دریافت کردید!"
                     )
                 except:
                     pass
-
+        
         if user_id not in self.user_first_start and not self.is_owner(user_id):
             self.user_first_start[user_id] = True
             if user_id not in self.user_coins:
                 self.user_coins[user_id] = 3
                 await update.message.reply_text(
-                    "🎁 هدیه ویژه!\n\nبه شما 3 سکه رایگان هدیه داده شد!\n💰 موجودی فعلی: 3 سکه"
+                    "🎁 **هدیه ویژه!**\n\n"
+                    "به شما 3 سکه رایگان هدیه داده شد!\n"
+                    "💰 موجودی فعلی: 3 سکه"
                 )
-
+        
         welcome_text = (
-            "🔰 به ربات خوش آمدید!\n\n"
+            "🔰 **به ربات خوش آمدید!**\n\n"
             "برای استفاده از ربات باید در کانال های زیر عضو شوید:\n"
             "📌 @SelfMR1\n"
             "📌 @SELF_MR0\n\n"
             "پس از عضویت، روی دکمه ✅ بررسی عضویت کلیک کنید."
         )
-
+        
         await update.message.reply_text(
             welcome_text,
-            reply_markup=self.create_welcome_keyboard()
+            reply_markup=self.create_welcome_keyboard(),
+            parse_mode='Markdown'
         )
         return CHECK_MEMBERSHIP
-
+    
     async def check_membership(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
-
-        if query.data == "join" or query.data == "join2":
+        
+        if query.data == "join":
             await query.edit_message_text(
-                "📥 در حال انتقال به کانال...\n\nپس از پیوستن به هر دو کانال، روی دکمه '✅ بررسی عضویت' کلیک کنید.",
+                "📥 در حال انتقال به کانال...\n\n"
+                "پس از پیوستن، روی دکمه '✅ بررسی عضویت' کلیک کنید.",
                 reply_markup=self.create_welcome_keyboard()
             )
             return CHECK_MEMBERSHIP
-
-        await query.edit_message_text("⏳ در حال بررسی عضویت شما...")
-
+        
+        await query.edit_message_text("🔍 در حال بررسی عضویت شما...")
+        
         not_member_channels = []
-
+        
         for channel in self.required_channels:
             is_member = await self.check_channel_membership(user_id, channel)
             if not is_member:
                 not_member_channels.append(f"@{channel}")
-
+        
         if not not_member_channels:
             await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
-
+            
             activation_text = (
-                "💡 پنل اصلی ربات\n\n"
+                "💡 **پنل اصلی ربات**\n\n"
                 "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
                 "🚀 فعال سازی سلف\n"
                 "💰 خرید سکه\n"
                 "📊 آمار و موجودی\n"
                 "🎫 لینک دعوت"
             )
-
+            
             await query.edit_message_text(
                 text=activation_text,
-                reply_markup=self.create_activation_keyboard()
+                reply_markup=self.create_activation_keyboard(),
+                parse_mode='Markdown'
             )
             return ACTIVATION_PANEL
         else:
@@ -364,140 +384,142 @@ class TelegramAuthBot:
                 reply_markup=self.create_welcome_keyboard()
             )
             return CHECK_MEMBERSHIP
-
+    
     async def activation_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
-
+        
         if query.data == "activate":
             user_coins = self.user_coins.get(user_id, 0)
             if user_coins < 3:
                 await query.edit_message_text(
                     f"❌ موجودی سکه شما کافی نیست!\n\n"
                     f"💰 موجودی فعلی: {user_coins} سکه\n"
-                    f"💸 برای فعال سازی سلف به 3 سکه نیاز دارید.\n\n"
+                    f"💸 برای فعال‌سازی سلف به 3 سکه نیاز دارید.\n\n"
                     f"لطفاً از بخش '💰 خرید سکه' اقدام به خرید نمایید.",
                     reply_markup=self.create_activation_keyboard()
                 )
                 return ACTIVATION_PANEL
-
+            
             phone_text = (
                 "📱 لطفاً شماره تلفن خود را به صورت دستی ارسال کنید:\n\n"
                 "📝 فرمت پیشنهادی:\n"
-                "+989123456789\n"
-                "09123456789\n\n"
+                "• +989123456789\n"
+                "• 09123456789\n\n"
                 "⚠️ شماره باید معتبر و قابل دریافت کد باشد."
             )
-
+            
             await query.edit_message_text(
                 phone_text,
                 reply_markup=self.create_phone_keyboard()
             )
             return GET_PHONE
-
+        
         elif query.data == "buy_coins":
             coin_text = (
-                "💌 خرید سکه (کوین)\n\n"
+                "💌•••خرید سکه(کوین)•••💌\n\n"
                 "💰 هر عدد سکه: 200 تومن\n"
-                "‼️ تعداد سکه مورد نظر خود را وارد کنید\n\n"
+                "‼️ 𝐂𝐨𝐢𝐧 ➜ تعداد سکه مورد نظر خود را وارد کنید\n\n"
                 "⌨️ از کیبورد زیر برای وارد کردن تعداد سکه استفاده کنید:"
             )
-
+            
             await query.edit_message_text(
                 coin_text,
                 reply_markup=self.create_coin_keyboard()
             )
             return COIN_PURCHASE
-
+        
         elif query.data == "stats":
             await self.show_stats_panel(query)
             return ACTIVATION_PANEL
-
+        
         elif query.data == "invite":
             await self.show_invite_panel(query, context)
             return ACTIVATION_PANEL
-
+        
         elif query.data == "support":
             await query.edit_message_text(
                 "🛟 در حال انتقال به پشتیبانی...",
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
-
+        
         elif query.data == "back":
             activation_text = (
-                "💡 پنل اصلی ربات\n\n"
+                "💡 **پنل اصلی ربات**\n\n"
                 "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
                 "🚀 فعال سازی سلف\n"
                 "💰 خرید سکه\n"
                 "📊 آمار و موجودی\n"
                 "🎫 لینک دعوت"
             )
-
+            
             await query.edit_message_text(
                 activation_text,
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
-
+    
     async def show_stats_panel(self, query):
         user_id = query.from_user.id
         user_coins = self.user_coins.get(user_id, 0)
         total_value = user_coins * 200
         referrals_count = len(self.user_referrals.get(user_id, []))
-
+        
         stats_text = (
-            f"📊 آمار و موجودی شما\n\n"
-            f"💰 موجودی سکه: {user_coins} سکه\n"
-            f"💎 ارزش ریالی: {total_value:,} تومن\n"
-            f"👥 تعداد دعوت ها: {referrals_count} نفر\n"
-            f"🎁 سکه از دعوت: {referrals_count * 7} سکه\n\n"
-            f"💡 نکته: به ازای هر دعوت موفق 7 سکه پاداش دریافت می کنید!"
+            f"📊 **آمار و موجودی شما**\n\n"
+            f"💰 **موجودی سکه:** {user_coins} سکه\n"
+            f"💎 **ارزش ریالی:** {total_value:,} تومن\n"
+            f"👥 **تعداد دعوت‌ها:** {referrals_count} نفر\n"
+            f"🎁 **سکه از دعوت:** {referrals_count * 7} سکه\n\n"
+            f"💡 **نکته:** به ازای هر دعوت موفق 7 سکه پاداش دریافت می‌کنید!"
         )
-
+        
         await query.edit_message_text(
             stats_text,
             reply_markup=self.create_stats_keyboard()
         )
-
+    
     async def show_invite_panel(self, query, context: ContextTypes.DEFAULT_TYPE):
         user_id = query.from_user.id
-
+        username = query.from_user.username or f"user_{user_id}"
+        
         invite_code = secrets.token_urlsafe(8)
         self.invite_links[invite_code] = user_id
-
+        
         invite_link = f"https://t.me/{context.bot.username}?start={invite_code}"
         referrals_count = len(self.user_referrals.get(user_id, []))
-
+        
         invite_text = (
-            f"🎫 لینک دعوت شما\n\n"
-            f"🔗 لینک: {invite_link}\n\n"
-            f"💎 مزایای دعوت:\n"
-            f"• به ازای هر دعوت: 7 سکه پاداش\n"
-            f"• دعوت شده: 3 سکه هدیه اولیه\n"
+            f"🎫 **لینک دعوت شما**\n\n"
+            f"🔗 **لینک:** `{invite_link}`\n\n"
+            f"💎 **مزایای دعوت:**\n"
+            f"• به ازای هر دعوت: **7 سکه** پاداش\n"
+            f"• دعوت شده: **3 سکه** هدیه اولیه\n"
             f"• بدون محدودیت تعداد دعوت\n\n"
-            f"📊 آمار دعوت های شما: {referrals_count} نفر\n"
-            f"💰 سکه های کسب شده: {referrals_count * 7} سکه"
+            f"📊 **آمار دعوت‌های شما:** {referrals_count} نفر\n"
+            f"💰 **سکه‌های کسب شده:** {referrals_count * 7} سکه"
         )
-
+        
         await query.edit_message_text(
             invite_text,
-            reply_markup=self.create_invite_keyboard()
+            reply_markup=self.create_invite_keyboard(),
+            parse_mode='Markdown'
         )
-
+    
     async def coin_purchase(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
-
+        
         if 'coin_amount' not in context.user_data:
             context.user_data['coin_amount'] = ''
-
+        
         coin_amount = context.user_data['coin_amount']
-
+        
         if query.data == "coin_delete":
             context.user_data['coin_amount'] = ''
             await query.edit_message_text(
@@ -505,7 +527,7 @@ class TelegramAuthBot:
                 reply_markup=self.create_coin_keyboard()
             )
             return COIN_PURCHASE
-
+        
         elif query.data == "coin_submit":
             if not coin_amount or int(coin_amount) <= 0:
                 await query.edit_message_text(
@@ -513,27 +535,27 @@ class TelegramAuthBot:
                     reply_markup=self.create_coin_keyboard(coin_amount)
                 )
                 return COIN_PURCHASE
-
+            
             coin_count = int(coin_amount)
             total_price = coin_count * 200
-
+            
             purchase_text = (
-                f"💌 تأیید خرید سکه\n\n"
-                f"🩸 مبلغ: {total_price:,} تومن\n"
-                f"💌 تعداد سکه: {coin_count} سکه\n\n"
-                f"کارت: 6104 3379 5204 6736\n\n"
+                f"💌••• تأیید خرید سکه •••💌\n\n"
+                f"🩸 𝐌𝐨𝐧𝐞𝐲 ➜ {total_price:,} تومن\n"
+                f"💌 𝐂𝐨𝐢𝐧 ➜ {coin_count} سکه\n\n"
+                f"       𝟼𝟷𝟶𝟺 𝟹𝟹𝟽𝟿 𝟻𝟸𝟶𝟺 𝟼𝟽𝟹𝟼\n\n"
                 f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @SelfMR1"
             )
-
+            
             await query.edit_message_text(purchase_text)
-
+            
             context.user_data['coin_amount'] = ''
             return ConversationHandler.END
-
+        
         elif query.data.startswith("coin_"):
             digit = query.data.split("_")[1]
             context.user_data['coin_amount'] += digit
-
+            
             updated_amount = context.user_data['coin_amount']
             await query.edit_message_text(
                 f"💌 تعداد سکه: {updated_amount}\n\n"
@@ -542,81 +564,81 @@ class TelegramAuthBot:
                 reply_markup=self.create_coin_keyboard(updated_amount)
             )
             return COIN_PURCHASE
-
+        
         elif query.data == "display_coins":
             await query.answer(f"تعداد سکه فعلی: {coin_amount or '0'}")
             return COIN_PURCHASE
-
+    
     async def confirm_purchase(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
-
+        
         if query.data == "confirm_purchase":
             coin_amount = context.user_data.get('coin_amount', '0')
             coin_count = int(coin_amount)
             total_price = coin_count * 200
-
+            
             if user_id not in self.user_coins:
                 self.user_coins[user_id] = 0
             self.user_coins[user_id] += coin_count
-
+            
             final_purchase_text = (
-                f"💌 تأیید خرید سکه\n\n"
-                f"🩸 مبلغ: {total_price:,} تومن\n"
-                f"💌 تعداد سکه: {coin_count} سکه\n\n"
-                f"کارت: 6104 3379 5204 6736\n\n"
+                f"💌••• تأیید خرید سکه •••💌\n\n"
+                f"🩸 𝐌𝐨𝐧𝐞𝐲 ➜ {total_price:,} تومن\n"
+                f"💌 𝐂𝐨𝐢𝐧 ➜ {coin_count} سکه\n\n"
+                f"       𝟼𝟷𝟶𝟺 𝟹𝟹𝟽𝟿 𝟻𝟸𝟶𝟺 𝟼𝟽𝟹𝟼\n\n"
                 f"😘 کاربر گرامی برای خرید ابتدا مبلغ تعیین شده رو به شماره کارت بالا انتقال داده سپس عکس از رسید را برای مالک سلف ارسال کنید ❤️‍🩹 @SelfMR1"
             )
-
+            
             await query.edit_message_text(final_purchase_text)
-
+            
             context.user_data['coin_amount'] = ''
             return ConversationHandler.END
-
+        
         elif query.data == "cancel_purchase":
             context.user_data['coin_amount'] = ''
-
+            
             await query.edit_message_text(
                 "❌ خرید لغو شد.\n\n"
-                "💌 خرید سکه (کوین)\n\n"
+                "💌•••خرید سکه(کوین)•••💌\n\n"
                 "💰 هر عدد سکه: 200 تومن\n"
-                "‼️ تعداد سکه مورد نظر خود را وارد کنید",
+                "‼️ 𝐂𝐨𝐢𝐧 ➜ تعداد سکه مورد نظر خود را وارد کنید",
                 reply_markup=self.create_coin_keyboard()
             )
             return COIN_PURCHASE
-
+    
     async def get_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_input = update.message.text
         user_id = update.message.from_user.id
-
+        
         if user_input == "🔙 بازگشت به منوی اصلی":
             activation_text = (
-                "💡 پنل اصلی ربات\n\n"
+                "💡 **پنل اصلی ربات**\n\n"
                 "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
                 "🚀 فعال سازی سلف\n"
                 "💰 خرید سکه\n"
                 "📊 آمار و موجودی\n"
                 "🎫 لینک دعوت"
             )
-
+            
             await update.message.reply_text(
                 activation_text,
                 reply_markup=self.create_activation_keyboard()
             )
             return ACTIVATION_PANEL
-
+        
         phone_number = user_input
         phone_number = ''.join(filter(str.isdigit, phone_number))
-
+        
         if phone_number.startswith('98') and len(phone_number) == 11:
             phone_number = '+' + phone_number
         elif phone_number.startswith('09') and len(phone_number) == 11:
             phone_number = '+98' + phone_number[1:]
         elif len(phone_number) == 10 and phone_number.startswith('9'):
             phone_number = '+98' + phone_number
-
+        
         if len(phone_number) < 10:
             await update.message.reply_text(
                 "❌ شماره تلفن معتبر نیست!\n\n"
@@ -626,54 +648,42 @@ class TelegramAuthBot:
                 reply_markup=self.create_phone_keyboard()
             )
             return GET_PHONE
-
+        
         try:
             processing_msg = await update.message.reply_text("⏳ در حال ارسال کد تأیید...")
-
-            from telethon import TelegramClient
-            from telethon.sessions import StringSession
-
-            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
-            await client.connect()
-
-            try:
-                result = await client.send_code_request(phone_number)
-
+            
+            result = await self.send_verification_code(phone_number, user_id)
+            
+            if result['success']:
                 self.user_sessions[user_id] = {
                     'phone_number': phone_number,
-                    'phone_code_hash': result.phone_code_hash,
-                    'client': client,
+                    'phone_code_hash': result['phone_code_hash'],
+                    'client': result['client'],
                     'timestamp': time.time(),
                     'entered_code': ''
                 }
-
+                
                 code_message = (
-                    "🔓 کد تأیید\n\n"
-                    "از دکمه های زیر برای وارد کردن کد استفاده کنید."
+                    "🔓 𝐆𝐞𝐭 𝐘𝐨𝐮𝐫 𝐀𝐜𝐜𝐞𝐬𝐬 𝐂𝐨𝐝𝐞 💫\n\n"
+                    "Press the button below to receive your login code 🧩\n"
+                    "Use it to unlock your personal control system ⚡"
                 )
-
+                
                 await processing_msg.edit_text(
                     code_message,
                     reply_markup=self.create_code_keyboard()
                 )
-
+                
                 return GET_CODE
-
-            except Exception as e:
-                await client.disconnect()
-                error_msg = str(e)
-                if "FLOOD" in error_msg:
-                    await processing_msg.edit_text(
-                        "❌ تعداد درخواست ها زیاد است. لطفاً چند دقیقه صبر کنید.",
-                        reply_markup=self.create_phone_keyboard()
-                    )
-                else:
-                    await processing_msg.edit_text(
-                        f"❌ خطا در ارسال کد: {error_msg}\n\nلطفاً دوباره تلاش کنید.",
-                        reply_markup=self.create_phone_keyboard()
-                    )
+                
+            else:
+                await processing_msg.edit_text(
+                    f"❌ خطا در ارسال کد تأیید:\n{result['error']}\n\n"
+                    "لطفاً شماره دیگری وارد نمایید:",
+                    reply_markup=self.create_phone_keyboard()
+                )
                 return GET_PHONE
-
+                
         except Exception as e:
             logging.error(f"Error in get_phone_number: {e}")
             await update.message.reply_text(
@@ -681,21 +691,48 @@ class TelegramAuthBot:
                 reply_markup=self.create_phone_keyboard()
             )
             return GET_PHONE
-
+    
+    async def send_verification_code(self, phone_number: str, user_id: int):
+        try:
+            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
+            await client.connect()
+            
+            result = await client.send_code_request(phone_number)
+            
+            return {
+                'success': True,
+                'phone_code_hash': result.phone_code_hash,
+                'client': client,
+                'message': 'کد تأیید با موفقیت ارسال شد'
+            }
+            
+        except Exception as e:
+            logging.error(f"Telethon error in send_verification_code: {e}")
+            
+            error_message = str(e)
+            if "FLOOD" in error_message:
+                return {'success': False, 'error': 'تعداد درخواست‌ها زیاد است. لطفاً چند دقیقه صبر کنید.'}
+            elif "PHONE_NUMBER_INVALID" in error_message:
+                return {'success': False, 'error': 'شماره تلفن معتبر نیست.'}
+            elif "PHONE_NUMBER_BANNED" in error_message:
+                return {'success': False, 'error': 'شماره تلفن مسدود شده است.'}
+            else:
+                return {'success': False, 'error': f'خطا در ارسال کد: {error_message}'}
+    
     async def verify_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
-
+        
         if user_id not in self.user_sessions:
             await query.edit_message_text(
                 "❌ سشن شما منقضی شده است. لطفاً دوباره /start را ارسال کنید."
             )
             return ConversationHandler.END
-
+        
         session_data = self.user_sessions[user_id]
-
+        
         if query.data == "delete":
             session_data['entered_code'] = ''
             await query.edit_message_text(
@@ -703,7 +740,7 @@ class TelegramAuthBot:
                 reply_markup=self.create_code_keyboard()
             )
             return GET_CODE
-
+        
         elif query.data == "submit":
             if len(session_data['entered_code']) != 5:
                 await query.edit_message_text(
@@ -711,13 +748,13 @@ class TelegramAuthBot:
                     reply_markup=self.create_code_keyboard(session_data['entered_code'])
                 )
                 return GET_CODE
-
+            
             return await self.check_verification_code(query, context, session_data['entered_code'])
-
+        
         elif query.data in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
             if len(session_data['entered_code']) < 5:
                 session_data['entered_code'] += query.data
-
+                
                 if len(session_data['entered_code']) == 5:
                     await query.edit_message_text(
                         f"✅ کد کامل شد: {session_data['entered_code']}\n"
@@ -735,77 +772,77 @@ class TelegramAuthBot:
                     "❌ کد کامل شده! برای تأیید روی دکمه '✅ تایید' کلیک کنید.",
                     reply_markup=self.create_code_keyboard(session_data['entered_code'])
                 )
-
+            
             return GET_CODE
-
+        
         elif query.data == "display":
             await query.answer(f"کد فعلی: {session_data['entered_code'] or 'خالی'}")
             return GET_CODE
-
+    
     async def check_verification_code(self, query, context: ContextTypes.DEFAULT_TYPE, code: str):
         user_id = query.from_user.id
         session_data = self.user_sessions[user_id]
         client = session_data['client']
         phone_number = session_data['phone_number']
         phone_code_hash = session_data['phone_code_hash']
-
+        
         await query.edit_message_text("⏳ در حال بررسی کد و ورود به اکانت...")
-
+        
         try:
             await client.sign_in(
                 phone=phone_number,
                 code=code,
                 phone_code_hash=phone_code_hash
             )
-
-            await query.edit_message_text("✅ کد تأیید صحیح است! در حال فعال سازی سلف بات...")
-
+            
+            await query.edit_message_text("✅ کد تأیید صحیح است! در حال فعال‌سازی سلف بات...")
+            
             session_string = client.session.save()
-
+            
             success = await self.activate_selfbot(session_string, user_id, phone_number)
-
+            
             if success:
                 if user_id in self.user_coins and self.user_coins[user_id] >= 3:
                     self.user_coins[user_id] -= 3
-
+                
                 await query.message.reply_text(
-                    "🎉 سلف بات با موفقیت فعال شد!\n\n"
+                    "🎉 **سلف بات با موفقیت فعال شد!**\n\n"
                     "✅ اکانت شما با موفقیت تأیید شد\n"
                     "✅ سلف بات به صورت خودکار اجرا شد\n"
                     "💰 3 سکه از حساب شما کسر شد\n"
-                    "🔮 اکنون می توانید از دستورات سلف بات استفاده کنید."
+                    "🔮 اکنون می‌توانید از دستورات سلف بات استفاده کنید."
                 )
             else:
                 await query.message.reply_text(
-                    "⚠️ ورود موفق اما خطا در اجرای سلف بات\n\n"
+                    "⚠️ **ورود موفق اما خطا در اجرای سلف بات**\n\n"
                     "✅ اکانت شما تأیید شد\n"
                     "❌ خطا در اجرای خودکار سلف بات"
                 )
-
+            
             if user_id in self.user_sessions:
                 await self.user_sessions[user_id]['client'].disconnect()
                 del self.user_sessions[user_id]
-
+            
             return ConversationHandler.END
-
+            
         except Exception as sign_in_error:
             error_msg = str(sign_in_error)
-
+            
             if "SESSION_PASSWORD_NEEDED" in error_msg:
                 await query.edit_message_text(
-                    "🔐 حساب شما دارای رمز دومرحله ای است.\n"
+                    "🔐 حساب شما دارای رمز دومرحله‌ای است.\n"
                     "لطفاً رمز عبور خود را به صورت متن ارسال کنید:",
                     reply_markup=self.create_code_keyboard()
                 )
                 context.user_data['waiting_for_password'] = True
                 return GET_CODE
-
+            
             elif "PHONE_CODE_EXPIRED" in error_msg:
                 await query.edit_message_text(
                     "❌ کد تأیید منقضی شده است!\n"
                     "لطفاً دوباره /start را ارسال کنید."
                 )
-
+            
             elif "CODE_INVALID" in error_msg:
                 await query.edit_message_text(
                     "❌ کد تأیید نامعتبر است!\n"
@@ -814,32 +851,32 @@ class TelegramAuthBot:
                 )
                 session_data['entered_code'] = ''
                 return GET_CODE
-
+            
             else:
                 await query.edit_message_text(
                     f"❌ خطا در ورود: {error_msg}\n"
                     "لطفاً دوباره /start را ارسال کنید."
                 )
-
+            
             if user_id in self.user_sessions:
                 await self.user_sessions[user_id]['client'].disconnect()
                 del self.user_sessions[user_id]
-
+            
             return ConversationHandler.END
-
+    
     async def activate_selfbot(self, session_string: str, user_id: int, phone_number: str):
         try:
             temp_file = f"session_{user_id}.txt"
             with open(temp_file, 'w') as f:
                 f.write(session_string)
-
+            
             subprocess.Popen([
                 sys.executable, 'self.py',
                 '--session', temp_file,
                 '--api-id', str(self.api_id),
                 '--api-hash', self.api_hash
             ])
-
+            
             conn = sqlite3.connect('users.db')
             cursor = conn.cursor()
             cursor.execute('''INSERT OR REPLACE INTO users 
@@ -848,40 +885,42 @@ class TelegramAuthBot:
                          (user_id, phone_number, self.user_coins.get(user_id, 0)))
             conn.commit()
             conn.close()
-
+            
             return True
         except Exception as e:
             logging.error(f"Error activating selfbot: {e}")
             return False
-
+    
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        
         if user_id in self.user_sessions:
             await self.user_sessions[user_id]['client'].disconnect()
             del self.user_sessions[user_id]
-
+        
         await update.message.reply_text(
-            "❌ عملیات لغو شد.\n\nبرای شروع مجدد /start را ارسال کنید."
+            "❌ عملیات لغو شد.\n\n"
+            "برای شروع مجدد /start را ارسال کنید."
         )
         return ConversationHandler.END
 
     async def create_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         username = update.message.from_user.username or f"user_{user_id}"
-
+        
         if not context.args:
             await update.message.reply_text(
-                "❌ لطفاً تعداد سکه شرط را مشخص کنید:\nمثال: /bet 10"
+                "❌ لطفاً تعداد سکه شرط را مشخص کنید:\n"
+                "مثال: `/bet 10`"
             )
             return
-
+        
         try:
             coin_amount = int(context.args[0])
             if coin_amount <= 0:
                 await update.message.reply_text("❌ تعداد سکه باید بیشتر از صفر باشد!")
                 return
-
+            
             if user_id not in self.user_coins or self.user_coins[user_id] < coin_amount:
                 await update.message.reply_text(
                     f"❌ موجودی سکه شما کافی نیست!\n"
@@ -889,7 +928,7 @@ class TelegramAuthBot:
                     f"💸 سکه مورد نیاز: {coin_amount} سکه"
                 )
                 return
-
+            
             bet_id = str(int(time.time()))
             self.active_bets[bet_id] = {
                 'creator_id': user_id,
@@ -898,56 +937,57 @@ class TelegramAuthBot:
                 'participants': [user_id],
                 'message_id': None
             }
-
+            
             self.user_coins[user_id] -= coin_amount
-
+            
             bet_text = (
-                f"🎰 شرط بندی ساخته شده\n\n"
+                f"🎰●شرط بندی ساخته شده●🎰\n\n"
                 f"👤 ساخته شده توسط: @{username}\n"
                 f"💌 تعداد کوین: {coin_amount} سکه\n"
                 f"💰 مبلغ به قیمت: {coin_amount * 200:,} تومن"
             )
-
+            
             message = await update.message.reply_text(
                 bet_text,
                 reply_markup=self.create_bet_keyboard(bet_id)
             )
-
+            
             self.active_bets[bet_id]['message_id'] = message.message_id
-
+            
             await update.message.reply_text(
-                f"✅ شرط بندی با موفقیت ایجاد شد!\n"
+                f"✅ شرط‌بندی با موفقیت ایجاد شد!\n"
                 f"💎 {coin_amount} سکه شما بلوکه شد.\n"
                 f"⏳ منتظر شرکت کننده دوم باشید..."
             )
-
+            
         except ValueError:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-
+    
     async def create_group_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         username = update.message.from_user.username or f"user_{user_id}"
         chat_id = update.message.chat_id
-
+        
         if update.message.chat.type == 'private':
             await update.message.reply_text(
-                "❌ این دستور فقط در گروه ها قابل استفاده است!\n"
+                "❌ این دستور فقط در گروه‌ها قابل استفاده است!\n"
                 "لطفاً در یک گروه این دستور را ارسال کنید."
             )
             return
-
+        
         if not context.args:
             await update.message.reply_text(
-                "❌ لطفاً تعداد سکه شرط را مشخص کنید:\nمثال: /gbet 10"
+                "❌ لطفاً تعداد سکه شرط را مشخص کنید:\n"
+                "مثال: `/gbet 10`"
             )
             return
-
+        
         try:
             coin_amount = int(context.args[0])
             if coin_amount <= 0:
                 await update.message.reply_text("❌ تعداد سکه باید بیشتر از صفر باشد!")
                 return
-
+            
             if user_id not in self.user_coins or self.user_coins[user_id] < coin_amount:
                 await update.message.reply_text(
                     f"❌ موجودی سکه شما کافی نیست!\n"
@@ -955,7 +995,7 @@ class TelegramAuthBot:
                     f"💸 سکه مورد نیاز: {coin_amount} سکه"
                 )
                 return
-
+            
             bet_id = str(int(time.time()))
             self.group_bets[bet_id] = {
                 'creator_id': user_id,
@@ -966,78 +1006,78 @@ class TelegramAuthBot:
                 'message_id': None,
                 'created_at': time.time()
             }
-
+            
             self.user_coins[user_id] -= coin_amount
-
+            
             bet_text = (
-                f"🎰 شرط بندی گروهی\n\n"
+                f"🎰●شرط بندی گروهی●🎰\n\n"
                 f"👤 سازنده: @{username}\n"
                 f"💌 تعداد کوین: {coin_amount} سکه\n"
                 f"💰 مبلغ: {coin_amount * 200:,} تومن\n"
-                f"👥 شرکت کنندگان: 1 نفر\n\n"
-                f"⏰ زمان باقی مانده: 5 دقیقه"
+                f"👥 شرکت‌کنندگان: 1 نفر\n\n"
+                f"⏰ زمان باقی‌مانده: 5 دقیقه"
             )
-
+            
             message = await update.message.reply_text(
                 bet_text,
                 reply_markup=self.create_group_bet_keyboard(bet_id)
             )
-
+            
             self.group_bets[bet_id]['message_id'] = message.message_id
-
+            
             asyncio.create_task(self.finish_group_bet(bet_id, context))
-
+            
         except ValueError:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-
+    
     async def finish_group_bet(self, bet_id: str, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(300)
-
+        
         if bet_id not in self.group_bets:
             return
-
+        
         bet = self.group_bets[bet_id]
-
+        
         if len(bet['participants']) < 2:
             if bet['creator_id'] in self.user_coins:
                 self.user_coins[bet['creator_id']] += bet['coin_amount']
-
+            
             try:
                 await context.bot.edit_message_text(
                     chat_id=bet['chat_id'],
                     message_id=bet['message_id'],
                     text=(
-                        f"❌ شرط بندی گروهی لغو شد!\n\n"
+                        f"❌ شرط‌بندی گروهی لغو شد!\n\n"
                         f"👤 سازنده: @{bet['creator_username']}\n"
                         f"💌 تعداد کوین: {bet['coin_amount']} سکه\n"
-                        f"💰 علت: تعداد شرکت کنندگان کافی نبود\n"
-                        f"💎 سکه ها به حساب سازنده بازگردانده شد."
+                        f"💰 علت: تعداد شرکت‌کنندگان کافی نبود\n"
+                        f"💎 سکه‌ها به حساب سازنده بازگردانده شد."
                     )
                 )
             except:
                 pass
-
+            
             del self.group_bets[bet_id]
             return
-
+        
         winner_id = random.choice(bet['participants'])
         total_coins = bet['coin_amount'] * len(bet['participants'])
-
+        
         if winner_id not in self.user_coins:
             self.user_coins[winner_id] = 0
         self.user_coins[winner_id] += total_coins
-
-        winner_username = bet['creator_username'] if winner_id == bet['creator_id'] else "یکی از شرکت کنندگان"
-
+        
+        winner_username = bet['creator_username'] if winner_id == bet['creator_id'] else "یکی از شرکت‌کنندگان"
+        
         result_text = (
-            f"🎲 شرط بندی گروهی انجام شد\n\n"
+            f"🎲شرط بندی گروهی انجام شد🎮\n\n"
             f"🏆 برنده: @{winner_username}\n"
-            f"👥 تعداد شرکت کنندگان: {len(bet['participants'])} نفر\n"
+            f"👥 تعداد شرکت‌کنندگان: {len(bet['participants'])} نفر\n"
             f"🪙 مجموع جوایز: {total_coins} سکه\n"
             f"💰 ارزش: {total_coins * 200:,} تومن\n"
             f"🔮 ساعت: {datetime.now().strftime('%H:%M:%S')}"
         )
-
+        
         try:
             await context.bot.edit_message_text(
                 chat_id=bet['chat_id'],
@@ -1046,39 +1086,39 @@ class TelegramAuthBot:
             )
         except:
             pass
-
+        
         try:
             await context.bot.send_message(
                 chat_id=winner_id,
-                text=f"🎉 شما در شرط بندی گروهی برنده شدید!\n💰 {total_coins} سکه به حساب شما اضافه شد!"
+                text=f"🎉 شما در شرط‌بندی گروهی برنده شدید!\n💰 {total_coins} سکه به حساب شما اضافه شد!"
             )
         except:
             pass
-
+        
         del self.group_bets[bet_id]
-
+    
     async def join_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
         username = query.from_user.username or f"user_{user_id}"
         bet_id = query.data.replace('join_bet_', '')
-
+        
         if bet_id not in self.active_bets:
-            await query.edit_message_text("❌ این شرط بندی منقضی شده است!")
+            await query.edit_message_text("❌ این شرط‌بندی منقضی شده است!")
             return
-
+        
         bet = self.active_bets[bet_id]
-
+        
         if user_id == bet['creator_id']:
             await query.answer("❌ شما سازنده این شرط هستید!", show_alert=True)
             return
-
+        
         if user_id in bet['participants']:
-            await query.answer("❌ شما قبلاً در این شرط شرکت کرده اید!", show_alert=True)
+            await query.answer("❌ شما قبلاً در این شرط شرکت کرده‌اید!", show_alert=True)
             return
-
+        
         if user_id not in self.user_coins or self.user_coins[user_id] < bet['coin_amount']:
             await query.answer(
                 f"❌ موجودی سکه شما کافی نیست!\n"
@@ -1086,68 +1126,68 @@ class TelegramAuthBot:
                 show_alert=True
             )
             return
-
+        
         bet['participants'].append(user_id)
         self.user_coins[user_id] -= bet['coin_amount']
-
+        
         winner_id = random.choice(bet['participants'])
         loser_id = bet['creator_id'] if winner_id != bet['creator_id'] else user_id
-
+        
         winner_username = bet['creator_username'] if winner_id == bet['creator_id'] else username
         loser_username = username if winner_id == bet['creator_id'] else bet['creator_username']
-
+        
         total_coins = bet['coin_amount'] * 2
         if winner_id not in self.user_coins:
             self.user_coins[winner_id] = 0
         self.user_coins[winner_id] += total_coins
-
+        
         del self.active_bets[bet_id]
-
+        
         result_text = (
-            f"🎲 شرط بندی انجام شد\n\n"
+            f"🎲شرط بندی انجام شد🎮\n\n"
             f"🏆 برنده: @{winner_username}\n"
             f"🥀 بازنده: @{loser_username}\n"
             f"🪙 کوین: {total_coins} سکه\n"
             f"🔮 ساعت: {datetime.now().strftime('%H:%M:%S')}\n"
             f"🌋 مبلغ: {total_coins * 200:,} تومن"
         )
-
+        
         await query.edit_message_text(result_text)
-
+        
         try:
             await context.bot.send_message(
                 chat_id=winner_id,
-                text=f"🎉 شما در شرط بندی برنده شدید!\n💰 {total_coins} سکه به حساب شما اضافه شد!"
+                text=f"🎉 شما در شرط‌بندی برنده شدید!\n💰 {total_coins} سکه به حساب شما اضافه شد!"
             )
         except:
             pass
-
+        
         try:
             await context.bot.send_message(
                 chat_id=loser_id,
-                text=f"💔 متأسفانه در شرط بندی بازنده شدید.\n💎 {bet['coin_amount']} سکه از حساب شما کسر شد."
+                text=f"💔 متأسفانه در شرط‌بندی بازنده شدید.\n💎 {bet['coin_amount']} سکه از حساب شما کسر شد."
             )
         except:
             pass
-
+    
     async def join_group_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
         username = query.from_user.username or f"user_{user_id}"
         bet_id = query.data.replace('join_gbet_', '')
-
+        
         if bet_id not in self.group_bets:
-            await query.answer("❌ این شرط بندی منقضی شده است!", show_alert=True)
+            await query.answer("❌ این شرط‌بندی منقضی شده است!", show_alert=True)
             return
-
+        
         bet = self.group_bets[bet_id]
-
+        
         if user_id in bet['participants']:
-            await query.answer("❌ شما قبلاً در این شرط شرکت کرده اید!", show_alert=True)
+            await query.answer("❌ شما قبلاً در این شرط شرکت کرده‌اید!", show_alert=True)
             return
-
+        
         if user_id not in self.user_coins or self.user_coins[user_id] < bet['coin_amount']:
             await query.answer(
                 f"❌ موجودی سکه شما کافی نیست!\n"
@@ -1155,124 +1195,125 @@ class TelegramAuthBot:
                 show_alert=True
             )
             return
-
+        
         bet['participants'].append(user_id)
         self.user_coins[user_id] -= bet['coin_amount']
-
+        
         remaining_time = 300 - (time.time() - bet['created_at'])
         minutes = int(remaining_time // 60)
         seconds = int(remaining_time % 60)
-
+        
         updated_text = (
-            f"🎰 شرط بندی گروهی\n\n"
+            f"🎰●شرط بندی گروهی●🎰\n\n"
             f"👤 سازنده: @{bet['creator_username']}\n"
             f"💌 تعداد کوین: {bet['coin_amount']} سکه\n"
             f"💰 مبلغ: {bet['coin_amount'] * 200:,} تومن\n"
-            f"👥 شرکت کنندگان: {len(bet['participants'])} نفر\n\n"
-            f"⏰ زمان باقی مانده: {minutes:02d}:{seconds:02d}"
+            f"👥 شرکت‌کنندگان: {len(bet['participants'])} نفر\n\n"
+            f"⏰ زمان باقی‌مانده: {minutes:02d}:{seconds:02d}"
         )
-
+        
         await query.edit_message_text(
             updated_text,
             reply_markup=self.create_group_bet_keyboard(bet_id)
         )
-
+        
         await query.answer(f"✅ شما با موفقیت به شرط پیوستید! {bet['coin_amount']} سکه از حساب شما کسر شد.")
-
+    
     async def cancel_group_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
+        
         user_id = query.from_user.id
         bet_id = query.data.replace('cancel_gbet_', '')
-
+        
         if bet_id not in self.group_bets:
-            await query.answer("❌ این شرط بندی منقضی شده است!", show_alert=True)
+            await query.answer("❌ این شرط‌بندی منقضی شده است!", show_alert=True)
             return
-
+        
         bet = self.group_bets[bet_id]
-
+        
         if user_id != bet['creator_id']:
-            await query.answer("❌ فقط سازنده شرط می تواند آن را لغو کند!", show_alert=True)
+            await query.answer("❌ فقط سازنده شرط می‌تواند آن را لغو کند!", show_alert=True)
             return
-
+        
         for participant_id in bet['participants']:
             if participant_id in self.user_coins:
                 self.user_coins[participant_id] += bet['coin_amount']
-
+        
         await query.edit_message_text(
-            f"❌ شرط بندی گروهی توسط سازنده لغو شد!\n\n"
+            f"❌ شرط‌بندی گروهی توسط سازنده لغو شد!\n\n"
             f"💌 تعداد کوین: {bet['coin_amount']} سکه\n"
-            f"👥 شرکت کنندگان: {len(bet['participants'])} نفر\n"
-            f"💎 سکه ها به حساب همه بازگردانده شد."
+            f"👥 شرکت‌کنندگان: {len(bet['participants'])} نفر\n"
+            f"💎 سکه‌ها به حساب همه بازگردانده شد."
         )
-
+        
         del self.group_bets[bet_id]
-
+    
     async def create_invite_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        username = update.message.from_user.username or f"user_{user_id}"
+        
         invite_code = secrets.token_urlsafe(8)
         self.invite_links[invite_code] = user_id
-
+        
         invite_link = f"https://t.me/{context.bot.username}?start={invite_code}"
         referrals_count = len(self.user_referrals.get(user_id, []))
-
+        
         invite_text = (
-            f"🎫 لینک دعوت شما\n\n"
-            f"🔗 لینک: {invite_link}\n\n"
-            f"💎 مزایا:\n"
-            f"• به ازای هر دعوت: 7 سکه پاداش\n"
-            f"• دعوت شده: 3 سکه هدیه اولیه\n"
+            f"🎫 **لینک دعوت شما**\n\n"
+            f"🔗 لینک: `{invite_link}`\n\n"
+            f"💎 **مزایا:**\n"
+            f"• به ازای هر دعوت: **7 سکه** پاداش\n"
+            f"• دعوت شده: **3 سکه** هدیه اولیه\n"
             f"• بدون محدودیت تعداد دعوت\n\n"
-            f"📊 آمار دعوت های شما: {referrals_count} نفر\n"
-            f"💰 سکه های کسب شده: {referrals_count * 7} سکه"
+            f"📊 آمار دعوت‌های شما: {referrals_count} نفر\n"
+            f"💰 سکه‌های کسب شده: {referrals_count * 7} سکه"
         )
-
-        await update.message.reply_text(invite_text)
-
+        
+        await update.message.reply_text(invite_text, parse_mode='Markdown')
+    
     async def show_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._show_balance(update, context)
-
+    
     async def show_balance_farsi(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._show_balance(update, context)
-
+    
     async def _show_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         username = update.message.from_user.first_name or "کاربر"
         user_coins = self.user_coins.get(user_id, 0)
         total_value = user_coins * 200
         current_time = datetime.now().strftime("%H:%M:%S")
-
+        
         balance_text = (
             f"🥃 کاربر: {username}\n"
             f"🚜 موجودی: {user_coins} سکه\n"
             f"🫟 قیمت: {total_value:,} تومن\n"
             f"🍺 ساعت: {current_time}"
         )
-
+        
         await update.message.reply_text(balance_text)
-
+    
     async def transfer_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._transfer_coins(update, context)
-
+    
     async def transfer_coins_farsi(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._transfer_coins(update, context)
-
+    
     async def _transfer_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
         username = update.message.from_user.username or f"user_{user_id}"
-
+        
         if not update.message.reply_to_message:
             await update.message.reply_text(
                 "❌ لطفاً روی پیام کاربر مورد نظر ریپلای کنید و دستور را ارسال نمایید:\n"
-                "مثال: انتقال 10 یا /transfer 10"
+                "مثال: `انتقال 10` یا `/transfer 10`"
             )
             return
-
+        
         message_text = update.message.text
         coin_amount = 0
-
+        
         try:
             if message_text.startswith('/transfer') and context.args:
                 coin_amount = int(context.args[0])
@@ -1283,20 +1324,20 @@ class TelegramAuthBot:
             else:
                 await update.message.reply_text(
                     "❌ فرمت دستور نادرست است!\n"
-                    "مثال: انتقال 10 یا /transfer 10"
+                    "مثال: `انتقال 10` یا `/transfer 10`"
                 )
                 return
         except (ValueError, IndexError):
             await update.message.reply_text(
                 "❌ لطفاً تعداد سکه را به درستی مشخص کنید:\n"
-                "مثال: انتقال 10 یا /transfer 10"
+                "مثال: `انتقال 10` یا `/transfer 10`"
             )
             return
-
+        
         if coin_amount <= 0:
             await update.message.reply_text("❌ تعداد سکه باید بیشتر از صفر باشد!")
             return
-
+        
         if user_id not in self.user_coins or self.user_coins[user_id] < coin_amount:
             await update.message.reply_text(
                 f"❌ موجودی سکه شما کافی نیست!\n"
@@ -1304,31 +1345,31 @@ class TelegramAuthBot:
                 f"💸 سکه مورد نیاز: {coin_amount} سکه"
             )
             return
-
+        
         target_user = update.message.reply_to_message.from_user
         target_user_id = target_user.id
         target_username = target_user.first_name or "کاربر"
-
+        
         if target_user_id == user_id:
-            await update.message.reply_text("❌ نمی توانید به خودتان سکه انتقال دهید!")
+            await update.message.reply_text("❌ نمی‌توانید به خودتان سکه انتقال دهید!")
             return
-
+        
         self.user_coins[user_id] -= coin_amount
         if target_user_id not in self.user_coins:
             self.user_coins[target_user_id] = 0
         self.user_coins[target_user_id] += coin_amount
-
+        
         transfer_text = (
-            f"💸 انتقال سکه انجام شد\n\n"
+            f"💸 **انتقال سکه انجام شد**\n\n"
             f"👤 از: {username}\n"
             f"👥 به: {target_username}\n"
             f"💰 مبلغ: {coin_amount} سکه\n"
             f"💎 ارزش: {coin_amount * 200:,} تومن\n"
             f"🕐 زمان: {datetime.now().strftime('%H:%M:%S')}"
         )
-
+        
         await update.message.reply_text(transfer_text)
-
+        
         try:
             await context.bot.send_message(
                 chat_id=target_user_id,
@@ -1337,58 +1378,58 @@ class TelegramAuthBot:
             )
         except:
             pass
-
+    
     async def kasr_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        
         if not self.is_owner(user_id):
             await update.message.reply_text("❌ شما دسترسی به این دستور را ندارید!")
             return
-
+        
         if not update.message.reply_to_message:
             await update.message.reply_text(
                 "❌ لطفاً روی پیام کاربر مورد نظر ریپلای کنید و دستور را ارسال نمایید:\n"
-                "مثال: /kasr 10"
+                "مثال: `/kasr 10`"
             )
             return
-
+        
         if not context.args:
             await update.message.reply_text(
                 "❌ لطفاً تعداد سکه را مشخص کنید:\n"
-                "مثال: /kasr 10"
+                "مثال: `/kasr 10`"
             )
             return
-
+        
         try:
             coin_amount = int(context.args[0])
             if coin_amount <= 0:
                 await update.message.reply_text("❌ تعداد سکه باید بیشتر از صفر باشد!")
                 return
-
+            
             target_user = update.message.reply_to_message.from_user
             target_user_id = target_user.id
             target_username = target_user.first_name or "کاربر"
-
+            
             current_coins = self.user_coins.get(target_user_id, 0)
-
+            
             if current_coins < coin_amount:
                 coins_to_deduct = current_coins
                 self.user_coins[target_user_id] = 0
             else:
                 coins_to_deduct = coin_amount
                 self.user_coins[target_user_id] -= coin_amount
-
+            
             kasr_text = (
-                f"⚡ کسر سکه توسط مالک\n\n"
+                f"⚡ **کسر سکه توسط مالک**\n\n"
                 f"👤 کاربر: {target_username}\n"
-                f"🆔 آیدی: {target_user_id}\n"
+                f"🆔 آیدی: `{target_user_id}`\n"
                 f"💰 مبلغ کسر شده: {coins_to_deduct} سکه\n"
                 f"💎 موجودی جدید: {self.user_coins.get(target_user_id, 0)} سکه\n"
                 f"🕐 زمان: {datetime.now().strftime('%H:%M:%S')}"
             )
-
+            
             await update.message.reply_text(kasr_text)
-
+            
             try:
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -1397,57 +1438,57 @@ class TelegramAuthBot:
                 )
             except:
                 pass
-
+                
         except ValueError:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-
+    
     async def add_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        
         if not self.is_owner(user_id):
             await update.message.reply_text("❌ شما دسترسی به این دستور را ندارید!")
             return
-
+        
         if not update.message.reply_to_message:
             await update.message.reply_text(
                 "❌ لطفاً روی پیام کاربر مورد نظر ریپلای کنید و دستور را ارسال نمایید:\n"
-                "مثال: /addcoins 10"
+                "مثال: `/addcoins 10`"
             )
             return
-
+        
         if not context.args:
             await update.message.reply_text(
                 "❌ لطفاً تعداد سکه را مشخص کنید:\n"
-                "مثال: /addcoins 10"
+                "مثال: `/addcoins 10`"
             )
             return
-
+        
         try:
             coin_amount = int(context.args[0])
             if coin_amount <= 0:
                 await update.message.reply_text("❌ تعداد سکه باید بیشتر از صفر باشد!")
                 return
-
+            
             target_user = update.message.reply_to_message.from_user
             target_user_id = target_user.id
             target_username = target_user.first_name or "کاربر"
-
+            
             if target_user_id not in self.user_coins:
                 self.user_coins[target_user_id] = 0
-
+            
             self.user_coins[target_user_id] += coin_amount
-
+            
             add_text = (
-                f"🎁 افزودن سکه توسط مالک\n\n"
+                f"🎁 **افزودن سکه توسط مالک**\n\n"
                 f"👤 کاربر: {target_username}\n"
-                f"🆔 آیدی: {target_user_id}\n"
+                f"🆔 آیدی: `{target_user_id}`\n"
                 f"💰 مبلغ افزوده شده: {coin_amount} سکه\n"
                 f"💎 موجودی جدید: {self.user_coins.get(target_user_id, 0)} سکه\n"
                 f"🕐 زمان: {datetime.now().strftime('%H:%M:%S')}"
             )
-
+            
             await update.message.reply_text(add_text)
-
+            
             try:
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -1456,60 +1497,60 @@ class TelegramAuthBot:
                 )
             except:
                 pass
-
+                
         except ValueError:
             await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-
+    
     async def get_user_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.message.from_user.id
-
+        
         if not self.is_owner(user_id):
             await update.message.reply_text("❌ شما دسترسی به این دستور را ندارید!")
             return
-
+        
         if not update.message.reply_to_message:
             await update.message.reply_text(
                 "❌ لطفاً روی پیام کاربر مورد نظر ریپلای کنید و دستور را ارسال نمایید:\n"
-                "مثال: /id"
+                "مثال: `/id`"
             )
             return
-
+        
         target_user = update.message.reply_to_message.from_user
         target_user_id = target_user.id
         target_username = target_user.username or "ندارد"
         target_first_name = target_user.first_name or "ندارد"
         target_last_name = target_user.last_name or "ندارد"
-
+        
         user_coins = self.user_coins.get(target_user_id, 0)
         total_value = user_coins * 200
-
+        
         user_info_text = (
-            f"👤 اطلاعات کاربر\n\n"
-            f"🆔 آیدی عددی: {target_user_id}\n"
-            f"👁️ نام کاربری: @{target_username}\n"
-            f"📛 نام: {target_first_name}\n"
-            f"📛 نام خانوادگی: {target_last_name}\n"
-            f"💰 تعداد سکه: {user_coins}\n"
-            f"💎 ارزش سکه ها: {total_value:,} تومن\n"
-            f"🎯 وضعیت سلف: {'فعال' if target_user_id in self.active_selfbots else 'غیرفعال'}\n"
-            f"📊 تعداد دعوت ها: {len(self.user_referrals.get(target_user_id, []))}\n"
-            f"🕐 زمان: {datetime.now().strftime('%H:%M:%S')}"
+            f"👤 **اطلاعات کاربر**\n\n"
+            f"🆔 **آیدی عددی:** `{target_user_id}`\n"
+            f"👁️ **نام کاربری:** @{target_username}\n"
+            f"📛 **نام:** {target_first_name}\n"
+            f"📛 **نام خانوادگی:** {target_last_name}\n"
+            f"💰 **تعداد سکه:** {user_coins}\n"
+            f"💎 **ارزش سکه‌ها:** {total_value:,} تومن\n"
+            f"🎯 **وضعیت سلف:** {'فعال' if target_user_id in self.active_selfbots else 'غیرفعال'}\n"
+            f"📊 **تعداد دعوت‌ها:** {len(self.user_referrals.get(target_user_id, []))}\n"
+            f"🕐 **زمان:** {datetime.now().strftime('%H:%M:%S')}"
         )
-
-        await update.message.reply_text(user_info_text)
-
+        
+        await update.message.reply_text(user_info_text, parse_mode='Markdown')
+    
     def run(self):
         print("🤖 ربات SelfStruct System در حال اجراست...")
         print("🔑 API ID:", self.api_id)
         print("👑 مالک ربات:", self.owner_id)
         print("💰 موجودی مالک: نامحدود")
-
+        
         try:
             requests.get(f"https://api.telegram.org/bot{self.token}/deleteWebhook")
             print("✅ Webhook پاک شد")
         except:
             pass
-
+        
         self.application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             timeout=60,
@@ -1524,6 +1565,6 @@ if __name__ == "__main__":
     BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg"
     API_ID = 34996139
     API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
-
+    
     bot = TelegramAuthBot(BOT_TOKEN, API_ID, API_HASH)
     bot.run()

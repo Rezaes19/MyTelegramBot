@@ -1,10 +1,6 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.tl.functions.channels import GetParticipantRequest
-from telethon.errors import UserNotParticipantError
 import asyncio
 import time
 import secrets
@@ -13,6 +9,8 @@ import subprocess
 import sys
 import sqlite3
 import random
+import requests
+import json
 from datetime import datetime
 
 logging.basicConfig(
@@ -47,6 +45,7 @@ class TelegramAuthBot:
         self.active_bets = {}
         self.group_bets = {}
 
+        # کانال‌های اجباری
         self.required_channels = ["SelfMR1", "SELF_MR0"]
         self.owner_id = 6691993264
 
@@ -113,6 +112,30 @@ class TelegramAuthBot:
 
     def is_owner(self, user_id: int) -> bool:
         return user_id == self.owner_id
+
+    async def check_channel_membership(self, user_id: int, channel_username: str) -> bool:
+        """بررسی عضویت کاربر در کانال با استفاده از API تلگرام"""
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/getChatMember"
+            params = {
+                "chat_id": f"@{channel_username}",
+                "user_id": user_id
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+            
+            if data.get("ok"):
+                status = data["result"].get("status")
+                # status های معتبر: member, administrator, creator
+                return status in ["member", "administrator", "creator"]
+            else:
+                logging.error(f"API Error: {data}")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error checking membership for {channel_username}: {e}")
+            return False
 
     def create_welcome_keyboard(self):
         keyboard = [
@@ -280,8 +303,8 @@ class TelegramAuthBot:
         welcome_text = (
             "🔰 به ربات خوش آمدید!\n\n"
             "برای استفاده از ربات باید در کانال های زیر عضو شوید:\n"
-            "@SelfMR1\n"
-            "@SELF_MR0\n\n"
+            "📌 @SelfMR1\n"
+            "📌 @SELF_MR0\n\n"
             "پس از عضویت، روی دکمه ✅ بررسی عضویت کلیک کنید."
         )
 
@@ -304,61 +327,38 @@ class TelegramAuthBot:
             )
             return CHECK_MEMBERSHIP
 
-        await query.edit_message_text("🔍 در حال بررسی عضویت شما...")
+        await query.edit_message_text("⏳ در حال بررسی عضویت شما...")
 
-        try:
-            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
-            await client.start(bot_token=self.token)
+        not_member_channels = []
 
-            all_members = True
-            not_member_channels = []
+        for channel in self.required_channels:
+            is_member = await self.check_channel_membership(user_id, channel)
+            if not is_member:
+                not_member_channels.append(f"@{channel}")
 
-            for channel_username in self.required_channels:
-                try:
-                    channel = await client.get_entity(channel_username)
-                    await client(GetParticipantRequest(channel=channel, participant=user_id))
-                except UserNotParticipantError:
-                    all_members = False
-                    not_member_channels.append(f"@{channel_username}")
-                except Exception as e:
-                    logging.error(f"Error checking channel {channel_username}: {e}")
-                    all_members = False
-                    not_member_channels.append(f"@{channel_username}")
+        if not not_member_channels:
+            await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
 
-            if all_members:
-                await query.edit_message_text("🎉 عضویت شما در هر دو کانال تأیید شد!")
+            activation_text = (
+                "💡 پنل اصلی ربات\n\n"
+                "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
+                "🚀 فعال سازی سلف\n"
+                "💰 خرید سکه\n"
+                "📊 آمار و موجودی\n"
+                "🎫 لینک دعوت"
+            )
 
-                activation_text = (
-                    "💡 پنل اصلی ربات\n\n"
-                    "از دکمه های زیر برای استفاده از ربات استفاده کنید:\n"
-                    "🚀 فعال سازی سلف\n"
-                    "💰 خرید سکه\n"
-                    "📊 آمار و موجودی\n"
-                    "🎫 لینک دعوت"
-                )
-
-                await query.edit_message_text(
-                    text=activation_text,
-                    reply_markup=self.create_activation_keyboard()
-                )
-
-                await client.disconnect()
-                return ACTIVATION_PANEL
-            else:
-                channels_text = "\n".join(not_member_channels)
-                await query.edit_message_text(
-                    f"❌ شما هنوز در همه کانال ها عضو نشده اید!\n\n"
-                    f"کانال های مورد نیاز:\n{channels_text}\n\n"
-                    f"لطفاً ابتدا به همه کانال ها بپیوندید سپس روی '✅ بررسی عضویت' کلیک کنید.",
-                    reply_markup=self.create_welcome_keyboard()
-                )
-                await client.disconnect()
-                return CHECK_MEMBERSHIP
-
-        except Exception as e:
-            logging.error(f"Error checking membership: {e}")
             await query.edit_message_text(
-                "❌ خطا در بررسی عضویت!\n\nلطفاً دوباره تلاش کنید.",
+                text=activation_text,
+                reply_markup=self.create_activation_keyboard()
+            )
+            return ACTIVATION_PANEL
+        else:
+            channels_text = "\n".join(not_member_channels)
+            await query.edit_message_text(
+                f"❌ شما هنوز در همه کانال ها عضو نشده اید!\n\n"
+                f"کانال های مورد نیاز:\n{channels_text}\n\n"
+                f"لطفاً ابتدا به همه کانال ها بپیوندید سپس روی '✅ بررسی عضویت' کلیک کنید.",
                 reply_markup=self.create_welcome_keyboard()
             )
             return CHECK_MEMBERSHIP
@@ -628,13 +628,20 @@ class TelegramAuthBot:
         try:
             processing_msg = await update.message.reply_text("⏳ در حال ارسال کد تأیید...")
 
-            result = await self.send_verification_code(phone_number, user_id)
+            # استفاده از Telethon برای ارسال کد
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
 
-            if result['success']:
+            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
+            await client.connect()
+
+            try:
+                result = await client.send_code_request(phone_number)
+                
                 self.user_sessions[user_id] = {
                     'phone_number': phone_number,
-                    'phone_code_hash': result['phone_code_hash'],
-                    'client': result['client'],
+                    'phone_code_hash': result.phone_code_hash,
+                    'client': client,
                     'timestamp': time.time(),
                     'entered_code': ''
                 }
@@ -651,12 +658,19 @@ class TelegramAuthBot:
 
                 return GET_CODE
 
-            else:
-                await processing_msg.edit_text(
-                    f"❌ خطا در ارسال کد تأیید:\n{result['error']}\n\n"
-                    "لطفاً شماره دیگری وارد نمایید:",
-                    reply_markup=self.create_phone_keyboard()
-                )
+            except Exception as e:
+                await client.disconnect()
+                error_msg = str(e)
+                if "FLOOD" in error_msg:
+                    await processing_msg.edit_text(
+                        "❌ تعداد درخواست ها زیاد است. لطفاً چند دقیقه صبر کنید.",
+                        reply_markup=self.create_phone_keyboard()
+                    )
+                else:
+                    await processing_msg.edit_text(
+                        f"❌ خطا در ارسال کد: {error_msg}\n\nلطفاً دوباره تلاش کنید.",
+                        reply_markup=self.create_phone_keyboard()
+                    )
                 return GET_PHONE
 
         except Exception as e:
@@ -666,33 +680,6 @@ class TelegramAuthBot:
                 reply_markup=self.create_phone_keyboard()
             )
             return GET_PHONE
-
-    async def send_verification_code(self, phone_number: str, user_id: int):
-        try:
-            client = TelegramClient(StringSession(), self.api_id, self.api_hash)
-            await client.connect()
-
-            result = await client.send_code_request(phone_number)
-
-            return {
-                'success': True,
-                'phone_code_hash': result.phone_code_hash,
-                'client': client,
-                'message': 'کد تأیید با موفقیت ارسال شد'
-            }
-
-        except Exception as e:
-            logging.error(f"Telethon error in send_verification_code: {e}")
-
-            error_message = str(e)
-            if "FLOOD" in error_message:
-                return {'success': False, 'error': 'تعداد درخواست ها زیاد است. لطفاً چند دقیقه صبر کنید.'}
-            elif "PHONE_NUMBER_INVALID" in error_message:
-                return {'success': False, 'error': 'شماره تلفن معتبر نیست.'}
-            elif "PHONE_NUMBER_BANNED" in error_message:
-                return {'success': False, 'error': 'شماره تلفن مسدود شده است.'}
-            else:
-                return {'success': False, 'error': f'خطا در ارسال کد: {error_message}'}
 
     async def verify_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query

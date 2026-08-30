@@ -41,7 +41,7 @@ def patch_peer_id_validation():
 
 patch_peer_id_validation()
 API_ID = 34996139
-API_HASH = "00877cdcd706564a4de6abf7f7d64349"
+API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 BOT_TOKEN = "8484770380:AAFG8PDYIwfRj3HD5QvZZtWwXuufisLTtXc" 
 
 GOD_ADMIN_IDS = [6691993264, 7831049189]

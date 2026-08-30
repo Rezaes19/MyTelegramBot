@@ -1,12 +1,4 @@
-telethon==1.34.0
-psutil
-aiohttp
-asyncio
-aiocron
-aiofiles
-pytz
-googletrans==4.0.0-rc1
-gtts
-google_play_scraper
-numpy
-matplotlib
+pyrogram==2.0.106
+tgcrypto==1.2.5
+aiohttp==3.9.1
+yt-dlp==2024.12.13

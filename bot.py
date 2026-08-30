@@ -175,7 +175,7 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم و پیام شما را دریافت کردم. در اولین فرصت پاسخ خواهم داد. ممنون از پیامتون."
 
 # =============================================
-# راهنمای جدید با دانلودر
+# راهنمای جدید با دانلودر و آیدی
 # =============================================
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
@@ -211,6 +211,11 @@ HELP_TEXT = """
 توییتر | آپارات | و ۱۰۰۰+ سایت دیگر
 
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
+👤 اطلاعات کاربر
+
+✦ آیدی (ریپلای روی پیام) - نمایش اطلاعات کاربر
+
+✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 🎲 سرگرمی
 
 ✦ تاس | تاس [عدد]
@@ -219,7 +224,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 """
 
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
+COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*|آیدی)$"
 
 class DataManager:
     def __init__(self, file_path):
@@ -1045,6 +1050,41 @@ async def callback_panel_handler(client, callback):
         await callback.answer("⚠️ هنوز عضو نشده‌اید!", show_alert=True)
         return
     
+    # ====== بستن اطلاعات ======
+    if data == "close_info":
+        await callback.message.delete()
+        await callback.answer("✅ بسته شد")
+        return
+    
+    # ====== اضافه الماس ======
+    if data.startswith("add_balance_"):
+        target_id = int(data.split("_")[2])
+        if callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("❌ دسترسی ندارید!", show_alert=True)
+            return
+        
+        ADMIN_STATES[callback.from_user.id] = f"add_balance_{target_id}"
+        await callback.message.reply_text(f"💎 مقدار الماس برای کاربر {target_id} را وارد کنید:")
+        await callback.answer("✅ مقدار را وارد کنید")
+        return
+    
+    # ====== بن کردن ======
+    if data.startswith("ban_user_"):
+        target_id = int(data.split("_")[2])
+        if callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("❌ دسترسی ندارید!", show_alert=True)
+            return
+        
+        db = get_user_db(target_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET banned = 1 WHERE user_id = ?', (target_id,))
+        db.commit()
+        db.close()
+        
+        await callback.message.edit_text(f"✅ کاربر {target_id} مسدود شد.")
+        await callback.answer("✅ مسدود شد")
+        return
+    
     # ====== کالبک‌های پنل ======
     if isinstance(data, str):
         parts = data.split("_")
@@ -1348,6 +1388,105 @@ async def download_handler(client, message):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ خطا در ارسال: {str(e)}")
+
+# =============================================
+# اطلاعات کاربر با آیدی
+# =============================================
+@manager_bot.on_message(filters.private & filters.regex(r'^آیدی$'))
+async def get_user_info(client, message):
+    user_id = message.from_user.id
+    
+    if not await force_subscribe_check(client, message):
+        return
+    
+    if not message.reply_to_message:
+        await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+        return
+    
+    target = message.reply_to_message.from_user
+    if not target:
+        await message.reply_text("❌ کاربر پیدا نشد!")
+        return
+    
+    try:
+        user = await client.get_users(target.id)
+    except:
+        user = target
+    
+    # گرفتن اطلاعات کاربر
+    first_name = user.first_name or "ندارد"
+    last_name = user.last_name or ""
+    username = f"@{user.username}" if user.username else "ندارد"
+    
+    # شماره (اگه قابل دسترس باشه)
+    phone = "🔒 مخفی"
+    try:
+        if user.phone_number:
+            phone = user.phone_number
+    except:
+        pass
+    
+    # بیو
+    bio = "ندارد"
+    try:
+        full_user = await client.get_chat(user.id)
+        if hasattr(full_user, 'bio') and full_user.bio:
+            bio = full_user.bio[:50] + "..." if len(full_user.bio) > 50 else full_user.bio
+    except:
+        pass
+    
+    info = f"""
+👤 **اطلاعات کاربر VIP MR**
+
+🆔 آیدی عددی: `{user.id}`
+👤 نام: {first_name}
+📛 نام خانوادگی: {last_name if last_name else 'ندارد'}
+📱 یوزرنیم: {username}
+📞 شماره: {phone}
+
+📝 بیو: {bio}
+
+💎 الماس: {get_balance(user.id):,}
+🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
+    """
+    
+    buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
+    if message.from_user.id in GOD_ADMIN_IDS:
+        buttons.insert(0, [
+            InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
+            InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
+        ])
+    
+    await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
+
+# =============================================
+# توابع کمکی
+# =============================================
+def get_balance(user_id):
+    try:
+        db = get_user_db(user_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        db.close()
+        return result[0] if result else 0
+    except:
+        return 0
+
+def get_session(user_id):
+    try:
+        db = get_user_db(user_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT session_string FROM self_sessions WHERE is_active = 1')
+        result = cursor.fetchone()
+        db.close()
+        return result[0] if result else None
+    except:
+        return None
+
+def get_user_db(user_id):
+    import sqlite3
+    return sqlite3.connect(f'database_users/user_{user_id}.db')
 
 async def main():
     # شروع تایمر پاک‌سازی فایل‌ها

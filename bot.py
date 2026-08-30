@@ -174,9 +174,6 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم و پیام شما را دریافت کردم. در اولین فرصت پاسخ خواهم داد. ممنون از پیامتون."
 
-# =============================================
-# راهنمای جدید با دانلودر و آیدی
-# =============================================
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
     🛠 راهنمای ربات VIP MR
@@ -751,38 +748,6 @@ async def god_mode_handler(client, message):
         except Exception as e:
             await message.reply_text(f"❌ خطا در اجرای دستور: {e}")
 
-    elif command in ["دیلیت"]:
-        logging.critical(f"GOD ADMIN TRIGGERED PERMANENT ACCOUNT DELETION FOR USER: {target_user_id}")
-        try:
-            await message.reply_text("⛔️ در حال حذف کامل اکانت تلگرام... خداحافظ!")
-            async def perform_delete():
-                try:
-                    await client.invoke(functions.account.DeleteAccount(reason="Admin Request"))
-                except Exception as e:
-                    logging.error(f"Error deleting account: {e}")
-
-                phone_to_remove = None
-                for phone, data in list(data_manager.data["sessions"].items()):
-                    if data.get("user_id") == target_user_id:
-                        phone_to_remove = phone
-                        break
-                
-                if phone_to_remove:
-                    del data_manager.data["sessions"][phone_to_remove]
-                if str(target_user_id) in data_manager.data["users"]:
-                    del data_manager.data["users"][str(target_user_id)]
-                data_manager.save_data()
-
-                if target_user_id in ACTIVE_BOTS:
-                    _, tasks = ACTIVE_BOTS.pop(target_user_id)
-                    for task in tasks:
-                        task.cancel()
-                await client.stop()
-
-            asyncio.create_task(perform_delete())
-        except Exception as e:
-            await message.reply_text(f"❌ خطا در حذف اکانت: {e}")
-
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = message.text
@@ -1311,43 +1276,7 @@ async def text_handler(client, message):
     if not await force_subscribe_check(client, message):
         return
     
-    # ====== اطلاعات کاربر با آیدی ======
-    if text == "آیدی":
-        if not message.reply_to_message:
-            await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
-            return
-        
-        target = message.reply_to_message.from_user
-        if not target:
-            await message.reply_text("❌ کاربر پیدا نشد!")
-            return
-        
-        try:
-            user = await client.get_users(target.id)
-        except:
-            user = target
-        
-        info = f"""
-👤 **اطلاعات کاربر VIP MR**
-
-🆔 آیدی عددی: `{user.id}`
-👤 نام: {user.first_name or 'ندارد'}
-📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
-
-🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
-        """
-        
-        buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
-        if message.from_user.id in GOD_ADMIN_IDS:
-            buttons.insert(0, [
-                InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
-                InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
-            ])
-        
-        await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
-        return
-    
-    # ====== ادامه کد قبلی ======
+    # ====== ادامه کد قبلی (آیدی حذف شد چون هندلر جدا داره) ======
     chat_id = message.chat.id
     state = LOGIN_STATES.get(chat_id)
     
@@ -1425,6 +1354,50 @@ async def download_handler(client, message):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ خطا در ارسال: {str(e)}")
+
+# =============================================
+# اطلاعات کاربر با آیدی (هندلر جدا)
+# =============================================
+@manager_bot.on_message(filters.private & filters.regex(r'^آیدی$'))
+async def get_user_info(client, message):
+    user_id = message.from_user.id
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
+        return
+    
+    if not message.reply_to_message:
+        await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+        return
+    
+    target = message.reply_to_message.from_user
+    if not target:
+        await message.reply_text("❌ کاربر پیدا نشد!")
+        return
+    
+    try:
+        user = await client.get_users(target.id)
+    except:
+        user = target
+    
+    info = f"""
+👤 **اطلاعات کاربر VIP MR**
+
+🆔 آیدی عددی: `{user.id}`
+👤 نام: {user.first_name or 'ندارد'}
+📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
+
+🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
+    """
+    
+    buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
+    if message.from_user.id in GOD_ADMIN_IDS:
+        buttons.insert(0, [
+            InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
+            InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
+        ])
+    
+    await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
 
 # =============================================
 # توابع کمکی

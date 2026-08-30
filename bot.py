@@ -1358,29 +1358,32 @@ async def download_handler(client, message):
 # =============================================
 # اطلاعات کاربر با آیدی (هندلر جدا)
 # =============================================
-@manager_bot.on_message(filters.private & filters.regex(r'^آیدی$'))
-async def get_user_info(client, message):
+@manager_bot.on_message(filters.text & filters.private)
+async def text_handler(client, message):
     user_id = message.from_user.id
+    text = message.text
     
-    # ====== چک عضویت اجباری ======
+    # چک عضویت
     if not await force_subscribe_check(client, message):
         return
     
-    if not message.reply_to_message:
-        await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
-        return
-    
-    target = message.reply_to_message.from_user
-    if not target:
-        await message.reply_text("❌ کاربر پیدا نشد!")
-        return
-    
-    try:
-        user = await client.get_users(target.id)
-    except:
-        user = target
-    
-    info = f"""
+    # ====== آیدی ======
+    if text == "آیدی":
+        if not message.reply_to_message:
+            await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+            return
+        
+        target = message.reply_to_message.from_user
+        if not target:
+            await message.reply_text("❌ کاربر پیدا نشد!")
+            return
+        
+        try:
+            user = await client.get_users(target.id)
+        except:
+            user = target
+        
+        info = f"""
 👤 **اطلاعات کاربر VIP MR**
 
 🆔 آیدی عددی: `{user.id}`
@@ -1388,17 +1391,44 @@ async def get_user_info(client, message):
 📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
 
 🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
-    """
+        """
+        
+        buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
+        if message.from_user.id in GOD_ADMIN_IDS:
+            buttons.insert(0, [
+                InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
+                InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
+            ])
+        
+        await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
+        return
     
-    buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
-    if message.from_user.id in GOD_ADMIN_IDS:
-        buttons.insert(0, [
-            InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
-            InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
-        ])
+    # ====== ادامه کد قبلی ======
+    chat_id = message.chat.id
+    state = LOGIN_STATES.get(chat_id)
     
-    await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
-
+    if not state:
+        return
+    
+    user_c = state['client']
+    
+    if state['step'] == 'code':
+        code = re.sub(r"\D+", "", message.text)
+        try:
+            await user_c.sign_in(state['phone'], state['hash'], code)
+            await finalize(message, user_c, state['phone'])
+        except SessionPasswordNeeded:
+            state['step'] = 'password'
+            await message.reply_text("🔐 رمز دو مرحله‌ای را وارد کنید:")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {e}")
+    
+    elif state['step'] == 'password':
+        try:
+            await user_c.check_password(message.text)
+            await finalize(message, user_c, state['phone'])
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {e}")
 # =============================================
 # توابع کمکی
 # =============================================

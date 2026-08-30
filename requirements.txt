@@ -1,12 +1,7 @@
 telethon
 psutil
-py-tgcalls
 aiohttp
-aiocron
+asyncio
 aiofiles
-googletrans==4.0.0-rc1
-gtts
-google_play_scraper
-numpy
-matplotlib
+pytz
 flask[async]

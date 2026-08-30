@@ -40,12 +40,11 @@ def patch_peer_id_validation():
     logging.info("Pyrogram peer ID validation patched successfully.")
 
 patch_peer_id_validation()
+API_ID = 34996139
+API_HASH = "00877cdcd706564a4de6abf7f7d64349"
+BOT_TOKEN = "8484770380:AAFG8PDYIwfRj3HD5QvZZtWwXuufisLTtXc" 
 
-API_ID = 111111111
-API_HASH = "111111111"
-BOT_TOKEN = "111111111" 
-
-GOD_ADMIN_IDS = [111111111, 111111111, 111111111]
+GOD_ADMIN_IDS = [6691993264, 7831049189]
 
 DATA_FILE = "bot_data.json"
 

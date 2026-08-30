@@ -737,17 +737,25 @@ async def reply_based_controller(client, message):
 
     if cmd == "تاس":
         await client.send_dice(message.chat.id, "🎲")
-    elif cmd == "بولینگ":
+        return
+
+    if cmd == "بولینگ":
         await client.send_dice(message.chat.id, "🎳")
-    elif cmd.startswith("تاس "):
+        return
+
+    if cmd.startswith("تاس "):
         try:
             await client.send_dice(message.chat.id, "🎲", reply_to_message_id=message.reply_to_message_id)
         except:
             pass
-    elif cmd == "لیست دشمن":
+        return
+
+    if cmd == "لیست دشمن":
         enemies = ACTIVE_ENEMIES.get(user_id, set())
         await message.edit_text(f"📜 تعداد دشمنان فعال: {len(enemies)}")
-    elif cmd.startswith("تنظیم منشی "):
+        return
+
+    if cmd.startswith("تنظیم منشی "):
         new_msg = cmd.split("تنظیم منشی ", 1)[1].strip()
         if new_msg:
             SECRETARY_CUSTOM_MESSAGES[user_id] = new_msg
@@ -755,90 +763,110 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"✅ متن منشی تنظیم شد:\n\n`{new_msg}`")
         else:
             await message.edit_text("⚠️ لطفا متن منشی را وارد کنید.")
-    elif message.reply_to_message:
-        target_id = message.reply_to_message.from_user.id if message.reply_to_message.from_user else None
+        return
 
-        if cmd.startswith("حذف "):
-            try:
-                count = int(cmd.split()[1])
-                msg_ids = [m.id async for m in client.get_chat_history(message.chat.id, limit=count) if m.from_user and m.from_user.is_self]
-                if msg_ids:
-                    await client.delete_messages(message.chat.id, msg_ids)
-                await message.delete()
-            except:
-                pass
-        elif cmd == "ذخیره":
-            await message.reply_to_message.forward("me")
-            await message.edit_text("💾 ذخیره شد.")
-        elif cmd.startswith("تکرار "):
-            try:
-                count = int(cmd.split()[1])
-                for _ in range(count):
-                    await message.reply_to_message.copy(message.chat.id)
-                await message.delete()
-            except:
-                pass
-        elif target_id:
-            if cmd == "کپی روشن":
-                user = await client.get_chat(target_id)
-                me = await client.get_me()
-                ORIGINAL_PROFILE_DATA[user_id] = {'first_name': me.first_name, 'bio': me.bio}
-                COPY_MODE_STATUS[user_id] = True
-                CLOCK_STATUS[user_id] = False
-                target_photos = [p async for p in client.get_chat_photos(target_id, limit=1)]
-                await client.update_profile(first_name=user.first_name, bio=(user.bio or "")[:70])
-                if target_photos:
-                    await client.set_profile_photo(photo=target_photos[0].file_id)
-                await message.edit_text("👤 هویت جعل شد.")
-            elif cmd == "کپی خاموش":
-                if user_id in ORIGINAL_PROFILE_DATA:
-                    data = ORIGINAL_PROFILE_DATA[user_id]
-                    COPY_MODE_STATUS[user_id] = False
-                    await client.update_profile(first_name=data.get('first_name'), bio=data.get('bio'))
-                    await message.edit_text("👤 هویت بازگردانده شد.")
-            elif cmd == "دشمن روشن":
-                s = ACTIVE_ENEMIES.get(user_id, set())
-                s.add((target_id, message.chat.id))
-                ACTIVE_ENEMIES[user_id] = s
-                data_manager.save_enemies(user_id, s)
-                await message.edit_text("⚔️ دشمن اضافه شد.")
-            elif cmd == "دشمن خاموش":
-                s = ACTIVE_ENEMIES.get(user_id, set())
-                s.discard((target_id, message.chat.id))
-                ACTIVE_ENEMIES[user_id] = s
-                data_manager.save_enemies(user_id, s)
-                await message.edit_text("🏳️ دشمن حذف شد.")
-            elif cmd == "بلاک روشن":
-                await client.block_user(target_id)
-                await message.edit_text("🚫 کاربر بلاک شد.")
-            elif cmd == "بلاک خاموش":
-                await client.unblock_user(target_id)
-                await message.edit_text("⭕️ کاربر آنبلاک شد.")
-            elif cmd == "سکوت روشن":
-                s = MUTED_USERS.get(user_id, set())
-                s.add((target_id, message.chat.id))
-                MUTED_USERS[user_id] = s
-                data_manager.save_muted(user_id, s)
-                await message.edit_text("🔇 کاربر ساکت شد.")
-            elif cmd == "سکوت خاموش":
-                s = MUTED_USERS.get(user_id, set())
-                s.discard((target_id, message.chat.id))
-                MUTED_USERS[user_id] = s
-                data_manager.save_muted(user_id, s)
-                await message.edit_text("🔊 کاربر از سکوت خارج شد.")
-            elif cmd.startswith("ریاکشن ") and cmd != "ریاکشن خاموش":
-                emoji = cmd.split()[1]
-                t = AUTO_REACTION_TARGETS.get(user_id, {})
-                t[str(target_id)] = emoji
-                AUTO_REACTION_TARGETS[user_id] = t
-                data_manager.save_reactions(user_id, t)
-                await message.edit_text(f"👍 واکنش {emoji} تنظیم شد.")
-            elif cmd == "ریاکشن خاموش":
-                t = AUTO_REACTION_TARGETS.get(user_id, {})
-                t.pop(str(target_id), None)
-                AUTO_REACTION_TARGETS[user_id] = t
-                data_manager.save_reactions(user_id, t)
-                await message.edit_text("❌ واکنش حذف شد.")
+    if not message.reply_to_message:
+        return
+
+    target_id = message.reply_to_message.from_user.id if message.reply_to_message.from_user else None
+
+    if cmd == "ذخیره":
+        await message.reply_to_message.forward("me")
+        await message.edit_text("💾 ذخیره شد.")
+        return
+
+    if cmd.startswith("تکرار "):
+        try:
+            count = int(cmd.split()[1])
+            for _ in range(count):
+                await message.reply_to_message.copy(message.chat.id)
+            await message.delete()
+        except:
+            pass
+        return
+
+    if not target_id:
+        return
+
+    if cmd == "کپی روشن":
+        user = await client.get_chat(target_id)
+        me = await client.get_me()
+        ORIGINAL_PROFILE_DATA[user_id] = {'first_name': me.first_name, 'bio': me.bio}
+        COPY_MODE_STATUS[user_id] = True
+        CLOCK_STATUS[user_id] = False
+        target_photos = [p async for p in client.get_chat_photos(target_id, limit=1)]
+        await client.update_profile(first_name=user.first_name, bio=(user.bio or "")[:70])
+        if target_photos:
+            await client.set_profile_photo(photo=target_photos[0].file_id)
+        await message.edit_text("👤 هویت جعل شد.")
+        return
+
+    if cmd == "کپی خاموش":
+        if user_id in ORIGINAL_PROFILE_DATA:
+            data = ORIGINAL_PROFILE_DATA[user_id]
+            COPY_MODE_STATUS[user_id] = False
+            await client.update_profile(first_name=data.get('first_name'), bio=data.get('bio'))
+            await message.edit_text("👤 هویت بازگردانده شد.")
+        return
+
+    if cmd == "دشمن روشن":
+        s = ACTIVE_ENEMIES.get(user_id, set())
+        s.add((target_id, message.chat.id))
+        ACTIVE_ENEMIES[user_id] = s
+        data_manager.save_enemies(user_id, s)
+        await message.edit_text("⚔️ دشمن اضافه شد.")
+        return
+
+    if cmd == "دشمن خاموش":
+        s = ACTIVE_ENEMIES.get(user_id, set())
+        s.discard((target_id, message.chat.id))
+        ACTIVE_ENEMIES[user_id] = s
+        data_manager.save_enemies(user_id, s)
+        await message.edit_text("🏳️ دشمن حذف شد.")
+        return
+
+    if cmd == "بلاک روشن":
+        await client.block_user(target_id)
+        await message.edit_text("🚫 کاربر بلاک شد.")
+        return
+
+    if cmd == "بلاک خاموش":
+        await client.unblock_user(target_id)
+        await message.edit_text("⭕️ کاربر آنبلاک شد.")
+        return
+
+    if cmd == "سکوت روشن":
+        s = MUTED_USERS.get(user_id, set())
+        s.add((target_id, message.chat.id))
+        MUTED_USERS[user_id] = s
+        data_manager.save_muted(user_id, s)
+        await message.edit_text("🔇 کاربر ساکت شد.")
+        return
+
+    if cmd == "سکوت خاموش":
+        s = MUTED_USERS.get(user_id, set())
+        s.discard((target_id, message.chat.id))
+        MUTED_USERS[user_id] = s
+        data_manager.save_muted(user_id, s)
+        await message.edit_text("🔊 کاربر از سکوت خارج شد.")
+        return
+
+    if cmd.startswith("ریاکشن ") and cmd != "ریاکشن خاموش":
+        emoji = cmd.split()[1]
+        t = AUTO_REACTION_TARGETS.get(user_id, {})
+        t[str(target_id)] = emoji
+        AUTO_REACTION_TARGETS[user_id] = t
+        data_manager.save_reactions(user_id, t)
+        await message.edit_text(f"👍 واکنش {emoji} تنظیم شد.")
+        return
+
+    if cmd == "ریاکشن خاموش":
+        t = AUTO_REACTION_TARGETS.get(user_id, {})
+        t.pop(str(target_id), None)
+        AUTO_REACTION_TARGETS[user_id] = t
+        data_manager.save_reactions(user_id, t)
+        await message.edit_text("❌ واکنش حذف شد.")
+        return
 
 async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'stylized', disable_clock: bool = False):
     client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
@@ -1208,7 +1236,7 @@ async def text_handler(client, message):
     if not await force_subscribe_check(client, message):
         return
 
-    # ====== آیدی (باید اول از همه چک بشه) ======
+    # ====== آیدی ======
     if text and text.strip() == "آیدی":
         if not message.reply_to_message:
             await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
@@ -1243,6 +1271,21 @@ async def text_handler(client, message):
             ])
 
         await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    # ====== حذف [تعداد] ======
+    if text.startswith("حذف "):
+        try:
+            count = int(text.split()[1])
+            msg_ids = []
+            async for m in client.get_chat_history(message.chat.id, limit=count + 1):
+                if m.from_user and m.from_user.is_self:
+                    msg_ids.append(m.id)
+            if msg_ids:
+                await client.delete_messages(message.chat.id, msg_ids)
+            await message.delete()
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
         return
 
     # ====== دانلودر ======
@@ -1319,6 +1362,45 @@ async def text_handler(client, message):
             await finalize(message, user_c, state['phone'])
         except Exception as e:
             await message.reply_text(f"❌ خطا: {e}")
+
+# =============================================
+# آیدی در گروه
+# =============================================
+@manager_bot.on_message(filters.group & filters.regex(r'^آیدی$'))
+async def get_user_info_group(client, message):
+    if not message.reply_to_message:
+        await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+        return
+
+    target = message.reply_to_message.from_user
+    if not target:
+        await message.reply_text("❌ کاربر پیدا نشد!")
+        return
+
+    try:
+        user = await client.get_users(target.id)
+    except Exception as e:
+        await message.reply_text(f"❌ خطا: {str(e)}")
+        return
+
+    info = f"""
+👤 **اطلاعات کاربر VIP MR**
+
+🆔 آیدی عددی: `{user.id}`
+👤 نام: {user.first_name or 'ندارد'}
+📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
+
+🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
+    """
+
+    buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
+    if message.from_user.id in GOD_ADMIN_IDS:
+        buttons.insert(0, [
+            InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
+            InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
+        ])
+
+    await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def finalize(message, user_c, phone):
     s_str = await user_c.export_session_string()

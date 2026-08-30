@@ -745,6 +745,6 @@ async def editAction(event):
 	action = font(match[0])
 	await event.edit(f'⟩••• ᴛʜᴇ {action} αcтιoɴ ɴᴏᴡ ɪs {match[1]}')
 
-bot.start()
+bot.start(bot_token='8763155587:AAFyqwUzGx8VuQlfFWhknqfzmjyxM7zinyg')
 clock.start()
 bot.run_until_disconnected()

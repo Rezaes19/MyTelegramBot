@@ -10,4 +10,3 @@ gtts
 google_play_scraper
 numpy
 matplotlib
-pytgcalls

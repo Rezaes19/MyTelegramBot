@@ -6,9 +6,6 @@ import aiohttp
 import time
 import json
 import random
-import sqlite3
-import sys
-import traceback
 from urllib.parse import quote
 from pyrogram import Client, filters, idle
 from pyrogram.handlers import MessageHandler
@@ -50,11 +47,15 @@ def patch_peer_id_validation():
 
 patch_peer_id_validation()
 
+# =============================================
+# تنظیمات اصلی
+# =============================================
 API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 BOT_TOKEN = "8763155587:AAFyqwUzGx8VuQlfFWhknqfzmjyxM7zinyg" 
 
 GOD_ADMIN_IDS = [6691993264, 7831049189]
+
 # =============================================
 # کانال‌های عضویت اجباری
 # =============================================
@@ -64,12 +65,16 @@ FORCE_CHANNELS = [
 ]
 
 DATA_FILE = "bot_data.json"
-DOWNLOAD_PATH = "downloads"
-MAX_FILE_SIZE = 50 * 1024 * 1024
 
 TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
 LOGIN_STATES = {} 
 ADMIN_STATES = {} 
+
+# =============================================
+# تنظیمات دانلودر
+# =============================================
+DOWNLOAD_PATH = "downloads"
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 مگابایت
 
 if not os.path.exists(DOWNLOAD_PATH):
     os.makedirs(DOWNLOAD_PATH)
@@ -78,6 +83,7 @@ if not os.path.exists(DOWNLOAD_PATH):
 # تابع دانلود
 # =============================================
 async def download_media(url, media_type="video"):
+    """دانلود مدیا از لینک"""
     try:
         ydl_opts = {
             'outtmpl': f'{DOWNLOAD_PATH}/%(title)s.%(ext)s',
@@ -138,28 +144,28 @@ async def cleanup_old_files():
                         pass
 
 ENEMY_REPLIES = [
-    "کیرم تو رحم اجاره ای و خونی مالی مادرت",
-    "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام و اب کوسشو بریزم کف خونه تا فردا صبح کارگرای افغانی برای نظافت اومدن با بوی اب کس مادرت بجقن و ابکیراشون نثار قبر مرده هات بشه",
-    "احمق مادر کونی من کس مادرت گذاشتم تو بازم داری کسشر میگی",
-    "هی بیناموس کیرم بره تو کس ننت واس بابات نشآخ مادر کیری کیرم بره تو کس اجدادت کسکش بیناموس کس ول نسل شوتی ابجی کسده کیرم تو کس مادرت بیناموس کیری کیرم تو کس نسل ابجی کونی کس نسل سگ ممبر کونی ابجی سگ ممبر سگ کونی کیرم تو کس ننت کیر تو کس مادرت کیر خاندان تو کس نسل مادر کونی ابجی کونی کیری ناموس ابجیتو گاییدم سگ حرومی خارکسه مادر کیری با کیر بزنم تو رحم مادرت ناموستو بگام لاشی کونی ابجی کس خیابونی مادرخونی ننت کیرمو میماله تو میای کص میگی شاخ نشو ییا ببین شاخو کردم تو کون ابجی جندت کس ابجیتو پاره کردم تو شاخ میشی اوبی",
-    "کیرم تو کس سیاه مادرت خارکصده",
-    "حروم زاده باک کص ننت با ابکیرم پر میکنم",
-    "منبع اب ایرانو با اب کص مادرت تامین میکنم",
-    "خارکسته میخای مادرتو بگام بعد بیای ادعای شرف کنی کیرم تو شرف مادرت",
-    "کیرم تویه اون خرخره مادرت بیا اینحا ببینم تویه نوچه کی دانلود شدی کیفیتت پایینه صدات نمیاد فقط رویه حالیت بی صدا داری امواج های بی ارزش و بیناموسانه از خودت ارسال میکنی که ناگهان دیدی من روانی شدم دست از پا خطا کردم با تبر کائنات کوبیدم رو سر مادرت نمیتونی مارو تازه بالقه گمان کنی"
-]
+            "کیرم تو رحم اجاره ای و خونی مالی مادرت",
+            "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام و اب کوسشو بریزم کف خونه تا فردا صبح کارگرای افغانی برای نظافت اومدن با بوی اب کس مادرت بجقن و ابکیراشون نثار قبر مرده هات بشه",
+            "احمق مادر کونی من کس مادرت گذاشتم تو بازم داری کسشر میگی",
+            "هی بیناموس کیرم بره تو کس ننت واس بابات نشآخ مادر کیری کیرم بره تو کس اجدادت کسکش بیناموس کس ول نسل شوتی ابجی کسده کیرم تو کس مادرت بیناموس کیری کیرم تو کس نسل ابجی کونی کس نسل سگ ممبر کونی ابجی سگ ممبر سگ کونی کیرم تو کس ننت کیر تو کس مادرت کیر خاندان تو کس نسل مادر کونی ابجی کونی کیری ناموس ابجیتو گاییدم سگ حرومی خارکسه مادر کیری با کیر بزنم تو رحم مادرت ناموستو بگام لاشی کونی ابجی کس خیابونی مادرخونی ننت کیرمو میماله تو میای کص میگی شاخ نشو ییا ببین شاخو کردم تو کون ابجی جندت کس ابجیتو پاره کردم تو شاخ میشی اوبی",
+            "کیرم تو کس سیاه مادرت خارکصده",
+            "حروم زاده باک کص ننت با ابکیرم پر میکنم",
+            "منبع اب ایرانو با اب کص مادرت تامین میکنم",
+            "خارکسته میخای مادرتو بگام بعد بیای ادعای شرف کنی کیرم تو شرف مادرت",
+            "کیرم تویه اون خرخره مادرت بیا اینحا ببینم تویه نوچه کی دانلود شدی کیفیتت پایینه صدات نمیاد فقط رویه حالیت بی صدا داری امواج های بی ارزش و بیناموسانه از خودت ارسال میکنی که ناگهان دیدی من روانی شدم دست از پا خطا کردم با تبر کائنات کوبیدم رو سر مادرت نمیتونی مارو تازه بالقه گمان کنی"
+        ]
 
 FONT_STYLES = {
-    "cursive": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
-    "stylized": {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
+    "cursive":      {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
+    "stylized":     {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
     "doublestruck": {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':':'},
-    "monospace": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
-    "normal": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "circled": {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':'∶'},
-    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
-    "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
-    "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
-    "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
+    "monospace":    {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
+    "normal":       {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "circled":      {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':'∶'},
+    "fullwidth":    {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "filled":       {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "sans":         {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "inverted":     {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
 }
 FONT_KEYS_ORDER = ["cursive", "stylized", "doublestruck", "monospace", "normal", "circled", "fullwidth", "filled", "sans", "inverted"]
 
@@ -168,6 +174,9 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم و پیام شما را دریافت کردم. در اولین فرصت پاسخ خواهم داد. ممنون از پیامتون."
 
+# =============================================
+# راهنمای جدید با دانلودر
+# =============================================
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
     🛠 راهنمای ربات VIP MR
@@ -202,11 +211,6 @@ HELP_TEXT = """
 توییتر | آپارات | و ۱۰۰۰+ سایت دیگر
 
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-👤 اطلاعات کاربر
-
-✦ آیدی (ریپلای) - نمایش اطلاعات کاربر
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 🎲 سرگرمی
 
 ✦ تاس | تاس [عدد]
@@ -215,7 +219,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 """
 
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*|آیدی.*)$"
+COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
 
 class DataManager:
     def __init__(self, file_path):
@@ -223,6 +227,7 @@ class DataManager:
         self.data = self.load_data()
     
     def load_data(self):
+        """Load data from JSON file"""
         if os.path.exists(self.file_path):
             try:
                 with open(self.file_path, 'r', encoding='utf-8') as f:
@@ -237,9 +242,14 @@ class DataManager:
             return self.get_default_data()
     
     def get_default_data(self):
-        return {"users": {}, "sessions": {}}
+        """Default data structure for multiple users"""
+        return {
+            "users": {},
+            "sessions": {}
+        }
     
     def save_data(self):
+        """Save data to JSON file"""
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
@@ -250,6 +260,7 @@ class DataManager:
             return False
     
     def get_user_data(self, user_id):
+        """Get user data by user_id with complete structure"""
         user_id_str = str(user_id)
         
         default_user_structure = {
@@ -301,6 +312,7 @@ class DataManager:
         return user_data
     
     def update_user_data(self, user_id, updates):
+        """Update user data safely"""
         user_data = self.get_user_data(user_id)
         
         for key, value in updates.items():
@@ -317,6 +329,7 @@ class DataManager:
         return user_data
     
     def save_session(self, phone, session_string, user_id, first_name="", username=""):
+        """Save session to data"""
         self.data["sessions"][phone] = {
             "string": session_string,
             "user_id": user_id
@@ -331,71 +344,88 @@ class DataManager:
         self.save_data()
     
     def get_session(self, phone):
+        """Get session by phone"""
         return self.data["sessions"].get(phone)
     
     def get_all_sessions(self):
+        """Get all sessions"""
         return self.data["sessions"].items()
     
     def get_all_users(self):
+        """Get all users data"""
         return self.data["users"]
     
     def save_enemies(self, user_id, enemies_set):
+        """Save enemies list"""
         user_data = self.get_user_data(user_id)
         user_data["enemies"] = [list(item) for item in enemies_set]
         self.save_data()
     
     def get_enemies(self, user_id):
+        """Get enemies list"""
         user_data = self.get_user_data(user_id)
         return set(tuple(item) for item in user_data.get("enemies", []))
     
     def save_muted(self, user_id, muted_set):
+        """Save muted users list"""
         user_data = self.get_user_data(user_id)
         user_data["muted"] = [list(item) for item in muted_set]
         self.save_data()
     
     def get_muted(self, user_id):
+        """Get muted users list"""
         user_data = self.get_user_data(user_id)
         return set(tuple(item) for item in user_data.get("muted", []))
     
     def save_reactions(self, user_id, reactions_dict):
+        """Save reactions"""
         user_data = self.get_user_data(user_id)
         user_data["reactions"] = reactions_dict
         self.save_data()
     
     def get_reactions(self, user_id):
+        """Get reactions"""
         user_data = self.get_user_data(user_id)
         return user_data.get("reactions", {})
     
     def save_replied_users(self, user_id, replied_set):
+        """Save replied users for secretary mode"""
         user_data = self.get_user_data(user_id)
         user_data["replied_users"] = list(replied_set)
         self.save_data()
     
     def get_replied_users(self, user_id):
+        """Get replied users for secretary mode"""
         user_data = self.get_user_data(user_id)
         return set(user_data.get("replied_users", []))
     
     def save_enemy_queue(self, user_id, queue_list):
+        """Save enemy reply queue"""
         user_data = self.get_user_data(user_id)
         user_data["enemy_queue"] = queue_list
         self.save_data()
     
     def get_enemy_queue(self, user_id):
+        """Get enemy reply queue"""
         user_data = self.get_user_data(user_id)
         return user_data.get("enemy_queue", [])
     
     def save_original_profile(self, user_id, profile_data):
+        """Save original profile data"""
         user_data = self.get_user_data(user_id)
         user_data["original_profile"] = profile_data
         self.save_data()
     
     def get_original_profile(self, user_id):
+        """Get original profile data"""
         user_data = self.get_user_data(user_id)
         return user_data.get("original_profile", {})
 
 data_manager = DataManager(DATA_FILE)
 
+
 def load_all_states():
+    """Load all states from data manager"""
     users_data = data_manager.get_all_users()
     
     for user_id_str, user_data in users_data.items():
@@ -417,10 +447,15 @@ def load_all_states():
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
         
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
+        
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
+        
         AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {})
+        
         USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
+        
         ENEMY_REPLY_QUEUES[user_id] = user_data.get("enemy_queue", [])
+        
         ORIGINAL_PROFILE_DATA[user_id] = user_data.get("original_profile", {})
 
 ACTIVE_ENEMIES = {}
@@ -444,7 +479,6 @@ PLAYING_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
 
 ACTIVE_BOTS = {}
-user_steps = {}
 
 load_all_states()
 
@@ -452,6 +486,7 @@ load_all_states()
 # توابع چک عضویت اجباری
 # =============================================
 async def is_user_subscribed(user_id, channel):
+    """چک کردن عضویت کاربر در کانال"""
     try:
         await manager_bot.get_chat_member(channel, user_id)
         return True
@@ -461,6 +496,7 @@ async def is_user_subscribed(user_id, channel):
         return False
 
 async def check_all_channels(user_id):
+    """چک کردن عضویت در همه کانال‌ها"""
     not_subscribed = []
     for channel in FORCE_CHANNELS:
         if not await is_user_subscribed(user_id, channel):
@@ -468,6 +504,7 @@ async def check_all_channels(user_id):
     return not_subscribed
 
 async def force_subscribe_check(client, message):
+    """تابع کمکی برای چک عضویت و نمایش پیام"""
     user_id = message.from_user.id
     not_subscribed = await check_all_channels(user_id)
     
@@ -1228,168 +1265,90 @@ async def contact_handler(client, message):
 @manager_bot.on_message(filters.text & filters.private)
 async def text_handler(client, message):
     user_id = message.from_user.id
-    text = message.text
     
     # ====== چک عضویت اجباری ======
     if not await force_subscribe_check(client, message):
         return
     
     # ====== ادامه کد قبلی ======
+    chat_id = message.chat.id
+    state = LOGIN_STATES.get(chat_id)
     
-    # ====== دستور راهنما ======
-    if text == "راهنما":
-        await message.reply_text(HELP_TEXT)
+    if not state:
         return
     
-    # ====== دانلودر ======
-    if text.startswith("دانلود "):
-        url = text.replace("دانلود ", "").strip()
-        if not url.startswith("http"):
-            await message.reply_text("❌ لینک نامعتبر است!")
-            return
-        
-        status_msg = await message.reply_text("⏳ در حال دانلود ویدیو...")
-        filename, error = await download_media(url, "video")
-        
-        if error:
-            await status_msg.edit_text(error)
-            return
-        
+    user_c = state['client']
+    
+    if state['step'] == 'code':
+        code = re.sub(r"\D+", "", message.text)
         try:
-            await message.reply_video(filename, caption="✅ ویدیو دانلود شد!")
-            await status_msg.delete()
-            os.remove(filename)
+            await user_c.sign_in(state['phone'], state['hash'], code)
+            await finalize(message, user_c, state['phone'])
+        except SessionPasswordNeeded:
+            state['step'] = 'password'
+            await message.reply_text("🔐 رمز دو مرحله‌ای را وارد کنید:")
         except Exception as e:
-            await status_msg.edit_text(f"❌ خطا: {str(e)}")
+            await message.reply_text(f"❌ خطا: {e}")
+    
+    elif state['step'] == 'password':
+        try:
+            await user_c.check_password(message.text)
+            await finalize(message, user_c, state['phone'])
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {e}")
+
+async def finalize(message, user_c, phone):
+    s_str = await user_c.export_session_string()
+    me = await user_c.get_me()
+    await user_c.disconnect()
+    
+    data_manager.save_session(phone, s_str, me.id, me.first_name or "", me.username or "")
+    
+    asyncio.create_task(start_bot_instance(s_str, phone, me.id, 'stylized'))
+    
+    del LOGIN_STATES[message.chat.id]
+    await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
+
+# =============================================
+# دانلودر - هندلر جدید
+# =============================================
+@manager_bot.on_message(filters.private & (filters.regex(r'^دانلود\s+.+') | filters.regex(r'^صوت\s+.+')))
+async def download_handler(client, message):
+    user_id = message.from_user.id
+    text = message.text
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
         return
     
-    if text.startswith("صوت "):
-        url = text.replace("صوت ", "").strip()
-        if not url.startswith("http"):
-            await message.reply_text("❌ لینک نامعتبر است!")
-            return
-        
-        status_msg = await message.reply_text("⏳ در حال استخراج صوت...")
-        filename, error = await download_media(url, "audio")
-        
-        if error:
-            await status_msg.edit_text(error)
-            return
-        
-        try:
+    is_audio = text.startswith("صوت")
+    url = text.replace("دانلود ", "").replace("صوت ", "").strip()
+    
+    if not url.startswith("http"):
+        await message.reply_text("❌ لینک نامعتبر است!")
+        return
+    
+    status_msg = await message.reply_text(f"⏳ در حال دانلود {'صوت' if is_audio else 'ویدیو'}...")
+    
+    media_type = "audio" if is_audio else "video"
+    filename, error = await download_media(url, media_type)
+    
+    if error:
+        await status_msg.edit_text(error)
+        return
+    
+    try:
+        if is_audio:
             await message.reply_audio(filename, caption="🎵 صوت دانلود شد!")
-            await status_msg.delete()
-            os.remove(filename)
-        except Exception as e:
-            await status_msg.edit_text(f"❌ خطا: {str(e)}")
-        return
-    
-    # ====== اطلاعات کاربر ======
-    if text == "آیدی":
-        if not message.reply_to_message:
-            await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
-            return
+        else:
+            await message.reply_video(filename, caption="✅ ویدیو دانلود شد!")
         
-        target = message.reply_to_message.from_user
-        if not target:
-            await message.reply_text("❌ کاربر پیدا نشد!")
-            return
+        await status_msg.delete()
+        os.remove(filename)
         
-        try:
-            user = await client.get_users(target.id)
-        except:
-            user = target
-        
-        info = f"""
-👤 **اطلاعات کاربر**
+    except Exception as e:
+        await status_msg.edit_text(f"❌ خطا در ارسال: {str(e)}")
 
-🆔 آیدی: `{user.id}`
-👤 نام: {user.first_name or 'ندارد'}
-📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
-
-💎 الماس: {get_balance(user.id):,}
-🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
-        """
-        
-        buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
-        if message.from_user.id in GOD_ADMIN_IDS:
-            buttons.insert(0, [
-                InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
-                InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
-            ])
-        
-        await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
-        return
-    
-    # ====== مدیریت ادمین: اضافه الماس ======
-    if user_id in user_steps:
-        step = user_steps[user_id]
-        
-        if step == 'add_balance_user':
-            try:
-                target = int(text.strip())
-                user_steps[user_id] = 'add_balance_amount'
-                user_steps[f'{user_id}_target'] = target
-                await message.reply_text('💎 مقدار الماس را وارد کنید:')
-            except ValueError:
-                await message.reply_text('❌ آیدی نامعتبر')
-            return
-        
-        if step == 'add_balance_amount':
-            try:
-                amount = int(text.strip())
-                target = user_steps.get(f'{user_id}_target')
-                if target:
-                    add_balance(target, amount)
-                    await message.reply_text(f'✅ {amount:,} الماس اضافه شد.')
-                    del user_steps[user_id]
-                    if f'{user_id}_target' in user_steps:
-                        del user_steps[f'{user_id}_target']
-            except ValueError:
-                await message.reply_text('❌ مقدار نامعتبر')
-            return
-
-# =============================================
-# کالبک بستن
-# =============================================
-@manager_bot.on_callback_query()
-async def close_callback(client, callback):
-    if callback.data == "close_info":
-        await callback.message.delete()
-        await callback.answer("✅ بسته شد")
-        return
-    
-    if callback.data.startswith("add_balance_"):
-        target_id = int(callback.data.split("_")[2])
-        if callback.from_user.id not in GOD_ADMIN_IDS:
-            await callback.answer("❌ دسترسی ندارید!", show_alert=True)
-            return
-        
-        user_steps[callback.from_user.id] = 'add_balance_user'
-        user_steps[f'{callback.from_user.id}_target'] = target_id
-        await callback.message.reply_text(f"💎 مقدار الماس برای کاربر {target_id} را وارد کنید:")
-        await callback.answer("✅ مقدار را وارد کنید")
-        return
-    
-    if callback.data.startswith("ban_user_"):
-        target_id = int(callback.data.split("_")[2])
-        if callback.from_user.id not in GOD_ADMIN_IDS:
-            await callback.answer("❌ دسترسی ندارید!", show_alert=True)
-            return
-        
-        db = get_user_db(target_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET banned = 1 WHERE user_id = ?', (target_id,))
-        db.commit()
-        db.close()
-        
-        await callback.message.edit_text(f"✅ کاربر {target_id} مسدود شد.")
-        await callback.answer("✅ مسدود شد")
-        return
-
-# =============================================
-# تابع اصلی
-# =============================================
 async def main():
     # شروع تایمر پاک‌سازی فایل‌ها
     asyncio.create_task(cleanup_old_files())

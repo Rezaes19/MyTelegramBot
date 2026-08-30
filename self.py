@@ -80,12 +80,12 @@ if not os.path.exists('database_users'):
     os.makedirs('database_users')
 
 # =============================================
-# تنظیمات اصلی
+# تنظیمات اصلی - اینجا رو ادیت کن
 # =============================================
 API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
-BOT_TOKEN = "8763155587:AAFyqwUzGx8VuQlfFWhknqfzmjyxM7zinyg"  # توکن ربات مدیریت
-helperbot = 'SelfRMUu_bot'  # یوزرنیم ربات هلپر
+BOT_TOKEN = "8763155587:AAFyqwUzGx8VuQlfFWhknqfzmjyxM7zinyg"
+helperbot = 'SelfRMUu_bot'
 
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -111,7 +111,7 @@ AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
 
 # =============================================
-# لیست اموجی‌ها و پاسخ‌های دشمن
+# لیست پاسخ‌های دشمن
 # =============================================
 ENEMY_REPLIES = [
     "کیرم تو رحم اجاره ای و خونی مالی مادرت",
@@ -147,7 +147,7 @@ def stylize_time(time_str: str, style: str) -> str:
 async def translate_text(text: str, target_lang: str) -> str:
     if not text:
         return ""
-    encoded_text = quote(text)
+    encoded_text = re.quote(text)
     url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -186,9 +186,6 @@ async def makeClock(h, m, s, read, write):
     except:
         return None
 
-# =============================================
-# توابع سلف‌بات
-# =============================================
 async def perform_clock_update_now(client, user_id):
     try:
         if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
@@ -196,16 +193,14 @@ async def perform_clock_update_now(client, user_id):
             me = await client.get_me()
             current_name = me.first_name
             base_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', current_name).strip()
-
             tehran_time = datetime.now(pytz.timezone('Asia/Tehran'))
             current_time_str = tehran_time.strftime("%H:%M")
             stylized_time = stylize_time(current_time_str, current_font_style)
             new_name = f"{base_name} {stylized_time}"
-
             if new_name != current_name:
                 await client.update_profile(first_name=new_name)
     except Exception as e:
-        logging.error(f"Immediate clock update failed: {e}")
+        logging.error(f"Clock update failed: {e}")
 
 async def update_profile_clock(client: Client, user_id: int):
     while user_id in ACTIVE_SELF_BOTS:
@@ -230,44 +225,6 @@ async def anti_login_task(client: Client, user_id: int):
         except Exception:
             await asyncio.sleep(120)
 
-@aiocron.crontab('*/1 * * * *')
-async def clock():
-    for user_id, client in ACTIVE_SELF_BOTS.items():
-        try:
-            await client.invoke(UpdateStatusRequest(offline=False))
-            js = await get('data.json')
-            
-            if js.get('timename') == 'off' and js.get('timebio') == 'off' and js.get('timeprofile') == 'off' and js.get('timecrash') == 'off':
-                continue
-                
-            now = datetime.now(pytz.timezone('Asia/Tehran')).strftime('%H:%M:%S')
-            h, m, s = list(map(int, now.split(':')))
-            time = f'【 {h}:{m} 】'
-            rand = ['⓪➀➁➂➃➄➅➆➇➈', '𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗']
-            fonts = time.translate(time.maketrans('0123456789', random.choice(rand)))
-            
-            if js.get('timecrash') == 'on' and h == m:
-                for from_id in js.get('crash', []):
-                    await client.send_message(from_id, f'ɪ ʟᴏᴠᴇ ʏᴏᴜ 🙂❤️ {fonts}')
-            
-            if js.get('timename') == 'on':
-                await client(UpdateProfileRequest(last_name=fonts))
-            
-            if js.get('timebio') == 'on':
-                await client(UpdateProfileRequest(about=f'❦ 𝒀𝒐𝒖 𝒄𝒂𝒏 𝒔𝒆𝒆 𝒎𝒚 𝒈𝒐𝒐𝒅 𝒇𝒂𝒄𝒆 𝒐𝒓 𝒎𝒚 𝒆𝒗𝒊𝒍 𝒇𝒂𝒄𝒆 ❦ {fonts}'))
-            
-            if js.get('timeprofile') == 'on':
-                build = await makeClock(h, m, s, 'clock.jpg', 'oclock.jpg')
-                if build and os.path.exists(build):
-                    photo = await client.upload_file(build)
-                    photos = await client.get_profile_photos('me')
-                    if photos:
-                        if datetime.now(pytz.timezone('UTC')) - photos[0].date < timedelta(minutes=10):
-                            await client(DeletePhotosRequest(id=[types.InputPhoto(id=photos[0].id, access_hash=photos[0].access_hash, file_reference=photos[0].file_reference)]))
-                    await client(UploadProfilePhotoRequest(file=photo, fallback=True))
-        except Exception as e:
-            logging.error(f"Clock error for {user_id}: {e}")
-
 # =============================================
 # تابع اصلی سلف‌بات
 # =============================================
@@ -279,10 +236,8 @@ async def start_self_bot(session_string, user_id, phone):
         me = await client.get_me()
         user_id = me.id
         logging.info(f"✅ سلف‌بات برای کاربر {user_id} فعال شد!")
-        
-        # ذخیره کلاینت فعال
         ACTIVE_SELF_BOTS[user_id] = client
-        
+
         # ====== هندلر پیام‌های خروجی (مودهای ادیت متن) ======
         @client.on_message(filters.me & filters.text)
         async def outgoing_modifier(client, message):
@@ -290,80 +245,60 @@ async def start_self_bot(session_string, user_id, phone):
             text = message.text
             if not text or text.startswith('/') or text.startswith('.'):
                 return
-            
-            # هشتگ
             if js.get('hashtag') == 'on':
                 try:
-                    new = text.replace(' ', '_')
-                    await message.edit_text(f'#{new}')
+                    await message.edit_text(f"#{text.replace(' ', '_')}")
                     return
                 except:
                     pass
-            
-            # بولد
             if js.get('bold') == 'on':
                 try:
                     if not text.startswith(('**', '__', '~~', '`')):
-                        await message.edit_text(f'**{text}**')
+                        await message.edit_text(f"**{text}**")
                     return
                 except:
                     pass
-            
-            # ایتالیک
             if js.get('italic') == 'on':
                 try:
-                    await message.edit_text(f'<i>{text}</i>')
+                    await message.edit_text(f"<i>{text}</i>")
                     return
                 except:
                     pass
-            
-            # خط خورده
             if js.get('delete') == 'on':
                 try:
-                    await message.edit_text(f'~~{text}~~')
+                    await message.edit_text(f"~~{text}~~")
                     return
                 except:
                     pass
-            
-            # کد
             if js.get('code') == 'on':
                 try:
-                    await message.edit_text(f'`{text}`')
+                    await message.edit_text(f"`{text}`")
                     return
                 except:
                     pass
-            
-            # زیرخط
             if js.get('underline') == 'on':
                 try:
-                    await message.edit_text(f'<u>{text}</u>')
+                    await message.edit_text(f"<u>{text}</u>")
                     return
                 except:
                     pass
-            
-            # برعکس
             if js.get('reverse') == 'on':
                 try:
                     await message.edit_text(text[::-1])
                     return
                 except:
                     pass
-            
-            # پارت (نمایش تدریجی)
-            if js.get('part') == 'on':
+            if js.get('part') == 'on' and len(text) > 1:
                 try:
-                    if len(text) > 1:
-                        new = ''
-                        for char in text:
-                            new += char
-                            if char != ' ':
-                                await message.edit_text(new)
-                                await asyncio.sleep(0.3)
+                    new = ''
+                    for char in text:
+                        new += char
+                        if char != ' ':
+                            await message.edit_text(new)
+                            await asyncio.sleep(0.3)
                     return
                 except:
                     pass
-            
-            # منشن
             if js.get('mention') == 'on' and message.reply_to_message:
                 try:
                     target = message.reply_to_message.from_user
@@ -372,14 +307,12 @@ async def start_self_bot(session_string, user_id, phone):
                     return
                 except:
                     pass
-        
-        # ====== هندلر پیام‌های دریافتی (دشمن، کراش، منشی) ======
+
+        # ====== هندلر پیام‌های دریافتی ======
         @client.on_message(filters.incoming & ~filters.me)
         async def incoming_handler(client, message):
             js = await get('data.json')
             from_id = message.from_user.id if message.from_user else None
-            
-            # دشمن
             if from_id in js.get('enemy', []):
                 try:
                     if message.is_private:
@@ -391,35 +324,29 @@ async def start_self_bot(session_string, user_id, phone):
                         await message.reply_text(reply_text)
                 except:
                     pass
-            
-            # کراش
             if from_id in js.get('crash', []):
                 try:
                     await client.send_reaction(message.chat.id, message.id, "❤️")
                 except:
                     pass
-            
-            # منشی (فقط پیوی)
-            if message.is_private:
-                if js.get('comment') == 'on':
-                    try:
-                        replied = USERS_REPLIED_IN_SECRETARY.get(user_id, set())
-                        if from_id not in replied:
-                            custom_msg = SECRETARY_CUSTOM_MESSAGES.get(user_id)
-                            reply_msg = custom_msg if custom_msg else SECRETARY_REPLY_MESSAGE
-                            await message.reply_text(reply_msg)
-                            replied.add(from_id)
-                            USERS_REPLIED_IN_SECRETARY[user_id] = replied
-                    except:
-                        pass
-        
+            if message.is_private and js.get('comment') == 'on':
+                try:
+                    replied = USERS_REPLIED_IN_SECRETARY.get(user_id, set())
+                    if from_id not in replied:
+                        custom_msg = SECRETARY_CUSTOM_MESSAGES.get(user_id)
+                        reply_msg = custom_msg if custom_msg else SECRETARY_REPLY_MESSAGE
+                        await message.reply_text(reply_msg)
+                        replied.add(from_id)
+                        USERS_REPLIED_IN_SECRETARY[user_id] = replied
+                except:
+                    pass
+
         # ====== دستورات سلف ======
-        @client.on_message(filters.me & filters.command(["panel", "پنل"], prefixes=""))
+        @client.on_message(filters.text & filters.regex(r'^(پنل|panel)$') & filters.me)
         async def self_panel(client, message):
             js = await get('data.json')
             font_style = USER_FONT_CHOICES.get(user_id, 'stylized')
             preview = stylize_time("12:34", font_style)
-            
             panel_text = f"""
 ⚡️ **پنل مدیریت سلف‌بات**
 
@@ -451,8 +378,9 @@ async def start_self_bot(session_string, user_id, phone):
 دستورات کامل رو با `راهنما` ببینید.
 """
             await message.reply_text(panel_text)
+            await message.delete()
 
-        @client.on_message(filters.me & filters.command(["help", "راهنما"], prefixes=""))
+        @client.on_message(filters.text & filters.regex(r'^(راهنما|help)$') & filters.me)
         async def self_help(client, message):
             help_text = """
 📚 **راهنمای کامل سلف‌بات**
@@ -486,13 +414,13 @@ sticker on/off - در حال ارسال استیکر
 .commentText [متن] - تنظیم متن
 
 ⚔️ **مدیریت دشمن:**
-.addenemy [آیدی/ریپلی] - افزودن دشمن
-.delenemy [آیدی/ریپلی] - حذف دشمن
+.addenemy (ریپلی) - افزودن دشمن
+.delenemy (ریپلی) - حذف دشمن
 listenemy - لیست دشمنان
 
 ❤️ **مدیریت کراش:**
-.addcrash [آیدی/ریپلی] - افزودن کراش
-.delcrash [آیدی/ریپلی] - حذف کراش
+.addcrash (ریپلی) - افزودن کراش
+.delcrash (ریپلی) - حذف کراش
 listcrash - لیست کراش‌ها
 
 🎲 **سرگرمی:**
@@ -501,20 +429,18 @@ fun [love/oclock/star/snow] - انیمیشن
 heart - انیمیشن قلب
 
 📊 **اطلاعات:**
-info (ریپلی/آیدی) - اطلاعات کاربر
+info (ریپلی) - اطلاعات کاربر
 status - وضعیت کلی
-sessions - نشست‌های فعال
 
 🛠 **ابزارها:**
-tagall - تگ کردن کاربران گروه
-tagadmins - تگ کردن ادمین‌ها
 clean [تعداد] - حذف پیام‌ها
 restart - ریستارت سلف‌بات
 """
             await message.reply_text(help_text)
+            await message.delete()
 
         # ====== دستورات نقطه‌دار ======
-        @client.on_message(filters.me & filters.regex(r'^\.timename (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.timename (on|off)$') & filters.me)
         async def time_name(client, message):
             value = message.text.split()[1]
             js = await get('data.json')
@@ -522,7 +448,7 @@ restart - ریستارت سلف‌بات
             await put('data.json', js)
             await message.edit_text(f'✅ زمان در نام: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^\.timebio (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.timebio (on|off)$') & filters.me)
         async def time_bio(client, message):
             value = message.text.split()[1]
             js = await get('data.json')
@@ -530,7 +456,7 @@ restart - ریستارت سلف‌بات
             await put('data.json', js)
             await message.edit_text(f'✅ زمان در بیو: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^\.timeprofile (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.timeprofile (on|off)$') & filters.me)
         async def time_profile(client, message):
             value = message.text.split()[1]
             js = await get('data.json')
@@ -538,7 +464,7 @@ restart - ریستارت سلف‌بات
             await put('data.json', js)
             await message.edit_text(f'✅ عکس ساعت: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^\.timecrash (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.timecrash (on|off)$') & filters.me)
         async def time_crash(client, message):
             value = message.text.split()[1]
             js = await get('data.json')
@@ -546,7 +472,7 @@ restart - ریستارت سلف‌بات
             await put('data.json', js)
             await message.edit_text(f'✅ کراش تایم: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^\.comment (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.comment (on|off)$') & filters.me)
         async def comment(client, message):
             value = message.text.split()[1]
             js = await get('data.json')
@@ -554,7 +480,7 @@ restart - ریستارت سلف‌بات
             await put('data.json', js)
             await message.edit_text(f'✅ منشی: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^\.commentText (.+)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.commentText (.+)$') & filters.me)
         async def comment_text(client, message):
             text = message.text.replace('.commentText', '').strip()
             if text:
@@ -565,37 +491,41 @@ restart - ریستارت سلف‌بات
             else:
                 await message.edit_text('❌ لطفا متن را وارد کنید!')
 
-        @client.on_message(filters.me & filters.regex(r'^\.addenemy (.+)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.addenemy$') & filters.me)
         async def add_enemy(client, message):
-            target = message.text.split()[1]
-            try:
-                user = await client.get_entity(target)
-                js = await get('data.json')
-                if user.id not in js['enemy']:
-                    js['enemy'].append(user.id)
-                    await put('data.json', js)
-                    await message.edit_text(f'✅ دشمن {user.id} اضافه شد!')
+            if message.reply_to_message:
+                target = message.reply_to_message.from_user
+                if target:
+                    js = await get('data.json')
+                    if target.id not in js['enemy']:
+                        js['enemy'].append(target.id)
+                        await put('data.json', js)
+                        await message.edit_text(f'✅ دشمن {target.id} اضافه شد!')
+                    else:
+                        await message.edit_text('⚠️ کاربر در لیست دشمنان است!')
                 else:
-                    await message.edit_text('⚠️ کاربر در لیست دشمنان است!')
-            except:
-                await message.edit_text('❌ کاربر پیدا نشد!')
+                    await message.edit_text('❌ کاربر پیدا نشد!')
+            else:
+                await message.edit_text('❌ روی پیام کاربر ریپلی کن!')
 
-        @client.on_message(filters.me & filters.regex(r'^\.delenemy (.+)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.delenemy$') & filters.me)
         async def del_enemy(client, message):
-            target = message.text.split()[1]
-            try:
-                user = await client.get_entity(target)
-                js = await get('data.json')
-                if user.id in js['enemy']:
-                    js['enemy'].remove(user.id)
-                    await put('data.json', js)
-                    await message.edit_text(f'✅ دشمن {user.id} حذف شد!')
+            if message.reply_to_message:
+                target = message.reply_to_message.from_user
+                if target:
+                    js = await get('data.json')
+                    if target.id in js['enemy']:
+                        js['enemy'].remove(target.id)
+                        await put('data.json', js)
+                        await message.edit_text(f'✅ دشمن {target.id} حذف شد!')
+                    else:
+                        await message.edit_text('⚠️ کاربر در لیست دشمنان نیست!')
                 else:
-                    await message.edit_text('⚠️ کاربر در لیست دشمنان نیست!')
-            except:
-                await message.edit_text('❌ کاربر پیدا نشد!')
+                    await message.edit_text('❌ کاربر پیدا نشد!')
+            else:
+                await message.edit_text('❌ روی پیام کاربر ریپلی کن!')
 
-        @client.on_message(filters.me & filters.regex(r'^listenemy$'))
+        @client.on_message(filters.text & filters.regex(r'^listenemy$') & filters.me)
         async def list_enemy(client, message):
             js = await get('data.json')
             enemies = js.get('enemy', [])
@@ -607,37 +537,41 @@ restart - ریستارت سلف‌بات
             else:
                 await message.edit_text("📭 لیست دشمنان خالی است!")
 
-        @client.on_message(filters.me & filters.regex(r'^\.addcrash (.+)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.addcrash$') & filters.me)
         async def add_crash(client, message):
-            target = message.text.split()[1]
-            try:
-                user = await client.get_entity(target)
-                js = await get('data.json')
-                if user.id not in js['crash']:
-                    js['crash'].append(user.id)
-                    await put('data.json', js)
-                    await message.edit_text(f'✅ کراش {user.id} اضافه شد!')
+            if message.reply_to_message:
+                target = message.reply_to_message.from_user
+                if target:
+                    js = await get('data.json')
+                    if target.id not in js['crash']:
+                        js['crash'].append(target.id)
+                        await put('data.json', js)
+                        await message.edit_text(f'✅ کراش {target.id} اضافه شد!')
+                    else:
+                        await message.edit_text('⚠️ کاربر در لیست کراش‌ها است!')
                 else:
-                    await message.edit_text('⚠️ کاربر در لیست کراش‌ها است!')
-            except:
-                await message.edit_text('❌ کاربر پیدا نشد!')
+                    await message.edit_text('❌ کاربر پیدا نشد!')
+            else:
+                await message.edit_text('❌ روی پیام کاربر ریپلی کن!')
 
-        @client.on_message(filters.me & filters.regex(r'^\.delcrash (.+)$'))
+        @client.on_message(filters.text & filters.regex(r'^\.delcrash$') & filters.me)
         async def del_crash(client, message):
-            target = message.text.split()[1]
-            try:
-                user = await client.get_entity(target)
-                js = await get('data.json')
-                if user.id in js['crash']:
-                    js['crash'].remove(user.id)
-                    await put('data.json', js)
-                    await message.edit_text(f'✅ کراش {user.id} حذف شد!')
+            if message.reply_to_message:
+                target = message.reply_to_message.from_user
+                if target:
+                    js = await get('data.json')
+                    if target.id in js['crash']:
+                        js['crash'].remove(target.id)
+                        await put('data.json', js)
+                        await message.edit_text(f'✅ کراش {target.id} حذف شد!')
+                    else:
+                        await message.edit_text('⚠️ کاربر در لیست کراش‌ها نیست!')
                 else:
-                    await message.edit_text('⚠️ کاربر در لیست کراش‌ها نیست!')
-            except:
-                await message.edit_text('❌ کاربر پیدا نشد!')
+                    await message.edit_text('❌ کاربر پیدا نشد!')
+            else:
+                await message.edit_text('❌ روی پیام کاربر ریپلی کن!')
 
-        @client.on_message(filters.me & filters.regex(r'^listcrash$'))
+        @client.on_message(filters.text & filters.regex(r'^listcrash$') & filters.me)
         async def list_crash(client, message):
             js = await get('data.json')
             crashes = js.get('crash', [])
@@ -649,7 +583,7 @@ restart - ریستارت سلف‌بات
             else:
                 await message.edit_text("📭 لیست کراش‌ها خالی است!")
 
-        @client.on_message(filters.me & filters.regex(r'^(hashtag|bold|italic|delete|code|underline|reverse|part|mention|typing|game|voice|video|sticker) (on|off)$'))
+        @client.on_message(filters.text & filters.regex(r'^(hashtag|bold|italic|delete|code|underline|reverse|part|mention|typing|game|voice|video|sticker) (on|off)$') & filters.me)
         async def toggle_mode(client, message):
             mode, value = message.text.split()
             js = await get('data.json')
@@ -664,44 +598,38 @@ restart - ریستارت سلف‌بات
             }
             await message.edit_text(f'✅ {mode_names.get(mode, mode)}: {"فعال" if value == "on" else "غیرفعال"}')
 
-        @client.on_message(filters.me & filters.regex(r'^fun (love|oclock|star|snow)$'))
+        @client.on_message(filters.text & filters.regex(r'^fun (love|oclock|star|snow)$') & filters.me)
         async def fun_animation(client, message):
             category = message.text.split()[1]
-            if category == 'love':
-                emoticons = ['🤍', '🖤', '💜', '💙', '💚', '💛', '🧡', '❤️', '🤎', '💖']
-            elif category == 'oclock':
-                emoticons = ['🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚', '🕛', '🕜', '🕝', '🕞', '🕟', '🕠', '🕡', '🕢', '🕣', '🕤', '🕥', '🕦', '🕧']
-            elif category == 'star':
-                emoticons = ['💥', '⚡️', '✨', '🌟', '⭐️', '💫']
-            elif category == 'snow':
-                emoticons = ['❄️', '☃️', '⛄️']
-            else:
-                return
-            
-            random.shuffle(emoticons)
-            for emoji in emoticons[:5]:
-                await message.edit_text(emoji)
-                await asyncio.sleep(0.5)
+            emoticons = {
+                'love': ['🤍', '🖤', '💜', '💙', '💚', '💛', '🧡', '❤️', '🤎', '💖'],
+                'oclock': ['🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚', '🕛', '🕜', '🕝', '🕞', '🕟', '🕠', '🕡', '🕢', '🕣', '🕤', '🕥', '🕦', '🕧'],
+                'star': ['💥', '⚡️', '✨', '🌟', '⭐️', '💫'],
+                'snow': ['❄️', '☃️', '⛄️']
+            }
+            if category in emoticons:
+                random.shuffle(emoticons[category])
+                for emoji in emoticons[category][:5]:
+                    await message.edit_text(emoji)
+                    await asyncio.sleep(0.5)
 
-        @client.on_message(filters.me & filters.regex(r'^heart$'))
+        @client.on_message(filters.text & filters.regex(r'^heart$') & filters.me)
         async def heart_animation(client, message):
             for x in range(1, 4):
                 for i in range(1, 11):
                     await message.edit_text('➣ ' + str(x) + ' ❦' * i + ' | ' + str(10 * i) + '%')
                     await asyncio.sleep(0.2)
 
-        @client.on_message(filters.me & filters.regex(r'^dice ([1-6])$'))
+        @client.on_message(filters.text & filters.regex(r'^dice ([1-6])$') & filters.me)
         async def dice_command(client, message):
-            try:
-                num = int(message.text.split()[1])
-                if 1 <= num <= 6:
-                    await client.send_dice(message.chat.id, "🎲")
-                else:
-                    await message.edit_text('❌ عدد باید بین ۱ تا ۶ باشد!')
-            except:
-                await message.edit_text('❌ فرمت: dice [1-6]')
+            num = int(message.text.split()[1])
+            if 1 <= num <= 6:
+                await client.send_dice(message.chat.id, "🎲")
+                await message.delete()
+            else:
+                await message.edit_text('❌ عدد باید بین ۱ تا ۶ باشد!')
 
-        @client.on_message(filters.me & filters.regex(r'^clean (\d+)$'))
+        @client.on_message(filters.text & filters.regex(r'^clean (\d+)$') & filters.me)
         async def clean_messages(client, message):
             count = int(message.text.split()[1])
             async for msg in client.get_chat_history(message.chat.id, limit=count + 1):
@@ -712,7 +640,7 @@ restart - ریستارت سلف‌بات
                         pass
             await message.delete()
 
-        @client.on_message(filters.me & filters.regex(r'^info$'))
+        @client.on_message(filters.text & filters.regex(r'^info$') & filters.me)
         async def info_command(client, message):
             if message.reply_to_message:
                 user = message.reply_to_message.from_user
@@ -737,13 +665,12 @@ restart - ریستارت سلف‌بات
                 me = await client.get_me()
                 await message.edit_text(f'🆔 آیدی خودت: `{me.id}`')
 
-        @client.on_message(filters.me & filters.regex(r'^status$'))
+        @client.on_message(filters.text & filters.regex(r'^status$') & filters.me)
         async def status_command(client, message):
             private_chats = 0
             bots = 0
             groups = 0
             broadcast_channels = 0
-            
             async for dialog in client.get_dialogs():
                 entity = dialog.entity
                 if isinstance(entity, types.Channel):
@@ -757,7 +684,6 @@ restart - ریستارت سلف‌بات
                         bots += 1
                 elif isinstance(entity, types.Chat):
                     groups += 1
-            
             await message.edit_text(f"""
 📊 **وضعیت کلی**
 
@@ -767,23 +693,13 @@ restart - ریستارت سلف‌بات
 📢 کانال‌ها: {broadcast_channels}
 """)
 
-        @client.on_message(filters.me & filters.regex(r'^sessions$'))
-        async def sessions_command(client, message):
-            result = await client.invoke(GetAuthorizationsRequest())
-            text = "📱 **نشست‌های فعال:**\n\n"
-            for auth in result.authorizations:
-                text += f"• {auth.device_model}\n"
-                text += f"  ⏰ {auth.date_active}\n\n"
-            await message.edit_text(text)
-
-        @client.on_message(filters.me & filters.regex(r'^restart$'))
+        @client.on_message(filters.text & filters.regex(r'^restart$') & filters.me)
         async def restart_command(client, message):
             await message.edit_text('🔄 در حال ریستارت...')
             pid = os.getpid()
             filename = __file__.split('/')[-1]
             os.system(f'kill -9 {pid} && python3 {filename}')
 
-        # ====== ارسال پیام تایید ======
         await manager_bot.send_message(user_id, "✅ سلف‌بات شما با موفقیت فعال شد!\n\nدستور `پنل` رو بفرست تا تنظیمات رو ببینی.")
         
     except Exception as e:
@@ -799,12 +715,9 @@ restart - ریستارت سلف‌بات
 
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
-    user_id = message.from_user.id
-    
     buttons = ReplyKeyboardMarkup([
         [KeyboardButton("📱 ارسال شماره", request_contact=True)]
     ], resize_keyboard=True)
-    
     await message.reply_text(
         "👋 **به ربات سلف‌بات خوش آمدید!**\n\n"
         "برای فعال‌سازی سلف‌بات، لطفاً شماره تلفن خود را ارسال کنید.\n\n"
@@ -816,12 +729,9 @@ async def start_login(client, message):
 async def contact_handler(client, message):
     user_id = message.from_user.id
     phone = message.contact.phone_number
-    
     await message.reply_text("⏳ در حال اتصال به تلگرام...", reply_markup=ReplyKeyboardRemove())
-    
     temp_client = Client(f"login_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
     await temp_client.start()
-    
     try:
         sent_code = await temp_client.send_code(phone)
         LOGIN_STATES[user_id] = {
@@ -839,50 +749,35 @@ async def contact_handler(client, message):
 async def code_handler(client, message):
     user_id = message.from_user.id
     state = LOGIN_STATES.get(user_id)
-    
     if not state:
         return
-    
     text = message.text.strip()
-    
     if state['step'] == 'code':
         code = re.sub(r"\s+", "", text)
-        
         try:
             temp_client = state['client']
             await temp_client.sign_in(state['phone'], state['hash'], code)
-            
             session_string = await temp_client.export_session_string()
             me = await temp_client.get_me()
-            
             await temp_client.disconnect()
             del LOGIN_STATES[user_id]
-            
             await message.reply_text("✅ **سلف‌بات با موفقیت فعال شد!**\n\n⏳ در حال راه‌اندازی...")
-            
             asyncio.create_task(start_self_bot(session_string, user_id, state['phone']))
-            
         except Exception as e:
             await message.reply_text(f"❌ خطا در تایید کد: {e}")
             if "password" in str(e).lower():
                 state['step'] = 'password'
                 await message.reply_text("🔐 رمز دو مرحله‌ای را وارد کنید:")
-    
     elif state['step'] == 'password':
         try:
             temp_client = state['client']
             await temp_client.check_password(text)
-            
             session_string = await temp_client.export_session_string()
             me = await temp_client.get_me()
-            
             await temp_client.disconnect()
             del LOGIN_STATES[user_id]
-            
             await message.reply_text("✅ **سلف‌بات با موفقیت فعال شد!**\n\n⏳ در حال راه‌اندازی...")
-            
             asyncio.create_task(start_self_bot(session_string, user_id, state['phone']))
-            
         except Exception as e:
             await message.reply_text(f"❌ خطا در رمز دو مرحله‌ای: {e}")
 

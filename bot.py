@@ -227,7 +227,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 """
 
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
+COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
 
 class DataManager:
     def __init__(self, file_path):
@@ -1228,15 +1228,18 @@ async def contact_handler(client, message):
         await user_client.disconnect()
         await message.reply_text(f"❌ خطا: {e}")
 
+# =============================================
+# هندلر پیوی (آیدی و حذف)
+# =============================================
 @manager_bot.on_message(filters.text & filters.private)
-async def text_handler(client, message):
+async def private_handler(client, message):
     user_id = message.from_user.id
     text = message.text
 
     if not await force_subscribe_check(client, message):
         return
 
-    # ====== آیدی ======
+    # ====== آیدی در پیوی ======
     if text and text.strip() == "آیدی":
         if not message.reply_to_message:
             await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
@@ -1250,7 +1253,7 @@ async def text_handler(client, message):
         try:
             user = await client.get_users(target.id)
         except Exception as e:
-            await message.reply_text(f"❌ خطا در دریافت اطلاعات: {str(e)}")
+            await message.reply_text(f"❌ خطا: {str(e)}")
             return
 
         info = f"""
@@ -1273,7 +1276,7 @@ async def text_handler(client, message):
         await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    # ====== حذف [تعداد] ======
+    # ====== حذف در پیوی ======
     if text.startswith("حذف "):
         try:
             count = int(text.split()[1])
@@ -1336,7 +1339,7 @@ async def text_handler(client, message):
         await message.reply_text(HELP_TEXT)
         return
 
-    # ====== ادامه کد قبلی (کد تایید) ======
+    # ====== کد تایید ======
     chat_id = message.chat.id
     state = LOGIN_STATES.get(chat_id)
 
@@ -1364,26 +1367,33 @@ async def text_handler(client, message):
             await message.reply_text(f"❌ خطا: {e}")
 
 # =============================================
-# آیدی در گروه
+# هندلر گروه (آیدی و حذف)
 # =============================================
-@manager_bot.on_message(filters.group & filters.regex(r'^آیدی$'))
-async def get_user_info_group(client, message):
-    if not message.reply_to_message:
-        await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+@manager_bot.on_message(filters.group)
+async def group_handler(client, message):
+    text = message.text
+
+    if not text:
         return
 
-    target = message.reply_to_message.from_user
-    if not target:
-        await message.reply_text("❌ کاربر پیدا نشد!")
-        return
+    # ====== آیدی در گروه ======
+    if text and text.strip() == "آیدی":
+        if not message.reply_to_message:
+            await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
+            return
 
-    try:
-        user = await client.get_users(target.id)
-    except Exception as e:
-        await message.reply_text(f"❌ خطا: {str(e)}")
-        return
+        target = message.reply_to_message.from_user
+        if not target:
+            await message.reply_text("❌ کاربر پیدا نشد!")
+            return
 
-    info = f"""
+        try:
+            user = await client.get_users(target.id)
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+            return
+
+        info = f"""
 👤 **اطلاعات کاربر VIP MR**
 
 🆔 آیدی عددی: `{user.id}`
@@ -1391,16 +1401,32 @@ async def get_user_info_group(client, message):
 📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
 
 🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
-    """
+        """
 
-    buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
-    if message.from_user.id in GOD_ADMIN_IDS:
-        buttons.insert(0, [
-            InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
-            InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
-        ])
+        buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
+        if message.from_user.id in GOD_ADMIN_IDS:
+            buttons.insert(0, [
+                InlineKeyboardButton("💎 +الماس", callback_data=f"add_balance_{user.id}"),
+                InlineKeyboardButton("🚫 بن", callback_data=f"ban_user_{user.id}")
+            ])
 
-    await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
+        await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    # ====== حذف در گروه ======
+    if text.startswith("حذف "):
+        try:
+            count = int(text.split()[1])
+            msg_ids = []
+            async for m in client.get_chat_history(message.chat.id, limit=count + 1):
+                if m.from_user and m.from_user.is_self:
+                    msg_ids.append(m.id)
+            if msg_ids:
+                await client.delete_messages(message.chat.id, msg_ids)
+            await message.delete()
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+        return
 
 async def finalize(message, user_c, phone):
     s_str = await user_c.export_session_string()

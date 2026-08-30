@@ -40,11 +40,23 @@ def patch_peer_id_validation():
     logging.info("Pyrogram peer ID validation patched successfully.")
 
 patch_peer_id_validation()
+
+# =============================================
+# تنظیمات اصلی
+# =============================================
 API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 BOT_TOKEN = "8858887304:AAELneONarg-zYTRBAWocRV9NO9xRzodFFg" 
 
 GOD_ADMIN_IDS = [6691993264, 7831049189]
+
+# =============================================
+# کانال‌های عضویت اجباری
+# =============================================
+FORCE_CHANNELS = [
+    "@SELF_MR0",
+    "@SelfMR1"
+]
 
 DATA_FILE = "bot_data.json"
 
@@ -370,6 +382,53 @@ PV_LOCK_STATUS = {}
 ACTIVE_BOTS = {}
 
 load_all_states()
+
+# =============================================
+# توابع چک عضویت اجباری
+# =============================================
+async def is_user_subscribed(user_id, channel):
+    """چک کردن عضویت کاربر در کانال"""
+    try:
+        await manager_bot.get_chat_member(channel, user_id)
+        return True
+    except Exception as e:
+        if "USER_NOT_PARTICIPANT" in str(e) or "Chat not found" in str(e):
+            return False
+        return False
+
+async def check_all_channels(user_id):
+    """چک کردن عضویت در همه کانال‌ها"""
+    not_subscribed = []
+    for channel in FORCE_CHANNELS:
+        if not await is_user_subscribed(user_id, channel):
+            not_subscribed.append(channel)
+    return not_subscribed
+
+async def force_subscribe_check(client, message):
+    """تابع کمکی برای چک عضویت و نمایش پیام"""
+    user_id = message.from_user.id
+    not_subscribed = await check_all_channels(user_id)
+    
+    if not_subscribed:
+        buttons = []
+        for channel in not_subscribed:
+            channel_name = channel.replace("@", "")
+            buttons.append([InlineKeyboardButton(
+                f"✅ عضویت در {channel}",
+                url=f"https://t.me/{channel_name}"
+            )])
+        buttons.append([InlineKeyboardButton(
+            "🔄 بررسی مجدد عضویت",
+            callback_data="check_subscription"
+        )])
+        
+        await message.reply_text(
+            "❌ **برای استفاده از ربات ابتدا در کانال‌های زیر عضو شوید:**\n\n"
+            "پس از عضویت، روی دکمه **بررسی مجدد** کلیک کنید.",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return False
+    return True
 
 def stylize_time(time_str: str, style: str) -> str:
     font_map = FONT_STYLES.get(style, FONT_STYLES["stylized"])
@@ -852,120 +911,167 @@ async def inline_panel_handler(client, query):
 
 @manager_bot.on_callback_query()
 async def callback_panel_handler(client, callback):
-    data = callback.data.split("_")
-    action = "_".join(data[:-1])
-    target_user_id = int(data[-1])
+    data = callback.data
     
-    if callback.from_user.id != target_user_id:
-        await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-        return
-
-    settings_update = {}
-
-    if action == "toggle_clock":
-        new_state = not CLOCK_STATUS.get(target_user_id, True)
-        CLOCK_STATUS[target_user_id] = new_state
-        settings_update["clock"] = new_state
+    # ====== بررسی مجدد عضویت ======
+    if data == "check_subscription":
+        user_id = callback.from_user.id
+        not_subscribed = await check_all_channels(user_id)
         
-        if target_user_id in ACTIVE_BOTS:
-            bot_client = ACTIVE_BOTS[target_user_id][0]
+        if not not_subscribed:
+            await callback.message.edit_text(
+                "✅ **عضویت شما تأیید شد!**\n\n"
+                "لطفاً دوباره روی /start کلیک کنید."
+            )
+            await callback.answer("✅ عضویت تأیید شد!")
+            return
+        
+        buttons = []
+        for channel in not_subscribed:
+            channel_name = channel.replace("@", "")
+            buttons.append([InlineKeyboardButton(
+                f"✅ عضویت در {channel}",
+                url=f"https://t.me/{channel_name}"
+            )])
+        buttons.append([InlineKeyboardButton(
+            "🔄 بررسی مجدد عضویت",
+            callback_data="check_subscription"
+        )])
+        
+        await callback.message.edit_text(
+            "❌ **شما هنوز در کانال‌های زیر عضو نشده‌اید:**\n\n"
+            "پس از عضویت، روی دکمه **بررسی مجدد** کلیک کنید.",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        await callback.answer("⚠️ هنوز عضو نشده‌اید!", show_alert=True)
+        return
+    
+    # ====== کالبک‌های پنل ======
+    if isinstance(data, str):
+        parts = data.split("_")
+        if len(parts) > 1:
+            action = "_".join(parts[:-1])
+            target_user_id = int(parts[-1])
+        else:
+            return
+        
+        if callback.from_user.id != target_user_id:
+            await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+            return
+
+        settings_update = {}
+
+        if action == "toggle_clock":
+            new_state = not CLOCK_STATUS.get(target_user_id, True)
+            CLOCK_STATUS[target_user_id] = new_state
+            settings_update["clock"] = new_state
+            
+            if target_user_id in ACTIVE_BOTS:
+                bot_client = ACTIVE_BOTS[target_user_id][0]
+                if new_state:
+                    asyncio.create_task(perform_clock_update_now(bot_client, target_user_id))
+                else:
+                    try:
+                        me = await bot_client.get_me()
+                        clean_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', me.first_name).strip()
+                        if clean_name != me.first_name:
+                            await bot_client.update_profile(first_name=clean_name)
+                    except: pass
+        
+        elif action == "cycle_font":
+            cur = USER_FONT_CHOICES.get(target_user_id, 'stylized')
+            idx = (FONT_KEYS_ORDER.index(cur) + 1) % len(FONT_KEYS_ORDER)
+            new_font = FONT_KEYS_ORDER[idx]
+            USER_FONT_CHOICES[target_user_id] = new_font
+            CLOCK_STATUS[target_user_id] = True
+            settings_update["font"] = new_font
+            settings_update["clock"] = True
+            
+            if target_user_id in ACTIVE_BOTS:
+                asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
+        
+        elif action == "toggle_bold":
+            new_state = not BOLD_MODE_STATUS.get(target_user_id, False)
+            BOLD_MODE_STATUS[target_user_id] = new_state
+            settings_update["bold"] = new_state
+        
+        elif action == "toggle_sec":
+            new_state = not SECRETARY_MODE_STATUS.get(target_user_id, False)
+            SECRETARY_MODE_STATUS[target_user_id] = new_state
+            settings_update["secretary"] = new_state
+        
+        elif action == "toggle_seen":
+            new_state = not AUTO_SEEN_STATUS.get(target_user_id, False)
+            AUTO_SEEN_STATUS[target_user_id] = new_state
+            settings_update["auto_seen"] = new_state
+        
+        elif action == "toggle_pv":
+            new_state = not PV_LOCK_STATUS.get(target_user_id, False)
+            PV_LOCK_STATUS[target_user_id] = new_state
+            settings_update["pv_lock"] = new_state
+        
+        elif action == "toggle_anti":
+            new_state = not ANTI_LOGIN_STATUS.get(target_user_id, False)
+            ANTI_LOGIN_STATUS[target_user_id] = new_state
+            settings_update["anti_login"] = new_state
+        
+        elif action == "toggle_type":
+            new_state = not TYPING_MODE_STATUS.get(target_user_id, False)
+            TYPING_MODE_STATUS[target_user_id] = new_state
             if new_state:
-                asyncio.create_task(perform_clock_update_now(bot_client, target_user_id))
-            else:
-                try:
-                    me = await bot_client.get_me()
-                    clean_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', me.first_name).strip()
-                    if clean_name != me.first_name:
-                        await bot_client.update_profile(first_name=clean_name)
-                except: pass
-    
-    elif action == "cycle_font":
-        cur = USER_FONT_CHOICES.get(target_user_id, 'stylized')
-        idx = (FONT_KEYS_ORDER.index(cur) + 1) % len(FONT_KEYS_ORDER)
-        new_font = FONT_KEYS_ORDER[idx]
-        USER_FONT_CHOICES[target_user_id] = new_font
-        CLOCK_STATUS[target_user_id] = True
-        settings_update["font"] = new_font
-        settings_update["clock"] = True
+                PLAYING_MODE_STATUS[target_user_id] = False
+                settings_update["playing"] = False
+            settings_update["typing"] = new_state
         
-        if target_user_id in ACTIVE_BOTS:
-            asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
-    
-    elif action == "toggle_bold":
-        new_state = not BOLD_MODE_STATUS.get(target_user_id, False)
-        BOLD_MODE_STATUS[target_user_id] = new_state
-        settings_update["bold"] = new_state
-    
-    elif action == "toggle_sec":
-        new_state = not SECRETARY_MODE_STATUS.get(target_user_id, False)
-        SECRETARY_MODE_STATUS[target_user_id] = new_state
-        settings_update["secretary"] = new_state
-    
-    elif action == "toggle_seen":
-        new_state = not AUTO_SEEN_STATUS.get(target_user_id, False)
-        AUTO_SEEN_STATUS[target_user_id] = new_state
-        settings_update["auto_seen"] = new_state
-    
-    elif action == "toggle_pv":
-        new_state = not PV_LOCK_STATUS.get(target_user_id, False)
-        PV_LOCK_STATUS[target_user_id] = new_state
-        settings_update["pv_lock"] = new_state
-    
-    elif action == "toggle_anti":
-        new_state = not ANTI_LOGIN_STATUS.get(target_user_id, False)
-        ANTI_LOGIN_STATUS[target_user_id] = new_state
-        settings_update["anti_login"] = new_state
-    
-    elif action == "toggle_type":
-        new_state = not TYPING_MODE_STATUS.get(target_user_id, False)
-        TYPING_MODE_STATUS[target_user_id] = new_state
-        if new_state:
-            PLAYING_MODE_STATUS[target_user_id] = False
-            settings_update["playing"] = False
-        settings_update["typing"] = new_state
-    
-    elif action == "toggle_game":
-        new_state = not PLAYING_MODE_STATUS.get(target_user_id, False)
-        PLAYING_MODE_STATUS[target_user_id] = new_state
-        if new_state:
-            TYPING_MODE_STATUS[target_user_id] = False
-            settings_update["typing"] = False
-        settings_update["playing"] = new_state
-    
-    elif action == "toggle_g_enemy":
-        new_state = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
-        GLOBAL_ENEMY_STATUS[target_user_id] = new_state
-        settings_update["global_enemy"] = new_state
-    
-    elif action.startswith("lang_"):
-        lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
-        btn_lang = action.split("_")[1]
-        actual_lang = lang_map.get(btn_lang)
+        elif action == "toggle_game":
+            new_state = not PLAYING_MODE_STATUS.get(target_user_id, False)
+            PLAYING_MODE_STATUS[target_user_id] = new_state
+            if new_state:
+                TYPING_MODE_STATUS[target_user_id] = False
+                settings_update["typing"] = False
+            settings_update["playing"] = new_state
         
-        current = AUTO_TRANSLATE_TARGET.get(target_user_id)
-        new_lang = actual_lang if current != actual_lang else None
+        elif action == "toggle_g_enemy":
+            new_state = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
+            GLOBAL_ENEMY_STATUS[target_user_id] = new_state
+            settings_update["global_enemy"] = new_state
         
-        AUTO_TRANSLATE_TARGET[target_user_id] = new_lang
-        settings_update["translate"] = new_lang
-    
-    elif action == "close_panel":
+        elif action.startswith("lang_"):
+            lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
+            btn_lang = action.split("_")[1]
+            actual_lang = lang_map.get(btn_lang)
+            
+            current = AUTO_TRANSLATE_TARGET.get(target_user_id)
+            new_lang = actual_lang if current != actual_lang else None
+            
+            AUTO_TRANSLATE_TARGET[target_user_id] = new_lang
+            settings_update["translate"] = new_lang
+        
+        elif action == "close_panel":
+            try:
+                if callback.inline_message_id:
+                    await client.edit_inline_text(callback.inline_message_id, "✔ پنل بسته شد.")
+                else:
+                    await callback.message.delete()
+            except: pass
+            return
+
+        if settings_update:
+            data_manager.update_user_data(target_user_id, {"settings": settings_update})
+
         try:
-            if callback.inline_message_id:
-                await client.edit_inline_text(callback.inline_message_id, "✔ پنل بسته شد.")
-            else:
-                await callback.message.delete()
+            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
         except: pass
-        return
-
-    if settings_update:
-        data_manager.update_user_data(target_user_id, {"settings": settings_update})
-
-    try:
-        await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
-    except: pass
 
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
+    user_id = message.from_user.id
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
+        return
+    
+    # ====== ادامه کد قبلی ======
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
     
     if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
@@ -1034,6 +1140,13 @@ async def admin_status_handler(client, message):
 
 @manager_bot.on_message(filters.contact)
 async def contact_handler(client, message):
+    user_id = message.from_user.id
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
+        return
+    
+    # ====== ادامه کد قبلی ======
     chat_id = message.chat.id
     phone = message.contact.phone_number
     
@@ -1052,6 +1165,13 @@ async def contact_handler(client, message):
 
 @manager_bot.on_message(filters.text & filters.private)
 async def text_handler(client, message):
+    user_id = message.from_user.id
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
+        return
+    
+    # ====== ادامه کد قبلی ======
     chat_id = message.chat.id
     state = LOGIN_STATES.get(chat_id)
     

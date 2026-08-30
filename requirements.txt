@@ -1,6 +1,5 @@
-telethon
+telethon==1.34.0
 psutil
-py-tgcalls
 aiohttp
 asyncio
 aiocron
@@ -11,4 +10,4 @@ gtts
 google_play_scraper
 numpy
 matplotlib
-pyrogram
+pytgcalls

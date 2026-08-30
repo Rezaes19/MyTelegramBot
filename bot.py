@@ -23,6 +23,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pyrogram.utils 
 
+# =============================================
+# ایمپورت دانلودر
+# =============================================
+import subprocess
+from yt_dlp import YoutubeDL
+
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
 def patch_peer_id_validation():
@@ -64,6 +70,79 @@ TEHRAN_TIMEZONE = ZoneInfo("Asia/Tehran")
 LOGIN_STATES = {} 
 ADMIN_STATES = {} 
 
+# =============================================
+# تنظیمات دانلودر
+# =============================================
+DOWNLOAD_PATH = "downloads"
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 مگابایت
+
+if not os.path.exists(DOWNLOAD_PATH):
+    os.makedirs(DOWNLOAD_PATH)
+
+# =============================================
+# تابع دانلود
+# =============================================
+async def download_media(url, media_type="video"):
+    """دانلود مدیا از لینک"""
+    try:
+        ydl_opts = {
+            'outtmpl': f'{DOWNLOAD_PATH}/%(title)s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True,
+        }
+        
+        if media_type == "audio":
+            ydl_opts.update({
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            })
+        else:
+            ydl_opts.update({
+                'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+                'merge_output_format': 'mp4',
+            })
+        
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            if media_type == "audio":
+                filename = filename.rsplit('.', 1)[0] + '.mp3'
+            
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                if file_size > MAX_FILE_SIZE:
+                    os.remove(filename)
+                    return None, "❌ حجم فایل بیشتر از ۵۰ مگابایت است!"
+                
+                return filename, None
+            else:
+                return None, "❌ خطا در دانلود فایل!"
+                
+    except Exception as e:
+        return None, f"❌ خطا: {str(e)}"
+
+# =============================================
+# تابع پاک‌سازی فایل‌های قدیمی
+# =============================================
+async def cleanup_old_files():
+    while True:
+        await asyncio.sleep(3600)
+        now = time.time()
+        for filename in os.listdir(DOWNLOAD_PATH):
+            filepath = os.path.join(DOWNLOAD_PATH, filename)
+            if os.path.isfile(filepath):
+                if now - os.path.getctime(filepath) > 3600:
+                    try:
+                        os.remove(filepath)
+                    except:
+                        pass
+
 ENEMY_REPLIES = [
             "کیرم تو رحم اجاره ای و خونی مالی مادرت",
             "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام و اب کوسشو بریزم کف خونه تا فردا صبح کارگرای افغانی برای نظافت اومدن با بوی اب کس مادرت بجقن و ابکیراشون نثار قبر مرده هات بشه",
@@ -95,6 +174,9 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم و پیام شما را دریافت کردم. در اولین فرصت پاسخ خواهم داد. ممنون از پیامتون."
 
+# =============================================
+# راهنمای جدید با دانلودر
+# =============================================
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
     🛠 راهنمای ربات VIP MR
@@ -120,6 +202,15 @@ HELP_TEXT = """
 ✦ ریاکشن [شکلک] | خاموش
 
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
+📥 دانلودر
+
+✦ دانلود [لینک] - دانلود ویدیو
+✦ صوت [لینک] - استخراج صوت (MP3)
+
+پشتیبانی از: یوتیوب | تیک‌تاک | اینستاگرام 
+توییتر | آپارات | و ۱۰۰۰+ سایت دیگر
+
+✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 🎲 سرگرمی
 
 ✦ تاس | تاس [عدد]
@@ -128,7 +219,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 """
 
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*)$"
+COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|حذف \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
 
 class DataManager:
     def __init__(self, file_path):
@@ -1218,7 +1309,50 @@ async def finalize(message, user_c, phone):
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
+# =============================================
+# دانلودر - هندلر جدید
+# =============================================
+@manager_bot.on_message(filters.private & (filters.regex(r'^دانلود\s+.+') | filters.regex(r'^صوت\s+.+')))
+async def download_handler(client, message):
+    user_id = message.from_user.id
+    text = message.text
+    
+    # ====== چک عضویت اجباری ======
+    if not await force_subscribe_check(client, message):
+        return
+    
+    is_audio = text.startswith("صوت")
+    url = text.replace("دانلود ", "").replace("صوت ", "").strip()
+    
+    if not url.startswith("http"):
+        await message.reply_text("❌ لینک نامعتبر است!")
+        return
+    
+    status_msg = await message.reply_text(f"⏳ در حال دانلود {'صوت' if is_audio else 'ویدیو'}...")
+    
+    media_type = "audio" if is_audio else "video"
+    filename, error = await download_media(url, media_type)
+    
+    if error:
+        await status_msg.edit_text(error)
+        return
+    
+    try:
+        if is_audio:
+            await message.reply_audio(filename, caption="🎵 صوت دانلود شد!")
+        else:
+            await message.reply_video(filename, caption="✅ ویدیو دانلود شد!")
+        
+        await status_msg.delete()
+        os.remove(filename)
+        
+    except Exception as e:
+        await status_msg.edit_text(f"❌ خطا در ارسال: {str(e)}")
+
 async def main():
+    # شروع تایمر پاک‌سازی فایل‌ها
+    asyncio.create_task(cleanup_old_files())
+    
     for phone, session_data in data_manager.get_all_sessions():
         session_string = session_data["string"]
         user_id = session_data["user_id"]

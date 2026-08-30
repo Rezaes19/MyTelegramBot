@@ -76,9 +76,11 @@ if not os.path.exists('data.json'):
     loop.run_until_complete(put('data.json', data))
 
 # =============================================
-# اتصال به تلگرام
+# اتصال به تلگرام (لاگین دستی با شماره)
 # =============================================
+print("📱 لطفاً شماره خود را وارد کنید:")
 bot = TelegramClient('self', API_ID, API_HASH, loop=loop)
+bot.start()
 
 # =============================================
 # تابع ساخت ساعت روی عکس
@@ -618,6 +620,7 @@ async def restart(event):
 # اجرای ربات
 # =============================================
 async def main():
+    # استارت با شماره (دستی)
     await bot.start()
     print("✅ VIP MR Self Bot started!")
     print("📱 Username:", (await bot.get_me()).username)

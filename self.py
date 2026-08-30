@@ -17,8 +17,6 @@ from telethon.tl.functions.phone import CreateGroupCallRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
 from gtts import gTTS
 from googletrans import Translator
-from pytgcalls import PyTgCalls, idle
-from pytgcalls.types import MediaStream
 from google_play_scraper import search
 import matplotlib.pyplot as plt
 
@@ -28,7 +26,7 @@ import matplotlib.pyplot as plt
 try:
     import telethon
 except ModuleNotFoundError:
-    os.system('pip install --upgrade pip && pip install -U telethon psutil aiohttp asyncio aiocron aiofiles pytz googletrans==4.0.0-rc1 gtts google_play_scraper numpy matplotlib pytgcalls')
+    os.system('pip install --upgrade pip && pip install -U telethon psutil aiohttp asyncio aiocron aiofiles pytz googletrans==4.0.0-rc1 gtts google_play_scraper numpy matplotlib')
     os.sys.exit('✅ Packages installed!')
 
 # =============================================

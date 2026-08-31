@@ -23,6 +23,20 @@ from zoneinfo import ZoneInfo
 import pyrogram.utils
 
 # =============================================
+# ایمپورت دیتابیس جدید
+# =============================================
+from database import (
+    init_session_db,
+    save_session_to_db,
+    get_all_sessions_from_db,
+    get_session_by_user_id,
+    delete_session_from_db,
+    delete_session_by_user_id,
+    get_session_count,
+    clear_inactive_sessions
+)
+
+# =============================================
 # ایمپورت دانلودر
 # =============================================
 import subprocess
@@ -78,7 +92,7 @@ if not os.path.exists('database_users'):
     os.makedirs('database_users')
 
 # =============================================
-# دیتابیس
+# دیتابیس کاربران
 # =============================================
 def get_user_db(user_id):
     return sqlite3.connect(f'database_users/user_{user_id}.db')
@@ -175,7 +189,6 @@ FONT_STYLES = {
     "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
     "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
     "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
-    # 🔥 فونت‌های جدید
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "bold_italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
@@ -207,7 +220,6 @@ def apply_telegram_style(text: str, style: str) -> str:
     if not text:
         return text
     
-    # استایل‌های مارک‌داون تلگرام
     if style == "bold":
         return f"**{text}**"
     elif style == "italic":
@@ -261,7 +273,6 @@ def apply_telegram_style(text: str, style: str) -> str:
         return ''.join(sub_map.get(ch, ch) for ch in text)
     elif style in ["cursive", "stylized", "doublestruck", "monospace", 
                    "normal", "circled", "fullwidth", "filled", "sans", "inverted"]:
-        # اینا فقط برای ساعت هستن، برای متن ازشون استفاده نمیشه
         return text
     
     return text
@@ -683,12 +694,10 @@ async def outgoing_message_modifier(client, message):
     original_text = message.text
     modified_text = original_text
     
-    # ترجمه
     target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     if target_lang:
         modified_text = await translate_text(modified_text, target_lang)
     
-    # فونت متن
     text_font = TEXT_FONT_STATUS.get(user_id, "none")
     if text_font != "none" and text_font in FONT_KEYS_ORDER:
         modified_text = apply_telegram_style(modified_text, text_font)
@@ -799,14 +808,9 @@ async def god_mode_handler(client, message):
             except Exception as e:
                 logging.error(f"Failed to clean name for {target_user_id}: {e}")
 
-            phone_to_remove = None
-            for phone, data in list(data_manager.data["sessions"].items()):
-                if data.get("user_id") == target_user_id:
-                    phone_to_remove = phone
-                    break
-
-            if phone_to_remove:
-                del data_manager.data["sessions"][phone_to_remove]
+            # ====== تغییر: حذف از دیتابیس جدید ======
+            delete_session_by_user_id(target_user_id)
+            
             if str(target_user_id) in data_manager.data["users"]:
                 del data_manager.data["users"][str(target_user_id)]
             data_manager.save_data()
@@ -1032,7 +1036,6 @@ def generate_panel_markup(user_id, page=1):
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
     
     if page == 1:
-        # صفحه اول - تنظیمات اصلی
         keyboard = [
             [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
              InlineKeyboardButton(f"🔤 بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
@@ -1050,14 +1053,11 @@ def generate_panel_markup(user_id, page=1):
              InlineKeyboardButton("❌ بستن", callback_data=f"close_panel_{user_id}")]
         ]
     else:
-        # صفحه دوم - فونت‌ها
         keyboard = []
         row = []
         
         for font in FONT_KEYS_ORDER:
-            # تیک یا ضربدر
             check = "✅" if current_font == font else "⬜"
-            # نمایش اسم فونت
             display_name = font
             if font in ["bold", "italic", "bold_italic", "strikethrough", 
                         "underline", "quote", "spoiler", "code", "pre"]:
@@ -1075,11 +1075,9 @@ def generate_panel_markup(user_id, page=1):
         if row:
             keyboard.append(row)
         
-        # دکمه خاموش کردن فونت
         check = "✅" if current_font == "none" else "⬜"
         keyboard.append([InlineKeyboardButton(f"{check} خاموش", callback_data=f"set_text_font_none_{user_id}")])
         
-        # دکمه برگشت
         keyboard.append([InlineKeyboardButton("⬅️ بازگشت به تنظیمات", callback_data=f"panel_page_1_{user_id}")])
 
     return InlineKeyboardMarkup(keyboard)
@@ -1355,6 +1353,9 @@ async def broadcast_request_handler(client, message):
     ADMIN_STATES[message.from_user.id] = "broadcast"
     await message.reply_text("لطفاً پیام مورد نظر را بفرستید:", reply_markup=ReplyKeyboardRemove())
 
+# =============================================
+# دستور جدید: لیست سشن‌ها (فقط ادمین)
+# =============================================
 @manager_bot.on_message(filters.text & filters.private & filters.regex("^📊 وضعیت ربات$"))
 async def admin_status_handler(client, message):
     if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
@@ -1362,7 +1363,7 @@ async def admin_status_handler(client, message):
 
     active_count = len(ACTIVE_BOTS)
     total_users = len(data_manager.data.get("users", {}))
-    total_sessions = len(data_manager.data.get("sessions", {}))
+    total_sessions = get_session_count()
 
     text = (
         "**📊 آمار و وضعیت سرور**\n\n"
@@ -1424,6 +1425,10 @@ async def private_handler(client, message):
             await message.reply_text(f"❌ خطا: {str(e)}")
             return
 
+        # ====== تغییر: بررسی سشن از دیتابیس جدید ======
+        session_info = get_session_by_user_id(user.id)
+        has_session = session_info is not None
+
         info = f"""
 👤 **اطلاعات کاربر VIP MR**
 
@@ -1431,7 +1436,7 @@ async def private_handler(client, message):
 👤 نام: {user.first_name or 'ندارد'}
 📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
 
-🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
+🔐 سلف: {'فعال ✅' if has_session else 'غیرفعال ❌'}
         """
 
         buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
@@ -1561,6 +1566,10 @@ async def group_handler(client, message):
             await message.reply_text(f"❌ خطا: {str(e)}")
             return
 
+        # ====== تغییر: بررسی سشن از دیتابیس جدید ======
+        session_info = get_session_by_user_id(user.id)
+        has_session = session_info is not None
+
         info = f"""
 👤 **اطلاعات کاربر VIP MR**
 
@@ -1568,7 +1577,7 @@ async def group_handler(client, message):
 👤 نام: {user.first_name or 'ندارد'}
 📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
 
-🔐 سلف: {'فعال ✅' if get_session(user.id) else 'غیرفعال ❌'}
+🔐 سلف: {'فعال ✅' if has_session else 'غیرفعال ❌'}
         """
 
         buttons = [[InlineKeyboardButton("🔙 بستن", callback_data="close_info")]]
@@ -1601,9 +1610,14 @@ async def finalize(message, user_c, phone):
     me = await user_c.get_me()
     await user_c.disconnect()
 
+    # ====== تغییر: ذخیره در دیتابیس جدید ======
+    save_session_to_db(phone, s_str, me.id, me.first_name or "", me.username or "")
+    
+    # همچنین برای سازگاری با کد قبلی
     data_manager.save_session(phone, s_str, me.id, me.first_name or "", me.username or "")
+    
     asyncio.create_task(start_bot_instance(s_str, phone, me.id, 'stylized'))
-
+    
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
@@ -1611,11 +1625,16 @@ async def finalize(message, user_c, phone):
 # تابع اصلی
 # =============================================
 async def main():
+    # ====== تغییر: مقداردهی اولیه دیتابیس ======
+    init_session_db()
+    clear_inactive_sessions()  # پاک کردن سشن‌های غیرفعال قدیمی
+    
     asyncio.create_task(cleanup_old_files())
 
-    for phone, session_data in data_manager.get_all_sessions():
-        session_string = session_data["string"]
-        user_id = session_data["user_id"]
+    # ====== تغییر: لود از دیتابیس جدید ======
+    sessions = get_all_sessions_from_db()
+    for phone, session_string, user_id, first_name, username in sessions:
+        logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
         asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
 
     await manager_bot.start()

@@ -199,6 +199,73 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
+# =============================================
+# تابع اعمال استایل‌های تلگرامی روی متن
+# =============================================
+def apply_telegram_style(text: str, style: str) -> str:
+    """اعمال استایل‌های مختلف روی متن برای تلگرام"""
+    if not text:
+        return text
+    
+    # استایل‌های مارک‌داون تلگرام
+    if style == "bold":
+        return f"**{text}**"
+    elif style == "italic":
+        return f"__{text}__"
+    elif style == "bold_italic":
+        return f"***{text}***"
+    elif style == "strikethrough":
+        return f"~~{text}~~"
+    elif style == "underline":
+        return f"<u>{text}</u>"
+    elif style == "quote":
+        return f"> {text}"
+    elif style == "spoiler":
+        return f"||{text}||"
+    elif style == "code":
+        return f"`{text}`"
+    elif style == "pre":
+        return f"```\n{text}\n```"
+    elif style == "mono_bold":
+        return f"**`{text}`**"
+    elif style == "mono_italic":
+        return f"__`{text}`__"
+    elif style == "small_caps":
+        small_map = {
+            'a':'ᴀ','b':'ʙ','c':'ᴄ','d':'ᴅ','e':'ᴇ','f':'ꜰ','g':'ɢ',
+            'h':'ʜ','i':'ɪ','j':'ᴊ','k':'ᴋ','l':'ʟ','m':'ᴍ','n':'ɴ',
+            'o':'ᴏ','p':'ᴘ','q':'ǫ','r':'ʀ','s':'ꜱ','t':'ᴛ','u':'ᴜ',
+            'v':'ᴠ','w':'ᴡ','x':'x','y':'ʏ','z':'ᴢ'
+        }
+        return ''.join(small_map.get(ch.lower(), ch) for ch in text)
+    elif style == "superscript":
+        sup_map = {
+            '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵',
+            '6':'⁶','7':'⁷','8':'⁸','9':'⁹','+':'⁺','-':'⁻',
+            '=':'⁼','(':'⁽',')':'⁾','a':'ᵃ','b':'ᵇ','c':'ᶜ',
+            'd':'ᵈ','e':'ᵉ','f':'ᶠ','g':'ᵍ','h':'ʰ','i':'ⁱ',
+            'j':'ʲ','k':'ᵏ','l':'ˡ','m':'ᵐ','n':'ⁿ','o':'ᵒ',
+            'p':'ᵖ','r':'ʳ','s':'ˢ','t':'ᵗ','u':'ᵘ','v':'ᵛ',
+            'w':'ʷ','x':'ˣ','y':'ʸ','z':'ᶻ'
+        }
+        return ''.join(sup_map.get(ch, ch) for ch in text)
+    elif style == "subscript":
+        sub_map = {
+            '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅',
+            '6':'₆','7':'₇','8':'₈','9':'₉','+':'₊','-':'₋',
+            '=':'₌','(':'₍',')':'₎','a':'ₐ','e':'ₑ','h':'ₕ',
+            'i':'ᵢ','j':'ⱼ','k':'ₖ','l':'ₗ','m':'ₘ','n':'ₙ',
+            'o':'ₒ','p':'ₚ','r':'ᵣ','s':'ₛ','t':'ₜ','u':'ᵤ',
+            'v':'ᵥ','x':'ₓ'
+        }
+        return ''.join(sub_map.get(ch, ch) for ch in text)
+    elif style in ["cursive", "stylized", "doublestruck", "monospace", 
+                   "normal", "circled", "fullwidth", "filled", "sans", "inverted"]:
+        # اینا فقط برای ساعت هستن، برای متن ازشون استفاده نمیشه
+        return text
+    
+    return text
+
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
     🛠 راهنمای ربات VIP MR
@@ -292,6 +359,7 @@ class DataManager:
                 "font": "stylized",
                 "clock": True,
                 "bold": False,
+                "text_font": "none",
                 "secretary": False,
                 "secretary_msg": "",
                 "auto_seen": False,
@@ -431,6 +499,7 @@ def load_all_states():
         USER_FONT_CHOICES[user_id] = settings.get("font", "stylized")
         CLOCK_STATUS[user_id] = settings.get("clock", True)
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
+        TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
         AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
@@ -458,6 +527,7 @@ MUTED_USERS = {}
 USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
 BOLD_MODE_STATUS = {}
+TEXT_FONT_STATUS = {}
 AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
@@ -612,12 +682,17 @@ async def outgoing_message_modifier(client, message):
         return
     original_text = message.text
     modified_text = original_text
+    
+    # ترجمه
     target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     if target_lang:
         modified_text = await translate_text(modified_text, target_lang)
-    if BOLD_MODE_STATUS.get(user_id, False):
-        if not modified_text.startswith(('`', '**', '__', '~~', '||')):
-            modified_text = f"**{modified_text}**"
+    
+    # فونت متن
+    text_font = TEXT_FONT_STATUS.get(user_id, "none")
+    if text_font != "none" and text_font in FONT_KEYS_ORDER:
+        modified_text = apply_telegram_style(modified_text, text_font)
+    
     if modified_text != original_text:
         try:
             await message.edit_text(modified_text)
@@ -936,9 +1011,9 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =============================================
-# 🔥 پنل با فونت‌های جدید
+# 🔥 پنل دو صفحه‌ای با فونت‌های کامل
 # =============================================
-def generate_panel_markup(user_id):
+def generate_panel_markup(user_id, page=1):
     s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
     s_bold = "✔" if BOLD_MODE_STATUS.get(user_id, False) else "✖"
     s_sec = "✔" if SECRETARY_MODE_STATUS.get(user_id, False) else "✖"
@@ -954,39 +1029,58 @@ def generate_panel_markup(user_id):
     l_ru = "✔" if t_lang == "ru" else "✖"
     l_cn = "✔" if t_lang == "zh-CN" else "✖"
 
-    preview = stylize_time("12:34", USER_FONT_CHOICES.get(user_id, 'stylized'))
-
-    # ساخت دکمه‌های فونت
-    font_buttons = []
-    for font in FONT_KEYS_ORDER:
-        font_buttons.append(InlineKeyboardButton(font, callback_data=f"set_font_{font}_{user_id}"))
+    current_font = TEXT_FONT_STATUS.get(user_id, "none")
     
-    # ردیف‌های ۳ تایی
-    font_rows = [font_buttons[i:i+3] for i in range(0, len(font_buttons), 3)]
-
-    keyboard = [
-        [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
-         InlineKeyboardButton(f"🔤 بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
-        [InlineKeyboardButton(f"🎨 فونت: {preview}", callback_data=f"cycle_font_{user_id}")],
-    ]
-    
-    # اضافه کردن ردیف‌های فونت
-    for row in font_rows:
-        keyboard.append(row)
-    
-    keyboard.extend([
-        [InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
-         InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
-        [InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
-         InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
-        [InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
-         InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
-        [InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
-        [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
-         InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
-         InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
-        [InlineKeyboardButton("❌ بستن پنل", callback_data=f"close_panel_{user_id}")]
-    ])
+    if page == 1:
+        # صفحه اول - تنظیمات اصلی
+        keyboard = [
+            [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
+             InlineKeyboardButton(f"🔤 بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
+            [InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
+             InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
+            [InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
+             InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
+            [InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
+             InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
+            [InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
+            [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
+             InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
+             InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
+            [InlineKeyboardButton("📄 صفحه فونت‌ها ➡️", callback_data=f"panel_page_2_{user_id}"),
+             InlineKeyboardButton("❌ بستن", callback_data=f"close_panel_{user_id}")]
+        ]
+    else:
+        # صفحه دوم - فونت‌ها
+        keyboard = []
+        row = []
+        
+        for font in FONT_KEYS_ORDER:
+            # تیک یا ضربدر
+            check = "✅" if current_font == font else "⬜"
+            # نمایش اسم فونت
+            display_name = font
+            if font in ["bold", "italic", "bold_italic", "strikethrough", 
+                        "underline", "quote", "spoiler", "code", "pre"]:
+                display_name = apply_telegram_style(font, font)
+            
+            row.append(InlineKeyboardButton(
+                f"{check} {display_name}",
+                callback_data=f"set_text_font_{font}_{user_id}"
+            ))
+            
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        
+        if row:
+            keyboard.append(row)
+        
+        # دکمه خاموش کردن فونت
+        check = "✅" if current_font == "none" else "⬜"
+        keyboard.append([InlineKeyboardButton(f"{check} خاموش", callback_data=f"set_text_font_none_{user_id}")])
+        
+        # دکمه برگشت
+        keyboard.append([InlineKeyboardButton("⬅️ بازگشت به تنظیمات", callback_data=f"panel_page_1_{user_id}")])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -997,7 +1091,7 @@ async def inline_panel_handler(client, query):
         result = InlineQueryResultArticle(
             title="پنل مدیریت",
             input_message_content=InputTextMessageContent(f"⚡️ **مدیریت پیشرفته سلف بات**\n👤 کاربر: {user_id}"),
-            reply_markup=generate_panel_markup(user_id),
+            reply_markup=generate_panel_markup(user_id, 1),
             thumb_url="https://telegra.ph/file/1e3b567786f7800e80816.jpg"
         )
         await query.answer([result], cache_time=0)
@@ -1104,20 +1198,30 @@ async def callback_panel_handler(client, callback):
             if target_user_id in ACTIVE_BOTS:
                 asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
 
-        elif action.startswith("set_font_"):
-            # استخراج نام فونت و آیدی
+        elif action.startswith("set_text_font_"):
             parts = data.split("_")
-            font_name = parts[2]
-            target_user_id = int(parts[3])
+            font_name = parts[3]
+            target_user_id = int(parts[4])
             
-            if font_name in FONT_KEYS_ORDER:
-                USER_FONT_CHOICES[target_user_id] = font_name
-                CLOCK_STATUS[target_user_id] = True
-                settings_update["font"] = font_name
-                settings_update["clock"] = True
-                
-                if target_user_id in ACTIVE_BOTS:
-                    asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            
+            if font_name == "none":
+                TEXT_FONT_STATUS[target_user_id] = "none"
+            elif font_name in FONT_KEYS_ORDER:
+                TEXT_FONT_STATUS[target_user_id] = font_name
+            
+            settings_update = {"text_font": TEXT_FONT_STATUS.get(target_user_id, "none")}
+            data_manager.update_user_data(target_user_id, {"settings": settings_update})
+            
+            try:
+                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 2))
+            except:
+                pass
+            
+            await callback.answer(f"✅ فونت به {font_name} تغییر کرد!")
+            return
 
         elif action == "toggle_bold":
             BOLD_MODE_STATUS[target_user_id] = not BOLD_MODE_STATUS.get(target_user_id, False)
@@ -1168,6 +1272,16 @@ async def callback_panel_handler(client, callback):
             AUTO_TRANSLATE_TARGET[target_user_id] = actual_lang if current != actual_lang else None
             settings_update["translate"] = AUTO_TRANSLATE_TARGET[target_user_id]
 
+        elif action.startswith("panel_page_"):
+            page = int(action.split("_")[2])
+            target_user_id = int(parts[-1])
+            
+            try:
+                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, page))
+            except:
+                pass
+            return
+
         elif action == "close_panel":
             try:
                 if callback.inline_message_id:
@@ -1182,7 +1296,7 @@ async def callback_panel_handler(client, callback):
             data_manager.update_user_data(target_user_id, {"settings": settings_update})
 
         try:
-            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id))
+            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
         except:
             pass
 

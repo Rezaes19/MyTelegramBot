@@ -181,7 +181,7 @@ ENEMY_REPLIES = [
 FONT_STYLES = {
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
-    "bold_italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
+    "quote": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "strikethrough": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "underline": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "spoiler": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
@@ -191,7 +191,7 @@ FONT_STYLES = {
 # =============================================
 # ترتیب نمایش فونت‌ها (فارسی‌سازی شده)
 # =============================================
-FONT_KEYS_ORDER = ["bold", "italic", "bold_italic", "strikethrough", "underline", "spoiler", "mono"]
+FONT_KEYS_ORDER = ["bold", "italic", "quote", "strikethrough", "underline", "spoiler", "mono"]
 
 # =============================================
 # اسم‌های فارسی فونت‌ها برای نمایش در پنل
@@ -199,17 +199,12 @@ FONT_KEYS_ORDER = ["bold", "italic", "bold_italic", "strikethrough", "underline"
 FONT_PERSIAN_NAMES = {
     "bold": "بولد",
     "italic": "ایتالیک",
-    "bold_italic": "بولد + ایتالیک",
+    "quote": "نقل قول",
     "strikethrough": "خط خورده",
     "underline": "زیرخط",
     "spoiler": "اسپویلر",
     "mono": "مونو (کپی)",
 }
-
-ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
-CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
-
-SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
 # =============================================
 # تابع اعمال استایل‌های تلگرامی روی متن
@@ -223,8 +218,8 @@ def apply_telegram_style(text: str, style: str) -> str:
         return f"**{text}**"
     elif style == "italic":
         return f"__{text}__"
-    elif style == "bold_italic":
-        return f"***{text}***"
+    elif style == "quote":
+        return f"> {text}"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -1580,18 +1575,52 @@ async def finalize(message, user_c, phone):
 # تابع اصلی
 # =============================================
 async def main():
-    init_session_db()
-    clear_inactive_sessions()
+    # ====== مقداردهی اولیه دیتابیس ======
+    try:
+        init_session_db()
+        logging.info("✅ Database initialized")
+    except Exception as e:
+        logging.error(f"❌ Database init failed: {e}")
     
+    # ====== پشتیبان‌گیری از سشن‌ها ======
+    try:
+        backup_sessions()
+    except:
+        pass
+    
+    # ====== پاک کردن سشن‌های غیرفعال ======
+    try:
+        clear_inactive_sessions()
+    except:
+        pass
+    
+    # ====== تسک پاک‌سازی فایل‌ها ======
     asyncio.create_task(cleanup_old_files())
 
-    sessions = get_all_sessions_from_db()
-    for phone, session_string, user_id, first_name, username in sessions:
-        logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
-        asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
+    # ====== لود سشن‌ها از دیتابیس ======
+    try:
+        sessions = get_all_sessions_from_db()
+        if sessions:
+            logging.info(f"🔄 Found {len(sessions)} sessions, starting bots...")
+            for phone, session_string, user_id, first_name, username in sessions:
+                try:
+                    logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
+                    asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
+                    await asyncio.sleep(0.5)  # جلوگیری از race condition
+                except Exception as e:
+                    logging.error(f"❌ Failed to start bot for {phone}: {e}")
+        else:
+            logging.info("📭 No sessions found in database")
+    except Exception as e:
+        logging.error(f"❌ Error loading sessions: {e}")
 
-    await manager_bot.start()
-    logging.info("✅ Manager bot started")
+    # ====== استارت منیجر بوت ======
+    try:
+        await manager_bot.start()
+        logging.info("✅ Manager bot started")
+    except Exception as e:
+        logging.error(f"❌ Manager bot failed: {e}")
+        return
 
     await idle()
 

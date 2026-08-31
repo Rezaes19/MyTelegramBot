@@ -161,6 +161,9 @@ ENEMY_REPLIES = [
     "احمق مادر کونی من کس مادرت گذاشتم تو بازم داری کسشر میگی",
 ]
 
+# =============================================
+# 🔥 فونت‌های جدید و کامل (۲۴ فونت)
+# =============================================
 FONT_STYLES = {
     "cursive": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "stylized": {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
@@ -172,8 +175,24 @@ FONT_STYLES = {
     "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
     "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
     "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
+    # 🔥 فونت‌های جدید
+    "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
+    "italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
+    "bold_italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
+    "strikethrough": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "underline": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "quote": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "spoiler": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "code": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "pre": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "mono_bold": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "mono_italic": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "small_caps": {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':'﹕'},
+    "superscript": {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',':':'˸'},
+    "subscript": {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':'﹕'},
 }
-FONT_KEYS_ORDER = ["cursive", "stylized", "doublestruck", "monospace", "normal", "circled", "fullwidth", "filled", "sans", "inverted"]
+
+FONT_KEYS_ORDER = ["cursive", "stylized", "doublestruck", "monospace", "normal", "circled", "fullwidth", "filled", "sans", "inverted", "bold", "italic", "bold_italic", "strikethrough", "underline", "quote", "spoiler", "code", "pre", "mono_bold", "mono_italic", "small_caps", "superscript", "subscript"]
 
 ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
@@ -916,6 +935,9 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# =============================================
+# 🔥 پنل با فونت‌های جدید
+# =============================================
 def generate_panel_markup(user_id):
     s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
     s_bold = "✔" if BOLD_MODE_STATUS.get(user_id, False) else "✖"
@@ -934,22 +956,39 @@ def generate_panel_markup(user_id):
 
     preview = stylize_time("12:34", USER_FONT_CHOICES.get(user_id, 'stylized'))
 
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
-         InlineKeyboardButton(f"بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
-        [InlineKeyboardButton(f"تغییر فونت: {preview}", callback_data=f"cycle_font_{user_id}")],
-        [InlineKeyboardButton(f"منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
-         InlineKeyboardButton(f"سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
-        [InlineKeyboardButton(f"پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
-         InlineKeyboardButton(f"انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
-        [InlineKeyboardButton(f"تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
-         InlineKeyboardButton(f"دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
-        [InlineKeyboardButton(f"بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
+    # ساخت دکمه‌های فونت
+    font_buttons = []
+    for font in FONT_KEYS_ORDER:
+        font_buttons.append(InlineKeyboardButton(font, callback_data=f"set_font_{font}_{user_id}"))
+    
+    # ردیف‌های ۳ تایی
+    font_rows = [font_buttons[i:i+3] for i in range(0, len(font_buttons), 3)]
+
+    keyboard = [
+        [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
+         InlineKeyboardButton(f"🔤 بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
+        [InlineKeyboardButton(f"🎨 فونت: {preview}", callback_data=f"cycle_font_{user_id}")],
+    ]
+    
+    # اضافه کردن ردیف‌های فونت
+    for row in font_rows:
+        keyboard.append(row)
+    
+    keyboard.extend([
+        [InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
+         InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
+        [InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
+         InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
+        [InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
+         InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
+        [InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
         [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
          InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
          InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
-        [InlineKeyboardButton("بستن پنل ✖", callback_data=f"close_panel_{user_id}")]
+        [InlineKeyboardButton("❌ بستن پنل", callback_data=f"close_panel_{user_id}")]
     ])
+
+    return InlineKeyboardMarkup(keyboard)
 
 @manager_bot.on_inline_query()
 async def inline_panel_handler(client, query):
@@ -1064,6 +1103,21 @@ async def callback_panel_handler(client, callback):
 
             if target_user_id in ACTIVE_BOTS:
                 asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
+
+        elif action.startswith("set_font_"):
+            # استخراج نام فونت و آیدی
+            parts = data.split("_")
+            font_name = parts[2]
+            target_user_id = int(parts[3])
+            
+            if font_name in FONT_KEYS_ORDER:
+                USER_FONT_CHOICES[target_user_id] = font_name
+                CLOCK_STATUS[target_user_id] = True
+                settings_update["font"] = font_name
+                settings_update["clock"] = True
+                
+                if target_user_id in ACTIVE_BOTS:
+                    asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
 
         elif action == "toggle_bold":
             BOLD_MODE_STATUS[target_user_id] = not BOLD_MODE_STATUS.get(target_user_id, False)

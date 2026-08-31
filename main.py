@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 import pyrogram.utils
 
 # =============================================
-# ایمپورت دیتابیس جدید
+# ایمپورت دیتابیس
 # =============================================
 from database import (
     init_session_db,
@@ -176,36 +176,35 @@ ENEMY_REPLIES = [
 ]
 
 # =============================================
-# 🔥 فونت‌های جدید و کامل (۲۴ فونت)
+# 🔥 فونت‌های جدید (فقط ۷ فونت)
 # =============================================
 FONT_STYLES = {
-    "cursive": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
-    "stylized": {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
-    "doublestruck": {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':':'},
-    "monospace": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
-    "normal": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "circled": {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':'∶'},
-    "fullwidth": {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
-    "filled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
-    "sans": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
-    "inverted": {'0':'0','1':'Ɩ','2':'ᄅ','3':'Ɛ','4':'ㄣ','5':'ϛ','6':'9','7':'ㄥ','8':'8','9':'6',':':':'},
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "bold_italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "strikethrough": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "underline": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "quote": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "spoiler": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "code": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "pre": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
-    "mono_bold": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
-    "mono_italic": {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
-    "small_caps": {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':'﹕'},
-    "superscript": {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',':':'˸'},
-    "subscript": {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':'﹕'},
+    "mono": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
 }
 
-FONT_KEYS_ORDER = ["cursive", "stylized", "doublestruck", "monospace", "normal", "circled", "fullwidth", "filled", "sans", "inverted", "bold", "italic", "bold_italic", "strikethrough", "underline", "quote", "spoiler", "code", "pre", "mono_bold", "mono_italic", "small_caps", "superscript", "subscript"]
+# =============================================
+# ترتیب نمایش فونت‌ها (فارسی‌سازی شده)
+# =============================================
+FONT_KEYS_ORDER = ["bold", "italic", "bold_italic", "strikethrough", "underline", "spoiler", "mono"]
+
+# =============================================
+# اسم‌های فارسی فونت‌ها برای نمایش در پنل
+# =============================================
+FONT_PERSIAN_NAMES = {
+    "bold": "بولد",
+    "italic": "ایتالیک",
+    "bold_italic": "بولد + ایتالیک",
+    "strikethrough": "خط خورده",
+    "underline": "زیرخط",
+    "spoiler": "اسپویلر",
+    "mono": "مونو (کپی)",
+}
 
 ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
@@ -230,50 +229,10 @@ def apply_telegram_style(text: str, style: str) -> str:
         return f"~~{text}~~"
     elif style == "underline":
         return f"<u>{text}</u>"
-    elif style == "quote":
-        return f"> {text}"
     elif style == "spoiler":
         return f"||{text}||"
-    elif style == "code":
+    elif style == "mono":
         return f"`{text}`"
-    elif style == "pre":
-        return f"```\n{text}\n```"
-    elif style == "mono_bold":
-        return f"**`{text}`**"
-    elif style == "mono_italic":
-        return f"__`{text}`__"
-    elif style == "small_caps":
-        small_map = {
-            'a':'ᴀ','b':'ʙ','c':'ᴄ','d':'ᴅ','e':'ᴇ','f':'ꜰ','g':'ɢ',
-            'h':'ʜ','i':'ɪ','j':'ᴊ','k':'ᴋ','l':'ʟ','m':'ᴍ','n':'ɴ',
-            'o':'ᴏ','p':'ᴘ','q':'ǫ','r':'ʀ','s':'ꜱ','t':'ᴛ','u':'ᴜ',
-            'v':'ᴠ','w':'ᴡ','x':'x','y':'ʏ','z':'ᴢ'
-        }
-        return ''.join(small_map.get(ch.lower(), ch) for ch in text)
-    elif style == "superscript":
-        sup_map = {
-            '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵',
-            '6':'⁶','7':'⁷','8':'⁸','9':'⁹','+':'⁺','-':'⁻',
-            '=':'⁼','(':'⁽',')':'⁾','a':'ᵃ','b':'ᵇ','c':'ᶜ',
-            'd':'ᵈ','e':'ᵉ','f':'ᶠ','g':'ᵍ','h':'ʰ','i':'ⁱ',
-            'j':'ʲ','k':'ᵏ','l':'ˡ','m':'ᵐ','n':'ⁿ','o':'ᵒ',
-            'p':'ᵖ','r':'ʳ','s':'ˢ','t':'ᵗ','u':'ᵘ','v':'ᵛ',
-            'w':'ʷ','x':'ˣ','y':'ʸ','z':'ᶻ'
-        }
-        return ''.join(sup_map.get(ch, ch) for ch in text)
-    elif style == "subscript":
-        sub_map = {
-            '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅',
-            '6':'₆','7':'₇','8':'₈','9':'₉','+':'₊','-':'₋',
-            '=':'₌','(':'₍',')':'₎','a':'ₐ','e':'ₑ','h':'ₕ',
-            'i':'ᵢ','j':'ⱼ','k':'ₖ','l':'ₗ','m':'ₘ','n':'ₙ',
-            'o':'ₒ','p':'ₚ','r':'ᵣ','s':'ₛ','t':'ₜ','u':'ᵤ',
-            'v':'ᵥ','x':'ₓ'
-        }
-        return ''.join(sub_map.get(ch, ch) for ch in text)
-    elif style in ["cursive", "stylized", "doublestruck", "monospace", 
-                   "normal", "circled", "fullwidth", "filled", "sans", "inverted"]:
-        return text
     
     return text
 
@@ -599,13 +558,13 @@ async def force_subscribe_check(client, message):
     return True
 
 def stylize_time(time_str: str, style: str) -> str:
-    font_map = FONT_STYLES.get(style, FONT_STYLES["stylized"])
+    font_map = FONT_STYLES.get(style, FONT_STYLES["bold"])
     return ''.join(font_map.get(char, char) for char in time_str)
 
 async def perform_clock_update_now(client, user_id):
     try:
         if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
-            current_font_style = USER_FONT_CHOICES.get(user_id, 'stylized')
+            current_font_style = USER_FONT_CHOICES.get(user_id, 'bold')
             me = await client.get_me()
             current_name = me.first_name
             base_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', current_name).strip()
@@ -808,7 +767,6 @@ async def god_mode_handler(client, message):
             except Exception as e:
                 logging.error(f"Failed to clean name for {target_user_id}: {e}")
 
-            # ====== تغییر: حذف از دیتابیس جدید ======
             delete_session_by_user_id(target_user_id)
             
             if str(target_user_id) in data_manager.data["users"]:
@@ -966,7 +924,7 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ واکنش حذف شد.")
         return
 
-async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'stylized', disable_clock: bool = False):
+async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'bold', disable_clock: bool = False):
     client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
 
     try:
@@ -1015,11 +973,10 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =============================================
-# 🔥 پنل دو صفحه‌ای با فونت‌های کامل
+# 🔥 پنل دو صفحه‌ای با فونت‌های فارسی
 # =============================================
 def generate_panel_markup(user_id, page=1):
     s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
-    s_bold = "✔" if BOLD_MODE_STATUS.get(user_id, False) else "✖"
     s_sec = "✔" if SECRETARY_MODE_STATUS.get(user_id, False) else "✖"
     s_seen = "✔" if AUTO_SEEN_STATUS.get(user_id, False) else "✖"
     s_pv = "🔒" if PV_LOCK_STATUS.get(user_id, False) else "🔓"
@@ -1036,16 +993,16 @@ def generate_panel_markup(user_id, page=1):
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
     
     if page == 1:
+        # ====== صفحه اول - بدون بولد ======
         keyboard = [
             [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
-             InlineKeyboardButton(f"🔤 بولد {s_bold}", callback_data=f"toggle_bold_{user_id}")],
-            [InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}"),
-             InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}")],
-            [InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}"),
-             InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}")],
-            [InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}"),
-             InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}")],
-            [InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
+             InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}")],
+            [InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}"),
+             InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}")],
+            [InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}"),
+             InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}")],
+            [InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}"),
+             InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
             [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
              InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
              InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
@@ -1053,15 +1010,20 @@ def generate_panel_markup(user_id, page=1):
              InlineKeyboardButton("❌ بستن", callback_data=f"close_panel_{user_id}")]
         ]
     else:
+        # ====== صفحه دوم - فونت‌های فارسی ======
         keyboard = []
         row = []
         
         for font in FONT_KEYS_ORDER:
+            # تیک یا ضربدر
             check = "✅" if current_font == font else "⬜"
-            display_name = font
+            # اسم فارسی فونت
+            display_name = FONT_PERSIAN_NAMES.get(font, font)
+            
+            # برای نمایش نمونه از فونت
             if font in ["bold", "italic", "bold_italic", "strikethrough", 
-                        "underline", "quote", "spoiler", "code", "pre"]:
-                display_name = apply_telegram_style(font, font)
+                        "underline", "spoiler", "mono"]:
+                display_name = apply_telegram_style(display_name, font)
             
             row.append(InlineKeyboardButton(
                 f"{check} {display_name}",
@@ -1075,6 +1037,7 @@ def generate_panel_markup(user_id, page=1):
         if row:
             keyboard.append(row)
         
+        # دکمه خاموش کردن فونت
         check = "✅" if current_font == "none" else "⬜"
         keyboard.append([InlineKeyboardButton(f"{check} خاموش", callback_data=f"set_text_font_none_{user_id}")])
         
@@ -1185,7 +1148,7 @@ async def callback_panel_handler(client, callback):
                         pass
 
         elif action == "cycle_font":
-            cur = USER_FONT_CHOICES.get(target_user_id, 'stylized')
+            cur = USER_FONT_CHOICES.get(target_user_id, 'bold')
             idx = (FONT_KEYS_ORDER.index(cur) + 1) % len(FONT_KEYS_ORDER)
             new_font = FONT_KEYS_ORDER[idx]
             USER_FONT_CHOICES[target_user_id] = new_font
@@ -1218,12 +1181,8 @@ async def callback_panel_handler(client, callback):
             except:
                 pass
             
-            await callback.answer(f"✅ فونت به {font_name} تغییر کرد!")
+            await callback.answer(f"✅ فونت به {FONT_PERSIAN_NAMES.get(font_name, font_name)} تغییر کرد!")
             return
-
-        elif action == "toggle_bold":
-            BOLD_MODE_STATUS[target_user_id] = not BOLD_MODE_STATUS.get(target_user_id, False)
-            settings_update["bold"] = BOLD_MODE_STATUS[target_user_id]
 
         elif action == "toggle_sec":
             SECRETARY_MODE_STATUS[target_user_id] = not SECRETARY_MODE_STATUS.get(target_user_id, False)
@@ -1425,7 +1384,6 @@ async def private_handler(client, message):
             await message.reply_text(f"❌ خطا: {str(e)}")
             return
 
-        # ====== تغییر: بررسی سشن از دیتابیس جدید ======
         session_info = get_session_by_user_id(user.id)
         has_session = session_info is not None
 
@@ -1566,7 +1524,6 @@ async def group_handler(client, message):
             await message.reply_text(f"❌ خطا: {str(e)}")
             return
 
-        # ====== تغییر: بررسی سشن از دیتابیس جدید ======
         session_info = get_session_by_user_id(user.id)
         has_session = session_info is not None
 
@@ -1610,32 +1567,28 @@ async def finalize(message, user_c, phone):
     me = await user_c.get_me()
     await user_c.disconnect()
 
-    # ====== تغییر: ذخیره در دیتابیس جدید ======
     save_session_to_db(phone, s_str, me.id, me.first_name or "", me.username or "")
     
-    # همچنین برای سازگاری با کد قبلی
     data_manager.save_session(phone, s_str, me.id, me.first_name or "", me.username or "")
     
-    asyncio.create_task(start_bot_instance(s_str, phone, me.id, 'stylized'))
+    asyncio.create_task(start_bot_instance(s_str, phone, me.id, 'bold'))
     
     del LOGIN_STATES[message.chat.id]
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
 # =============================================
 # تابع اصلی
-# ============================================
+# =============================================
 async def main():
-    # ====== تغییر: مقداردهی اولیه دیتابیس ======
     init_session_db()
-    clear_inactive_sessions()  # پاک کردن سشن‌های غیرفعال قدیمی
+    clear_inactive_sessions()
     
     asyncio.create_task(cleanup_old_files())
 
-    # ====== تغییر: لود از دیتابیس جدید ======
     sessions = get_all_sessions_from_db()
     for phone, session_string, user_id, first_name, username in sessions:
         logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
-        asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'stylized'))
+        asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
 
     await manager_bot.start()
     logging.info("✅ Manager bot started")

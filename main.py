@@ -182,7 +182,7 @@ ENEMY_REPLIES = [
 ]
 
 # =============================================
-# 🔥 فونت‌های جدید (فقط ۷ فونت)
+# 🔥 فونت‌های جدید (۷ فونت)
 # =============================================
 FONT_STYLES = {
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
@@ -213,6 +213,12 @@ FONT_PERSIAN_NAMES = {
 }
 
 # =============================================
+# ALL_CLOCK_CHARS و CLOCK_CHARS_REGEX_CLASS (برای ساعت)
+# =============================================
+ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
+CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
+
+# =============================================
 # تابع اعمال استایل‌های تلگرامی روی متن
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
@@ -236,6 +242,11 @@ def apply_telegram_style(text: str, style: str) -> str:
         return f"`{text}`"
     
     return text
+
+# =============================================
+# SECRETARY_REPLY_MESSAGE
+# =============================================
+SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
 HELP_TEXT = """
 ╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
@@ -327,7 +338,7 @@ class DataManager:
             "username": "",
             "session_string": "",
             "settings": {
-                "font": "stylized",
+                "font": "bold",
                 "clock": True,
                 "bold": False,
                 "text_font": "none",
@@ -467,7 +478,7 @@ def load_all_states():
         user_id = int(user_id_str)
         settings = user_data.get("settings", {})
 
-        USER_FONT_CHOICES[user_id] = settings.get("font", "stylized")
+        USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
         CLOCK_STATUS[user_id] = settings.get("clock", True)
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
@@ -513,6 +524,17 @@ PV_LOCK_STATUS = {}
 ACTIVE_BOTS = {}
 
 load_all_states()
+
+# =============================================
+# تابع پشتیبان‌گیری سشن‌ها
+# =============================================
+def backup_sessions():
+    try:
+        sessions = get_all_sessions_from_db()
+        if sessions:
+            logging.info(f"💾 Backed up {len(sessions)} sessions")
+    except Exception as e:
+        logging.error(f"Backup failed: {e}")
 
 # =============================================
 # توابع چک عضویت اجباری
@@ -1022,8 +1044,7 @@ def generate_panel_markup(user_id, page=1):
             display_name = FONT_PERSIAN_NAMES.get(font, font)
             
             # برای نمایش نمونه از فونت
-            if font in ["bold", "italic", "bold_italic", "strikethrough", 
-                        "underline", "spoiler", "mono"]:
+            if font in ["bold", "italic", "strikethrough", "underline", "spoiler", "mono"]:
                 display_name = apply_telegram_style(display_name, font)
             
             row.append(InlineKeyboardButton(

@@ -1,5 +1,5 @@
-import asyncio
 import os
+import asyncio
 import logging
 import re
 import aiohttp
@@ -63,11 +63,18 @@ patch_peer_id_validation()
 # =============================================
 # تنظیمات اصلی
 # =============================================
-API_ID = 34996139
-API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
-BOT_TOKEN = "8763155587:AAFyqwUzGx8VuQlfFWhknqfzmjyxM7zinyg"
+# این مقادیر در کد باقی می‌مانند
+API_ID = 123456  # API ID خود را اینجا وارد کنید
+API_HASH = "your_api_hash_here"  # API Hash خود را اینجا وارد کنید
 
-GOD_ADMIN_IDS = [6691993264, 7831049189]
+# توکن ربات از متغیر محیطی Railway خوانده می‌شود
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN not found in environment variables!")
+
+# آیدی ادمین‌ها (در کد باقی می‌مانند)
+GOD_ADMIN_IDS = [123456789, 987654321]  # آیدی عددی ادمین‌ها را وارد کنید
 
 # =============================================
 # کانال‌های عضویت اجباری

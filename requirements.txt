@@ -1,5 +1,4 @@
 pyrogram==2.0.106
-pytgcalls==4.1.1
 yt-dlp==2023.12.30
 aiohttp==3.9.1
 pydub==0.25.1

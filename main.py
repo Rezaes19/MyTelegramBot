@@ -63,18 +63,15 @@ patch_peer_id_validation()
 # =============================================
 # تنظیمات اصلی
 # =============================================
-# این مقادیر در کد باقی می‌مانند
-API_ID = 34996139  # API ID خود را اینجا وارد کنید
-API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"  # API Hash خود را اینجا وارد کنید
+API_ID = 34996139
+API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 
-# توکن ربات از متغیر محیطی Railway خوانده می‌شود
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN not found in environment variables!")
 
-# آیدی ادمین‌ها (در کد باقی می‌مانند)
-GOD_ADMIN_IDS = [6691993264]  # آیدی عددی ادمین‌ها را وارد کنید
+GOD_ADMIN_IDS = [6691993264]
 
 # =============================================
 # کانال‌های عضویت اجباری
@@ -182,7 +179,7 @@ ENEMY_REPLIES = [
 ]
 
 # =============================================
-# 🔥 فونت‌های جدید (۷ فونت)
+# فونت‌ها
 # =============================================
 FONT_STYLES = {
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
@@ -194,14 +191,8 @@ FONT_STYLES = {
     "mono": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
 }
 
-# =============================================
-# ترتیب نمایش فونت‌ها (فارسی‌سازی شده)
-# =============================================
 FONT_KEYS_ORDER = ["bold", "italic", "quote", "strikethrough", "underline", "spoiler", "mono"]
 
-# =============================================
-# اسم‌های فارسی فونت‌ها برای نمایش در پنل
-# =============================================
 FONT_PERSIAN_NAMES = {
     "bold": "بولد",
     "italic": "ایتالیک",
@@ -212,17 +203,10 @@ FONT_PERSIAN_NAMES = {
     "mono": "مونو (کپی)",
 }
 
-# =============================================
-# ALL_CLOCK_CHARS و CLOCK_CHARS_REGEX_CLASS (برای ساعت)
-# =============================================
 ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
-# =============================================
-# تابع اعمال استایل‌های تلگرامی روی متن
-# =============================================
 def apply_telegram_style(text: str, style: str) -> str:
-    """اعمال استایل‌های مختلف روی متن برای تلگرام"""
     if not text:
         return text
     
@@ -243,9 +227,6 @@ def apply_telegram_style(text: str, style: str) -> str:
     
     return text
 
-# =============================================
-# SECRETARY_REPLY_MESSAGE
-# =============================================
 SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
 
 HELP_TEXT = """
@@ -525,9 +506,6 @@ ACTIVE_BOTS = {}
 
 load_all_states()
 
-# =============================================
-# تابع پشتیبان‌گیری سشن‌ها
-# =============================================
 def backup_sessions():
     try:
         sessions = get_all_sessions_from_db()
@@ -602,20 +580,39 @@ async def perform_clock_update_now(client, user_id):
     except Exception as e:
         logging.error(f"Immediate clock update failed: {e}")
 
+# =============================================
+# 🔥 تابع ترجمه جدید و درست
+# =============================================
 async def translate_text(text: str, target_lang: str) -> str:
-    if not text:
-        return ""
-    encoded_text = quote(text)
-    url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
+    if not text or not target_lang:
+        return text
+    
+    # لیست زبان‌های پشتیبانی شده
+    lang_map = {
+        "en": "en",
+        "ru": "ru", 
+        "zh-CN": "zh-CN"
+    }
+    
+    actual_lang = lang_map.get(target_lang, target_lang)
+    
     try:
+        encoded_text = quote(text)
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={actual_lang}&dt=t&q={encoded_text}"
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.get(url, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data[0][0][0]
-    except:
-        pass
-    return text
+                    if data and data[0]:
+                        translated = ''.join(part[0] for part in data[0] if part[0])
+                        if translated:
+                            logging.info(f"🌐 Translated: {text[:30]}... -> {translated[:30]}...")
+                            return translated
+        return text
+    except Exception as e:
+        logging.error(f"❌ Translation error: {e}")
+        return text
 
 async def update_profile_clock(client: Client, user_id: int):
     while user_id in ACTIVE_BOTS:
@@ -669,6 +666,9 @@ async def status_action_task(client: Client, user_id: int):
         except Exception:
             await asyncio.sleep(60)
 
+# =============================================
+# 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)
+# =============================================
 async def outgoing_message_modifier(client, message):
     user_id = client.me.id
     if not message.text or re.match(COMMAND_REGEX, message.text.strip(), re.IGNORECASE):
@@ -676,10 +676,20 @@ async def outgoing_message_modifier(client, message):
     original_text = message.text
     modified_text = original_text
     
+    logging.info(f"📝 User {user_id} - Text: {original_text[:30]}... | Lang: {AUTO_TRANSLATE_TARGET.get(user_id)}")
+    
+    # ===== ترجمه خودکار =====
     target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     if target_lang:
-        modified_text = await translate_text(modified_text, target_lang)
+        try:
+            translated = await translate_text(modified_text, target_lang)
+            if translated and translated != modified_text:
+                modified_text = translated
+                logging.info(f"✅ Translated to {target_lang}: {modified_text[:50]}...")
+        except Exception as e:
+            logging.error(f"❌ Translation failed: {e}")
     
+    # ===== فونت متن =====
     text_font = TEXT_FONT_STATUS.get(user_id, "none")
     if text_font != "none" and text_font in FONT_KEYS_ORDER:
         modified_text = apply_telegram_style(modified_text, text_font)
@@ -687,8 +697,8 @@ async def outgoing_message_modifier(client, message):
     if modified_text != original_text:
         try:
             await message.edit_text(modified_text)
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"❌ Failed to edit message: {e}")
 
 async def enemy_handler(client, message):
     user_id = client.me.id
@@ -996,7 +1006,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =============================================
-# 🔥 پنل دو صفحه‌ای با فونت‌های فارسی
+# 🔥 پنل دو صفحه‌ای
 # =============================================
 def generate_panel_markup(user_id, page=1):
     s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
@@ -1016,7 +1026,6 @@ def generate_panel_markup(user_id, page=1):
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
     
     if page == 1:
-        # ====== صفحه اول - بدون بولد ======
         keyboard = [
             [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
              InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}")],
@@ -1033,17 +1042,13 @@ def generate_panel_markup(user_id, page=1):
              InlineKeyboardButton("❌ بستن", callback_data=f"close_panel_{user_id}")]
         ]
     else:
-        # ====== صفحه دوم - فونت‌های فارسی ======
         keyboard = []
         row = []
         
         for font in FONT_KEYS_ORDER:
-            # تیک یا ضربدر
             check = "✅" if current_font == font else "⬜"
-            # اسم فارسی فونت
             display_name = FONT_PERSIAN_NAMES.get(font, font)
             
-            # برای نمایش نمونه از فونت
             if font in ["bold", "italic", "strikethrough", "underline", "spoiler", "mono"]:
                 display_name = apply_telegram_style(display_name, font)
             
@@ -1059,7 +1064,6 @@ def generate_panel_markup(user_id, page=1):
         if row:
             keyboard.append(row)
         
-        # دکمه خاموش کردن فونت
         check = "✅" if current_font == "none" else "⬜"
         keyboard.append([InlineKeyboardButton(f"{check} خاموش", callback_data=f"set_text_font_none_{user_id}")])
         
@@ -1242,13 +1246,20 @@ async def callback_panel_handler(client, callback):
             GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
             settings_update["global_enemy"] = GLOBAL_ENEMY_STATUS[target_user_id]
 
+        # ===== ترجمه خودکار =====
         elif action.startswith("lang_"):
             lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
             btn_lang = action.split("_")[1]
             actual_lang = lang_map.get(btn_lang)
 
             current = AUTO_TRANSLATE_TARGET.get(target_user_id)
-            AUTO_TRANSLATE_TARGET[target_user_id] = actual_lang if current != actual_lang else None
+            if current == actual_lang:
+                AUTO_TRANSLATE_TARGET[target_user_id] = None
+                await callback.answer("❌ ترجمه خاموش شد!")
+            else:
+                AUTO_TRANSLATE_TARGET[target_user_id] = actual_lang
+                await callback.answer(f"✅ ترجمه به {btn_lang.upper()} فعال شد!")
+            
             settings_update["translate"] = AUTO_TRANSLATE_TARGET[target_user_id]
 
         elif action.startswith("panel_page_"):
@@ -1334,9 +1345,6 @@ async def broadcast_request_handler(client, message):
     ADMIN_STATES[message.from_user.id] = "broadcast"
     await message.reply_text("لطفاً پیام مورد نظر را بفرستید:", reply_markup=ReplyKeyboardRemove())
 
-# =============================================
-# دستور جدید: لیست سشن‌ها (فقط ادمین)
-# =============================================
 @manager_bot.on_message(filters.text & filters.private & filters.regex("^📊 وضعیت ربات$"))
 async def admin_status_handler(client, message):
     if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
@@ -1379,7 +1387,7 @@ async def contact_handler(client, message):
         await message.reply_text(f"❌ خطا: {e}")
 
 # =============================================
-# هندلر پیوی (آیدی و حذف)
+# هندلر پیوی
 # =============================================
 @manager_bot.on_message(filters.text & filters.private)
 async def private_handler(client, message):
@@ -1389,7 +1397,6 @@ async def private_handler(client, message):
     if not await force_subscribe_check(client, message):
         return
 
-    # ====== آیدی در پیوی ======
     if text and text.strip() == "آیدی":
         if not message.reply_to_message:
             await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
@@ -1429,7 +1436,6 @@ async def private_handler(client, message):
         await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    # ====== حذف در پیوی ======
     if text.startswith("حذف "):
         try:
             count = int(text.split()[1])
@@ -1444,7 +1450,6 @@ async def private_handler(client, message):
             await message.reply_text(f"❌ خطا: {str(e)}")
         return
 
-    # ====== دانلودر ======
     if text.startswith("دانلود "):
         url = text.replace("دانلود ", "").strip()
         if not url.startswith("http"):
@@ -1487,12 +1492,10 @@ async def private_handler(client, message):
             await status_msg.edit_text(f"❌ خطا: {str(e)}")
         return
 
-    # ====== راهنما ======
     if text == "راهنما":
         await message.reply_text(HELP_TEXT)
         return
 
-    # ====== کد تایید ======
     chat_id = message.chat.id
     state = LOGIN_STATES.get(chat_id)
 
@@ -1520,7 +1523,7 @@ async def private_handler(client, message):
             await message.reply_text(f"❌ خطا: {e}")
 
 # =============================================
-# هندلر گروه (آیدی و حذف)
+# هندلر گروه
 # =============================================
 @manager_bot.on_message(filters.group)
 async def group_handler(client, message):
@@ -1529,7 +1532,6 @@ async def group_handler(client, message):
     if not text:
         return
 
-    # ====== آیدی در گروه ======
     if text and text.strip() == "آیدی":
         if not message.reply_to_message:
             await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
@@ -1569,7 +1571,6 @@ async def group_handler(client, message):
         await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    # ====== حذف در گروه ======
     if text.startswith("حذف "):
         try:
             count = int(text.split()[1])
@@ -1602,29 +1603,24 @@ async def finalize(message, user_c, phone):
 # تابع اصلی
 # =============================================
 async def main():
-    # ====== مقداردهی اولیه دیتابیس ======
     try:
         init_session_db()
         logging.info("✅ Database initialized")
     except Exception as e:
         logging.error(f"❌ Database init failed: {e}")
     
-    # ====== پشتیبان‌گیری از سشن‌ها ======
     try:
         backup_sessions()
     except:
         pass
     
-    # ====== پاک کردن سشن‌های غیرفعال ======
     try:
         clear_inactive_sessions()
     except:
         pass
     
-    # ====== تسک پاک‌سازی فایل‌ها ======
     asyncio.create_task(cleanup_old_files())
 
-    # ====== لود سشن‌ها از دیتابیس ======
     try:
         sessions = get_all_sessions_from_db()
         if sessions:
@@ -1633,7 +1629,7 @@ async def main():
                 try:
                     logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
                     asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
-                    await asyncio.sleep(0.5)  # جلوگیری از race condition
+                    await asyncio.sleep(0.5)
                 except Exception as e:
                     logging.error(f"❌ Failed to start bot for {phone}: {e}")
         else:
@@ -1641,7 +1637,6 @@ async def main():
     except Exception as e:
         logging.error(f"❌ Error loading sessions: {e}")
 
-    # ====== استارت منیجر بوت ======
     try:
         await manager_bot.start()
         logging.info("✅ Manager bot started")

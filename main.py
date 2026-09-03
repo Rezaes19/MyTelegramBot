@@ -206,6 +206,9 @@ FONT_PERSIAN_NAMES = {
 ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
+# =============================================
+# تابع اعمال استایل‌های تلگرامی روی متن (با نقل قول درست)
+# =============================================
 def apply_telegram_style(text: str, style: str) -> str:
     if not text:
         return text
@@ -215,7 +218,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"> {text}"
+        return f"❝ {text} ❞"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -631,6 +634,58 @@ async def translate_text(text: str, target_lang: str) -> str:
         logging.error(f"❌ Translation error: {e}")
         return text
 
+async def update_profile_clock(client: Client, user_id: int):
+    while user_id in ACTIVE_BOTS:
+        try:
+            if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
+                await perform_clock_update_now(client, user_id)
+            await asyncio.sleep(60 - datetime.now(TEHRAN_TIMEZONE).second + 0.1)
+        except Exception:
+            await asyncio.sleep(60)
+
+async def anti_login_task(client: Client, user_id: int):
+    while user_id in ACTIVE_BOTS:
+        try:
+            if ANTI_LOGIN_STATUS.get(user_id, False):
+                auths = await client.invoke(functions.account.GetAuthorizations())
+                current_hash = next((a.hash for a in auths.authorizations if a.current), None)
+                if current_hash:
+                    for auth in auths.authorizations:
+                        if auth.hash != current_hash:
+                            await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
+                            await client.send_message("me", f"🚨 نشست غیرمجاز حذف شد: {auth.device_model}")
+            await asyncio.sleep(60)
+        except Exception:
+            await asyncio.sleep(120)
+
+async def status_action_task(client: Client, user_id: int):
+    chat_ids = []
+    last_fetch = 0
+    while user_id in ACTIVE_BOTS:
+        try:
+            typing = TYPING_MODE_STATUS.get(user_id, False)
+            playing = PLAYING_MODE_STATUS.get(user_id, False)
+            if not typing and not playing:
+                await asyncio.sleep(2)
+                continue
+            action = ChatAction.TYPING if typing else ChatAction.PLAYING
+            now = time.time()
+            if not chat_ids or (now - last_fetch > 300):
+                new_chats = []
+                async for dialog in client.get_dialogs(limit=30):
+                    if dialog.chat.type in [ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP]:
+                        new_chats.append(dialog.chat.id)
+                chat_ids = new_chats
+                last_fetch = now
+            for chat_id in chat_ids:
+                try:
+                    await client.send_chat_action(chat_id, action)
+                except:
+                    pass
+            await asyncio.sleep(4)
+        except Exception:
+            await asyncio.sleep(60)
+
 # =============================================
 # 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)
 # =============================================
@@ -661,7 +716,11 @@ async def outgoing_message_modifier(client, message):
     
     if modified_text != original_text:
         try:
-            await message.edit_text(modified_text)
+            # برای فونت‌هایی که نیاز به HTML دارند
+            if text_font in ["quote", "underline"]:
+                await message.edit_text(modified_text, parse_mode='html')
+            else:
+                await message.edit_text(modified_text)
         except Exception as e:
             logging.error(f"❌ Failed to edit message: {e}")
 

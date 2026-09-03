@@ -1610,14 +1610,14 @@ async def main():
     except Exception as e:
         logging.error(f"❌ Error loading sessions: {e}")
 
+       # ====== جلوگیری از Flood ======
     try:
+        await asyncio.sleep(5)  # ۵ ثانیه صبر کن
         await manager_bot.start()
         logging.info("✅ Manager bot started")
     except Exception as e:
         logging.error(f"❌ Manager bot failed: {e}")
         return
-
-    await idle()
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(main())

@@ -218,7 +218,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"❝ {text} ❞"
+        return f"📝 {text}"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -711,13 +711,15 @@ async def outgoing_message_modifier(client, message):
     
     # ===== فونت متن =====
     text_font = TEXT_FONT_STATUS.get(user_id, "none")
+    use_html = False
     if text_font != "none" and text_font in FONT_KEYS_ORDER:
         modified_text = apply_telegram_style(modified_text, text_font)
+        if text_font in ["underline"]:
+            use_html = True
     
     if modified_text != original_text:
         try:
-            # برای فونت‌هایی که نیاز به HTML دارند
-            if text_font in ["quote", "underline"]:
+            if use_html:
                 await message.edit_text(modified_text, parse_mode='html')
             else:
                 await message.edit_text(modified_text)

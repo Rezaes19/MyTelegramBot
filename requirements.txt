@@ -11,4 +11,4 @@ beautifulsoup4
 lxml
 Pillow
 psutil
-googletrans
+deep-translator

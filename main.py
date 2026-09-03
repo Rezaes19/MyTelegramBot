@@ -207,7 +207,7 @@ ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in 
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 # =============================================
-# تابع اعمال استایل‌های تلگرامی روی متن (با نقل قول درست)
+# تابع اعمال استایل‌های تلگرامی روی متن
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
     if not text:
@@ -218,7 +218,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"📝 {text}"
+        return f"<blockquote>{text}</blockquote>"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -584,13 +584,12 @@ async def perform_clock_update_now(client, user_id):
         logging.error(f"Immediate clock update failed: {e}")
 
 # =============================================
-# 🔥 تابع ترجمه با deep-translator (کاملاً پایدار)
+# 🔥 تابع ترجمه با deep-translator
 # =============================================
 async def translate_text(text: str, target_lang: str) -> str:
     if not text or not target_lang:
         return text
     
-    # تبدیل کد زبان به نام انگلیسی
     lang_map = {
         "en": "english",
         "ru": "russian", 
@@ -601,7 +600,6 @@ async def translate_text(text: str, target_lang: str) -> str:
     
     try:
         from deep_translator import GoogleTranslator
-        # اجرا در thread تا از blocking جلوگیری بشه
         translated = await asyncio.to_thread(
             GoogleTranslator(source='auto', target=actual_lang).translate,
             text
@@ -612,7 +610,6 @@ async def translate_text(text: str, target_lang: str) -> str:
         return text
     except ImportError:
         logging.warning("⚠️ deep-translator not installed, trying fallback...")
-        # fallback به API گوگل
         try:
             encoded_text = quote(text)
             url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
@@ -714,7 +711,7 @@ async def outgoing_message_modifier(client, message):
     use_html = False
     if text_font != "none" and text_font in FONT_KEYS_ORDER:
         modified_text = apply_telegram_style(modified_text, text_font)
-        if text_font in ["underline"]:
+        if text_font in ["quote", "underline"]:
             use_html = True
     
     if modified_text != original_text:
@@ -1272,7 +1269,6 @@ async def callback_panel_handler(client, callback):
             GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
             settings_update["global_enemy"] = GLOBAL_ENEMY_STATUS[target_user_id]
 
-        # ===== ترجمه خودکار =====
         elif action.startswith("lang_"):
             lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
             btn_lang = action.split("_")[1]

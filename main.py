@@ -581,13 +581,12 @@ async def perform_clock_update_now(client, user_id):
         logging.error(f"Immediate clock update failed: {e}")
 
 # =============================================
-# 🔥 تابع ترجمه جدید و درست
+# 🔥 تابع ترجمه جدید و درست (با fallback)
 # =============================================
 async def translate_text(text: str, target_lang: str) -> str:
     if not text or not target_lang:
         return text
     
-    # لیست زبان‌های پشتیبانی شده
     lang_map = {
         "en": "en",
         "ru": "ru", 
@@ -596,6 +595,21 @@ async def translate_text(text: str, target_lang: str) -> str:
     
     actual_lang = lang_map.get(target_lang, target_lang)
     
+    # روش اول: استفاده از googletrans
+    try:
+        import googletrans
+        translator = googletrans.Translator()
+        translated = await asyncio.to_thread(translator.translate, text, dest=actual_lang)
+        if translated and translated.text:
+            logging.info(f"🌐 Translated (googletrans): {text[:30]}... -> {translated.text[:30]}...")
+            return translated.text
+        return text
+    except ImportError:
+        logging.info("⚠️ googletrans not installed, using fallback...")
+    except Exception as e:
+        logging.error(f"❌ googletrans error: {e}")
+    
+    # روش دوم: fallback به API گوگل
     try:
         encoded_text = quote(text)
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={actual_lang}&dt=t&q={encoded_text}"
@@ -607,11 +621,11 @@ async def translate_text(text: str, target_lang: str) -> str:
                     if data and data[0]:
                         translated = ''.join(part[0] for part in data[0] if part[0])
                         if translated:
-                            logging.info(f"🌐 Translated: {text[:30]}... -> {translated[:30]}...")
+                            logging.info(f"🌐 Translated (fallback): {text[:30]}... -> {translated[:30]}...")
                             return translated
         return text
     except Exception as e:
-        logging.error(f"❌ Translation error: {e}")
+        logging.error(f"❌ Fallback translation error: {e}")
         return text
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -1006,7 +1020,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =============================================
-# 🔥 پنل دو صفحه‌ای
+# 🔥 پنل دو صفحه‌ای با پرچم انگلیس
 # =============================================
 def generate_panel_markup(user_id, page=1):
     s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
@@ -1035,7 +1049,7 @@ def generate_panel_markup(user_id, page=1):
              InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}")],
             [InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}"),
              InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
-            [InlineKeyboardButton(f"🇺🇸 EN {l_en}", callback_data=f"lang_en_{user_id}"),
+            [InlineKeyboardButton(f"🇬🇧 EN {l_en}", callback_data=f"lang_en_{user_id}"),
              InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
              InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
             [InlineKeyboardButton("📄 صفحه فونت‌ها ➡️", callback_data=f"panel_page_2_{user_id}"),

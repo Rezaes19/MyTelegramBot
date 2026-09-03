@@ -218,7 +218,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"<blockquote>{text}</blockquote>"
+        return f"❝ {text} ❞"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":

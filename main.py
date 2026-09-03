@@ -583,13 +583,14 @@ async def perform_clock_update_now(client, user_id):
     except Exception as e:
         logging.error(f"Immediate clock update failed: {e}")
 
-# =============================================
-# 🔥 تابع ترجمه با deep-translator
+## =============================================
+# 🔥 تابع ترجمه با deep-translator (کاملاً پایدار)
 # =============================================
 async def translate_text(text: str, target_lang: str) -> str:
     if not text or not target_lang:
         return text
     
+    # تبدیل کد زبان به نام انگلیسی
     lang_map = {
         "en": "english",
         "ru": "russian", 
@@ -600,6 +601,7 @@ async def translate_text(text: str, target_lang: str) -> str:
     
     try:
         from deep_translator import GoogleTranslator
+        # اجرا در thread تا از blocking جلوگیری بشه
         translated = await asyncio.to_thread(
             GoogleTranslator(source='auto', target=actual_lang).translate,
             text
@@ -610,6 +612,7 @@ async def translate_text(text: str, target_lang: str) -> str:
         return text
     except ImportError:
         logging.warning("⚠️ deep-translator not installed, trying fallback...")
+        # fallback به API گوگل
         try:
             encoded_text = quote(text)
             url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
@@ -630,58 +633,6 @@ async def translate_text(text: str, target_lang: str) -> str:
     except Exception as e:
         logging.error(f"❌ Translation error: {e}")
         return text
-
-async def update_profile_clock(client: Client, user_id: int):
-    while user_id in ACTIVE_BOTS:
-        try:
-            if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
-                await perform_clock_update_now(client, user_id)
-            await asyncio.sleep(60 - datetime.now(TEHRAN_TIMEZONE).second + 0.1)
-        except Exception:
-            await asyncio.sleep(60)
-
-async def anti_login_task(client: Client, user_id: int):
-    while user_id in ACTIVE_BOTS:
-        try:
-            if ANTI_LOGIN_STATUS.get(user_id, False):
-                auths = await client.invoke(functions.account.GetAuthorizations())
-                current_hash = next((a.hash for a in auths.authorizations if a.current), None)
-                if current_hash:
-                    for auth in auths.authorizations:
-                        if auth.hash != current_hash:
-                            await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
-                            await client.send_message("me", f"🚨 نشست غیرمجاز حذف شد: {auth.device_model}")
-            await asyncio.sleep(60)
-        except Exception:
-            await asyncio.sleep(120)
-
-async def status_action_task(client: Client, user_id: int):
-    chat_ids = []
-    last_fetch = 0
-    while user_id in ACTIVE_BOTS:
-        try:
-            typing = TYPING_MODE_STATUS.get(user_id, False)
-            playing = PLAYING_MODE_STATUS.get(user_id, False)
-            if not typing and not playing:
-                await asyncio.sleep(2)
-                continue
-            action = ChatAction.TYPING if typing else ChatAction.PLAYING
-            now = time.time()
-            if not chat_ids or (now - last_fetch > 300):
-                new_chats = []
-                async for dialog in client.get_dialogs(limit=30):
-                    if dialog.chat.type in [ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP]:
-                        new_chats.append(dialog.chat.id)
-                chat_ids = new_chats
-                last_fetch = now
-            for chat_id in chat_ids:
-                try:
-                    await client.send_chat_action(chat_id, action)
-                except:
-                    pass
-            await asyncio.sleep(4)
-        except Exception:
-            await asyncio.sleep(60)
 
 # =============================================
 # 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)

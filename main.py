@@ -207,7 +207,7 @@ ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in 
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 # =============================================
-# تابع اعمال استایل‌های تلگرامی روی متن
+# تابع اعمال استایل‌های تلگرامی روی متن (با نقل قول درست)
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
     if not text:
@@ -218,7 +218,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"> {text}"  # ← این همون نقل قول دستی تلگرامه
+        return f"> {text}"  # ← نقل قول دستی تلگرام با خط خاکستری
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -583,14 +583,13 @@ async def perform_clock_update_now(client, user_id):
     except Exception as e:
         logging.error(f"Immediate clock update failed: {e}")
 
-## =============================================
-# 🔥 تابع ترجمه با deep-translator (کاملاً پایدار)
+# =============================================
+# تابع ترجمه با deep-translator
 # =============================================
 async def translate_text(text: str, target_lang: str) -> str:
     if not text or not target_lang:
         return text
     
-    # تبدیل کد زبان به نام انگلیسی
     lang_map = {
         "en": "english",
         "ru": "russian", 
@@ -601,7 +600,6 @@ async def translate_text(text: str, target_lang: str) -> str:
     
     try:
         from deep_translator import GoogleTranslator
-        # اجرا در thread تا از blocking جلوگیری بشه
         translated = await asyncio.to_thread(
             GoogleTranslator(source='auto', target=actual_lang).translate,
             text
@@ -612,7 +610,6 @@ async def translate_text(text: str, target_lang: str) -> str:
         return text
     except ImportError:
         logging.warning("⚠️ deep-translator not installed, trying fallback...")
-        # fallback به API گوگل
         try:
             encoded_text = quote(text)
             url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
@@ -633,6 +630,58 @@ async def translate_text(text: str, target_lang: str) -> str:
     except Exception as e:
         logging.error(f"❌ Translation error: {e}")
         return text
+
+async def update_profile_clock(client: Client, user_id: int):
+    while user_id in ACTIVE_BOTS:
+        try:
+            if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
+                await perform_clock_update_now(client, user_id)
+            await asyncio.sleep(60 - datetime.now(TEHRAN_TIMEZONE).second + 0.1)
+        except Exception:
+            await asyncio.sleep(60)
+
+async def anti_login_task(client: Client, user_id: int):
+    while user_id in ACTIVE_BOTS:
+        try:
+            if ANTI_LOGIN_STATUS.get(user_id, False):
+                auths = await client.invoke(functions.account.GetAuthorizations())
+                current_hash = next((a.hash for a in auths.authorizations if a.current), None)
+                if current_hash:
+                    for auth in auths.authorizations:
+                        if auth.hash != current_hash:
+                            await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
+                            await client.send_message("me", f"🚨 نشست غیرمجاز حذف شد: {auth.device_model}")
+            await asyncio.sleep(60)
+        except Exception:
+            await asyncio.sleep(120)
+
+async def status_action_task(client: Client, user_id: int):
+    chat_ids = []
+    last_fetch = 0
+    while user_id in ACTIVE_BOTS:
+        try:
+            typing = TYPING_MODE_STATUS.get(user_id, False)
+            playing = PLAYING_MODE_STATUS.get(user_id, False)
+            if not typing and not playing:
+                await asyncio.sleep(2)
+                continue
+            action = ChatAction.TYPING if typing else ChatAction.PLAYING
+            now = time.time()
+            if not chat_ids or (now - last_fetch > 300):
+                new_chats = []
+                async for dialog in client.get_dialogs(limit=30):
+                    if dialog.chat.type in [ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP]:
+                        new_chats.append(dialog.chat.id)
+                chat_ids = new_chats
+                last_fetch = now
+            for chat_id in chat_ids:
+                try:
+                    await client.send_chat_action(chat_id, action)
+                except:
+                    pass
+            await asyncio.sleep(4)
+        except Exception:
+            await asyncio.sleep(60)
 
 # =============================================
 # 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)
@@ -662,7 +711,7 @@ async def outgoing_message_modifier(client, message):
     use_html = False
     if text_font != "none" and text_font in FONT_KEYS_ORDER:
         modified_text = apply_telegram_style(modified_text, text_font)
-        if text_font in ["quote", "underline"]:
+        if text_font == "underline":
             use_html = True
     
     if modified_text != original_text:
@@ -931,14 +980,30 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ واکنش حذف شد.")
         return
 
+# =============================================
+# start_bot_instance با مدیریت Flood
+# =============================================
 async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'bold', disable_clock: bool = False):
-    client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
-
-    try:
-        await client.start()
-        user_id = (await client.get_me()).id
-    except Exception as e:
-        logging.error(f"Failed to start bot for {phone}: {e}")
+    max_retries = 3
+    retry_delay = 10
+    
+    client = None
+    for attempt in range(max_retries):
+        try:
+            client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
+            await client.start()
+            user_id = (await client.get_me()).id
+            break
+        except Exception as e:
+            if "FLOOD_WAIT" in str(e):
+                wait_time = retry_delay * (attempt + 1)
+                logging.warning(f"⏳ Flood wait {wait_time}s for {phone}, attempt {attempt+1}/{max_retries}")
+                await asyncio.sleep(wait_time)
+            else:
+                logging.error(f"❌ Failed to start bot for {phone}: {e}")
+                return
+    else:
+        logging.error(f"❌ Failed to start bot for {phone} after {max_retries} attempts")
         return
 
     if user_id in ACTIVE_BOTS:
@@ -1573,7 +1638,7 @@ async def finalize(message, user_c, phone):
     await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
 
 # =============================================
-# تابع اصلی
+# تابع اصلی با مدیریت Flood
 # =============================================
 async def main():
     try:
@@ -1594,15 +1659,20 @@ async def main():
     
     asyncio.create_task(cleanup_old_files())
 
+    # ====== استارت سشن‌ها با delay بیشتر و مدیریت Flood ======
     try:
         sessions = get_all_sessions_from_db()
         if sessions:
             logging.info(f"🔄 Found {len(sessions)} sessions, starting bots...")
-            for phone, session_string, user_id, first_name, username in sessions:
+            for i, (phone, session_string, user_id, first_name, username) in enumerate(sessions):
                 try:
                     logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
                     asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
-                    await asyncio.sleep(0.5)
+                    # هر ۵ تا ربات، ۱۰ ثانیه صبر کن
+                    if (i + 1) % 5 == 0:
+                        await asyncio.sleep(10)
+                    else:
+                        await asyncio.sleep(2)
                 except Exception as e:
                     logging.error(f"❌ Failed to start bot for {phone}: {e}")
         else:
@@ -1610,14 +1680,16 @@ async def main():
     except Exception as e:
         logging.error(f"❌ Error loading sessions: {e}")
 
-       # ====== جلوگیری از Flood ======
+    # ====== استارت منیجر بوت با delay ======
+    await asyncio.sleep(5)
     try:
-        await asyncio.sleep(5)  # ۵ ثانیه صبر کن
         await manager_bot.start()
         logging.info("✅ Manager bot started")
     except Exception as e:
         logging.error(f"❌ Manager bot failed: {e}")
         return
+
+    await idle()
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(main())

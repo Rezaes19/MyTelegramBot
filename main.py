@@ -1,4 +1,4 @@
-رimport os
+import os
 import asyncio
 import logging
 import re
@@ -1332,6 +1332,93 @@ async def callback_panel_handler(client, callback):
         except:
             pass
 
+# =============================================
+# =============================================
+# 📥📤 بخش مدیریت دیتابیس (آپلود و دانلود)
+# =============================================
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^📥 دانلود دیتابیس$"))
+async def download_database_handler(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    
+    try:
+        db_path = DATA_FILE
+        if os.path.exists(db_path):
+            await message.reply_document(
+                document=db_path,
+                caption="✅ **دیتابیس با موفقیت دانلود شد!**\n\n"
+                       f"📅 تاریخ: {datetime.now(TEHRAN_TIMEZONE).strftime('%Y-%m-%d %H:%M')}\n"
+                       f"📁 حجم: {os.path.getsize(db_path) / 1024:.2f} KB"
+            )
+            logging.info(f"📥 Database downloaded by admin {message.from_user.id}")
+        else:
+            await message.reply_text("❌ فایل دیتابیس پیدا نشد!")
+    except Exception as e:
+        await message.reply_text(f"❌ خطا در دانلود: {e}")
+        logging.error(f"Download database error: {e}")
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^📤 آپلود دیتابیس$"))
+async def upload_database_request_handler(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    
+    ADMIN_STATES[message.from_user.id] = "waiting_for_db_upload"
+    await message.reply_text(
+        "📤 **لطفاً فایل دیتابیس (JSON) را ارسال کنید.**\n\n"
+        "⚠️ توجه: فایل باید با فرمت JSON و شامل تمام داده‌های ربات باشد.\n\n"
+        "برای لغو عملیات، دستور `لغو` را بفرستید."
+    )
+
+@manager_bot.on_message(filters.document & filters.private)
+async def upload_database_handler(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    
+    if ADMIN_STATES.get(message.from_user.id) != "waiting_for_db_upload":
+        return
+    
+    try:
+        file_path = await message.download()
+        if not file_path:
+            await message.reply_text("❌ خطا در دانلود فایل!")
+            return
+        
+        # بررسی فایل JSON
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except:
+            await message.reply_text("❌ فایل معتبر نیست! لطفاً فایل JSON دیتابیس را ارسال کنید.")
+            os.remove(file_path)
+            ADMIN_STATES[message.from_user.id] = None
+            return
+        
+        # پشتیبان‌گیری از دیتابیس فعلی
+        if os.path.exists(DATA_FILE):
+            backup_name = f"{DATA_FILE}.backup.{int(time.time())}"
+            os.rename(DATA_FILE, backup_name)
+            logging.info(f"📦 Database backed up to {backup_name}")
+        
+        # کپی فایل جدید
+        os.rename(file_path, DATA_FILE)
+        ADMIN_STATES[message.from_user.id] = None
+        
+        await message.reply_text(
+            "✅ **دیتابیس با موفقیت آپلود شد!**\n\n"
+            "🔄 برای اعمال تغییرات، ربات را ریستارت کنید."
+        )
+        logging.info(f"📤 Database uploaded by admin {message.from_user.id}")
+        
+    except Exception as e:
+        await message.reply_text(f"❌ خطا در آپلود: {e}")
+        logging.error(f"Upload database error: {e}")
+        ADMIN_STATES[message.from_user.id] = None
+
+# =============================================
+# پایان بخش مدیریت دیتابیس
+# =============================================
+
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     user_id = message.from_user.id
@@ -1342,7 +1429,15 @@ async def start_login(client, message):
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
 
     if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
-        buttons.append([KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")])
+        buttons.append([
+            KeyboardButton("📊 وضعیت ربات"),
+            KeyboardButton("📢 پیام همگانی")
+        ])
+        # ===== دکمه‌های جدید برای مدیریت دیتابیس =====
+        buttons.append([
+            KeyboardButton("📥 دانلود دیتابیس"),
+            KeyboardButton("📤 آپلود دیتابیس")
+        ])
 
     kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
     await message.reply_text("👋 خوش آمدید.", reply_markup=kb)
@@ -1437,6 +1532,12 @@ async def private_handler(client, message):
     text = message.text
 
     if not await force_subscribe_check(client, message):
+        return
+
+    # ===== لغو عملیات آپلود =====
+    if text and text.strip() == "لغو" and ADMIN_STATES.get(user_id) == "waiting_for_db_upload":
+        ADMIN_STATES[user_id] = None
+        await message.reply_text("❌ عملیات آپلود لغو شد.")
         return
 
     if text and text.strip() == "آیدی":

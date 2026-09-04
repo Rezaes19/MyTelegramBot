@@ -1,4 +1,4 @@
-import os
+رimport os
 import asyncio
 import logging
 import re
@@ -189,9 +189,10 @@ FONT_STYLES = {
     "underline": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "spoiler": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "mono": {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
+    "codeblock": {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
 }
 
-FONT_KEYS_ORDER = ["bold", "italic", "quote", "strikethrough", "underline", "spoiler", "mono"]
+FONT_KEYS_ORDER = ["bold", "italic", "quote", "strikethrough", "underline", "spoiler", "mono", "codeblock"]
 
 FONT_PERSIAN_NAMES = {
     "bold": "بولد",
@@ -201,13 +202,14 @@ FONT_PERSIAN_NAMES = {
     "underline": "زیرخط",
     "spoiler": "اسپویلر",
     "mono": "مونو (کپی)",
+    "codeblock": "کد بلاک",
 }
 
 ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 # =============================================
-# تابع اعمال استایل‌های تلگرامی روی متن (با نقل قول درست)
+# تابع اعمال استایل‌های تلگرامی روی متن
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
     if not text:
@@ -218,7 +220,7 @@ def apply_telegram_style(text: str, style: str) -> str:
     elif style == "italic":
         return f"__{text}__"
     elif style == "quote":
-        return f"“{text}”"
+        return f"> {text}"
     elif style == "strikethrough":
         return f"~~{text}~~"
     elif style == "underline":
@@ -227,6 +229,8 @@ def apply_telegram_style(text: str, style: str) -> str:
         return f"||{text}||"
     elif style == "mono":
         return f"`{text}`"
+    elif style == "codeblock":
+        return f"```\n{text}\n```"
     
     return text
 

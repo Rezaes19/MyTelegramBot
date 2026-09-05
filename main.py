@@ -527,6 +527,43 @@ def backup_sessions():
         logging.error(f"Backup failed: {e}")
 
 # =============================================
+# تابع ری‌استارت همه سشن‌ها
+# =============================================
+async def restart_all_selfs():
+    sessions = get_all_sessions_from_db()
+    if not sessions:
+        return "❌ هیچ سشن فعالی یافت نشد!"
+    
+    success_count = 0
+    fail_count = 0
+    
+    for phone, session_string, user_id, first_name, username in sessions:
+        try:
+            # توقف سشن قبلی
+            if user_id in ACTIVE_BOTS:
+                client, tasks = ACTIVE_BOTS[user_id]
+                for task in tasks:
+                    task.cancel()
+                try:
+                    await client.stop()
+                except:
+                    pass
+                del ACTIVE_BOTS[user_id]
+            
+            await asyncio.sleep(0.5)
+            
+            # شروع مجدد
+            asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
+            success_count += 1
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            logging.error(f"Failed to restart session for {phone}: {e}")
+            fail_count += 1
+    
+    return f"✅ موفق: {success_count}\n❌ ناموفق: {fail_count}"
+
+# =============================================
 # تابع کمکی برای گرفتن نام کاربر
 # =============================================
 async def get_user_name(user_id):
@@ -1533,11 +1570,21 @@ async def upload_database_handler(client, message):
         os.rename(file_path, DATA_FILE)
         ADMIN_STATES[message.from_user.id] = None
         
+        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال ری‌استارت سشن‌ها...")
+        
+        # ====== لود مجدد دیتابیس ======
+        data_manager.load_data()
+        load_all_states()
+        
+        # ====== ری‌استارت همه سشن‌ها ======
+        restart_result = await restart_all_selfs()
+        
         await message.reply_text(
-            "✅ **دیتابیس با موفقیت آپلود شد!**\n\n"
-            "🔄 برای اعمال تغییرات، ربات را ریستارت کنید."
+            f"✅ **عملیات کامل شد!**\n\n"
+            f"{restart_result}\n\n"
+            "✅ تمام سشن‌ها دوباره فعال شدن."
         )
-        logging.info(f"📤 Database uploaded by admin {message.from_user.id}")
+        logging.info(f"📤 Database uploaded and restarted by admin {message.from_user.id}")
         
     except Exception as e:
         await message.reply_text(f"❌ خطا در آپلود: {e}")

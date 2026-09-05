@@ -1584,87 +1584,118 @@ async def upload_database_handler(client, message):
         os.rename(file_path, DATA_FILE)
         ADMIN_STATES[message.from_user.id] = None
         
-        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال لود مجدد و سینک سشن‌ها...")
+        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال لود مجدد و بررسی محتویات...")
         
         # ====== لود مجدد دیتابیس ======
         data_manager.load_data()
         load_all_states()
         
-        # ====== سینک قوی سشن‌ها از JSON به SQLite ======
+        # ====== تشخیص کامل محتویات JSON ======
+        all_users = data_manager.get_all_users()
+        total_users = len(all_users)
+        users_with_session = 0
+        users_with_phone = 0
+        sessions_top_level = 0
+        
+        try:
+            sessions_top_level = len(list(data_manager.get_all_sessions()))
+        except:
+            pass
+        
+        sample_info = []
+        for uid_str, u_data in list(all_users.items())[:5]:
+            has_ss = bool(u_data.get("session_string"))
+            has_ph = bool(u_data.get("phone"))
+            sample_info.append(f"• {uid_str} → session:{has_ss} | phone:{has_ph}")
+            if has_ss:
+                users_with_session += 1
+            if has_ph:
+                users_with_phone += 1
+        
+        # شمارش کامل
+        for uid_str, u_data in all_users.items():
+            if u_data.get("session_string"):
+                users_with_session += 1
+            if u_data.get("phone"):
+                users_with_phone += 1
+        
+        # چون دو بار شمردیم، اصلاح می‌کنیم
+        users_with_session = sum(1 for u in all_users.values() if u.get("session_string"))
+        users_with_phone = sum(1 for u in all_users.values() if u.get("phone"))
+        
+        diag_text = (
+            f"📊 **گزارش محتویات فایل آپلود شده:**\n\n"
+            f"👥 تعداد کل کاربران: `{total_users}`\n"
+            f"📱 کاربران دارای phone: `{users_with_phone}`\n"
+            f"🔑 کاربران دارای session_string: `{users_with_session}`\n"
+            f"📂 سشن‌های بخش sessions: `{sessions_top_level}`\n\n"
+            f"**نمونه کاربران:**\n" + ("\n".join(sample_info) if sample_info else "هیچ کاربری نیست")
+        )
+        
+        await message.reply_text(diag_text)
+        logging.info(f"DIAG → users={total_users} | with_session={users_with_session} | with_phone={users_with_phone} | top_sessions={sessions_top_level}")
+        
+        # ====== سینک قوی سشن‌ها ======
         synced = 0
         synced_users = set()
         
         try:
-            # روش ۱: از بخش sessions بالای JSON
+            # روش ۱
             for phone, sess_info in data_manager.get_all_sessions():
                 s_str = sess_info.get("string")
                 u_id = sess_info.get("user_id")
-                if s_str and u_id and u_id not in synced_users:
+                if s_str and u_id and int(u_id) not in synced_users:
                     u_data = data_manager.get_user_data(u_id)
-                    save_session_to_db(
-                        str(phone),
-                        s_str,
-                        int(u_id),
-                        u_data.get("first_name", ""),
-                        u_data.get("username", "")
-                    )
+                    save_session_to_db(str(phone), s_str, int(u_id), u_data.get("first_name", ""), u_data.get("username", ""))
                     synced += 1
-                    synced_users.add(u_id)
-                    logging.info(f"✅ Synced from sessions[] → user {u_id}")
+                    synced_users.add(int(u_id))
+                    logging.info(f"✅ Synced from sessions[] → {u_id}")
 
-            # روش ۲: اسکن داخل تمام کاربران (مهم‌ترین بخش)
-            all_users = data_manager.get_all_users()
+            # روش ۲ - اسکن کاربران
             for uid_str, u_data in all_users.items():
                 try:
                     u_id = int(uid_str)
                     if u_id in synced_users:
                         continue
-                    
                     s_str = u_data.get("session_string")
                     phone = u_data.get("phone")
-                    
                     if s_str and phone:
-                        save_session_to_db(
-                            str(phone),
-                            s_str,
-                            u_id,
-                            u_data.get("first_name", ""),
-                            u_data.get("username", "")
-                        )
-                        # همزمان داخل sessions هم بنویس تا بعداً مشکل نداشته باشیم
-                        data_manager.data["sessions"][str(phone)] = {
-                            "string": s_str,
-                            "user_id": u_id
-                        }
+                        save_session_to_db(str(phone), s_str, u_id, u_data.get("first_name", ""), u_data.get("username", ""))
+                        data_manager.data.setdefault("sessions", {})[str(phone)] = {"string": s_str, "user_id": u_id}
                         synced += 1
                         synced_users.add(u_id)
-                        logging.info(f"✅ Synced from users[] → user {u_id}")
+                        logging.info(f"✅ Synced from users[] → {u_id}")
                 except Exception as e:
-                    logging.error(f"Error syncing user {uid_str}: {e}")
+                    logging.error(f"Error syncing {uid_str}: {e}")
             
-            # ذخیره تغییرات sessions
             data_manager.save_data()
-            
-            logging.info(f"✅ Total synced sessions: {synced}")
+            logging.info(f"✅ Total synced: {synced}")
             
         except Exception as e:
-            logging.error(f"❌ Session sync failed: {e}")
-            await message.reply_text(f"⚠️ خطا در سینک سشن‌ها: {e}")
+            logging.error(f"❌ Sync failed: {e}")
+            await message.reply_text(f"⚠️ خطا در سینک: {e}")
         
-        # چک نهایی
         final_count = get_session_count()
-        
-        # ====== ری‌استارت همه سشن‌ها ======
         restart_result = await restart_all_selfs()
         
-        await message.reply_text(
+        final_msg = (
             f"✅ **عملیات کامل شد!**\n\n"
-            f"🔄 سشن‌های پیدا شده و سینک‌شده: `{synced}`\n"
-            f"📊 تعداد سشن در دیتابیس: `{final_count}`\n"
+            f"🔄 سشن‌های سینک‌شده: `{synced}`\n"
+            f"📊 سشن در SQLite: `{final_count}`\n"
             f"{restart_result}\n\n"
-            "✅ تمام سشن‌ها دوباره با تنظیمات قبلی فعال شدن."
         )
-        logging.info(f"📤 Database uploaded + synced ({synced}) + restarted by admin {message.from_user.id}")
+        
+        if synced == 0:
+            final_msg += (
+                "⚠️ **هیچ session_string ای پیدا نشد!**\n\n"
+                "یعنی فایل JSON که آپلود کردی شامل session_string کاربران نیست.\n"
+                "احتمالاً قبلاً فقط در sessions.db ذخیره می‌شده و داخل bot_data.json نوشته نمی‌شده."
+            )
+        else:
+            final_msg += "✅ تمام سشن‌ها دوباره با تنظیمات قبلی فعال شدن."
+        
+        await message.reply_text(final_msg)
+        logging.info(f"📤 Upload finished → synced={synced}")
         
     except Exception as e:
         await message.reply_text(f"❌ خطا در آپلود: {e}")

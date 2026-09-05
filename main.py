@@ -527,7 +527,7 @@ def backup_sessions():
         logging.error(f"Backup failed: {e}")
 
 # =============================================
-# تابع ری‌استارت همه سشن‌ها
+# تابع ری‌استارت همه سشن‌ها (نسخه بهبود یافته)
 # =============================================
 async def restart_all_selfs():
     sessions = get_all_sessions_from_db()
@@ -537,25 +537,39 @@ async def restart_all_selfs():
     success_count = 0
     fail_count = 0
     
+    # اول همه سشن‌های فعال رو تمیز خاموش کن
+    for uid in list(ACTIVE_BOTS.keys()):
+        try:
+            client, tasks = ACTIVE_BOTS[uid]
+            for task in tasks:
+                task.cancel()
+            try:
+                await client.stop()
+            except:
+                pass
+            del ACTIVE_BOTS[uid]
+            logging.info(f"🛑 Stopped old session for user {uid}")
+        except Exception as e:
+            logging.error(f"Error stopping session {uid}: {e}")
+    
+    await asyncio.sleep(1.5)
+    
     for phone, session_string, user_id, first_name, username in sessions:
         try:
-            # توقف سشن قبلی
+            # اگر هنوز چیزی مونده بود دوباره پاک کن
             if user_id in ACTIVE_BOTS:
-                client, tasks = ACTIVE_BOTS[user_id]
-                for task in tasks:
-                    task.cancel()
                 try:
+                    client, tasks = ACTIVE_BOTS[user_id]
+                    for task in tasks:
+                        task.cancel()
                     await client.stop()
+                    del ACTIVE_BOTS[user_id]
                 except:
                     pass
-                del ACTIVE_BOTS[user_id]
             
-            await asyncio.sleep(0.5)
-            
-            # شروع مجدد
             asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
             success_count += 1
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.8)  # فاصله بیشتر برای جلوگیری از Flood
             
         except Exception as e:
             logging.error(f"Failed to restart session for {phone}: {e}")
@@ -1499,8 +1513,7 @@ async def callback_panel_handler(client, callback):
             pass
 
 # =============================================
-# =============================================
-# 📥📤 بخش مدیریت دیتابیس (آپلود و دانلود)
+# 📥📤 بخش مدیریت دیتابیس (آپلود و دانلود) - نسخه فیکس شده
 # =============================================
 
 @manager_bot.on_message(filters.text & filters.private & filters.regex("^📥 دانلود دیتابیس$"))
@@ -1554,9 +1567,10 @@ async def upload_database_handler(client, message):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-        except:
+        except Exception:
             await message.reply_text("❌ فایل معتبر نیست! لطفاً فایل JSON دیتابیس را ارسال کنید.")
-            os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
             ADMIN_STATES[message.from_user.id] = None
             return
         
@@ -1566,25 +1580,91 @@ async def upload_database_handler(client, message):
             os.rename(DATA_FILE, backup_name)
             logging.info(f"📦 Database backed up to {backup_name}")
         
-        # کپی فایل جدید
+        # جایگزینی فایل
         os.rename(file_path, DATA_FILE)
         ADMIN_STATES[message.from_user.id] = None
         
-        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال ری‌استارت سشن‌ها...")
+        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال لود مجدد و سینک سشن‌ها...")
         
         # ====== لود مجدد دیتابیس ======
         data_manager.load_data()
         load_all_states()
+        
+        # ====== سینک قوی سشن‌ها از JSON به SQLite ======
+        synced = 0
+        synced_users = set()
+        
+        try:
+            # روش ۱: از بخش sessions بالای JSON
+            for phone, sess_info in data_manager.get_all_sessions():
+                s_str = sess_info.get("string")
+                u_id = sess_info.get("user_id")
+                if s_str and u_id and u_id not in synced_users:
+                    u_data = data_manager.get_user_data(u_id)
+                    save_session_to_db(
+                        str(phone),
+                        s_str,
+                        int(u_id),
+                        u_data.get("first_name", ""),
+                        u_data.get("username", "")
+                    )
+                    synced += 1
+                    synced_users.add(u_id)
+                    logging.info(f"✅ Synced from sessions[] → user {u_id}")
+
+            # روش ۲: اسکن داخل تمام کاربران (مهم‌ترین بخش)
+            all_users = data_manager.get_all_users()
+            for uid_str, u_data in all_users.items():
+                try:
+                    u_id = int(uid_str)
+                    if u_id in synced_users:
+                        continue
+                    
+                    s_str = u_data.get("session_string")
+                    phone = u_data.get("phone")
+                    
+                    if s_str and phone:
+                        save_session_to_db(
+                            str(phone),
+                            s_str,
+                            u_id,
+                            u_data.get("first_name", ""),
+                            u_data.get("username", "")
+                        )
+                        # همزمان داخل sessions هم بنویس تا بعداً مشکل نداشته باشیم
+                        data_manager.data["sessions"][str(phone)] = {
+                            "string": s_str,
+                            "user_id": u_id
+                        }
+                        synced += 1
+                        synced_users.add(u_id)
+                        logging.info(f"✅ Synced from users[] → user {u_id}")
+                except Exception as e:
+                    logging.error(f"Error syncing user {uid_str}: {e}")
+            
+            # ذخیره تغییرات sessions
+            data_manager.save_data()
+            
+            logging.info(f"✅ Total synced sessions: {synced}")
+            
+        except Exception as e:
+            logging.error(f"❌ Session sync failed: {e}")
+            await message.reply_text(f"⚠️ خطا در سینک سشن‌ها: {e}")
+        
+        # چک نهایی
+        final_count = get_session_count()
         
         # ====== ری‌استارت همه سشن‌ها ======
         restart_result = await restart_all_selfs()
         
         await message.reply_text(
             f"✅ **عملیات کامل شد!**\n\n"
+            f"🔄 سشن‌های پیدا شده و سینک‌شده: `{synced}`\n"
+            f"📊 تعداد سشن در دیتابیس: `{final_count}`\n"
             f"{restart_result}\n\n"
-            "✅ تمام سشن‌ها دوباره فعال شدن."
+            "✅ تمام سشن‌ها دوباره با تنظیمات قبلی فعال شدن."
         )
-        logging.info(f"📤 Database uploaded and restarted by admin {message.from_user.id}")
+        logging.info(f"📤 Database uploaded + synced ({synced}) + restarted by admin {message.from_user.id}")
         
     except Exception as e:
         await message.reply_text(f"❌ خطا در آپلود: {e}")

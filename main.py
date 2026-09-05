@@ -10,7 +10,7 @@ import sqlite3
 from urllib.parse import quote
 from pyrogram import Client, filters, idle
 from pyrogram.handlers import MessageHandler
-from pyrogram.enums import ChatType, ChatAction
+from pyrogram.enums import ChatType, ChatAction, ParseMode
 from pyrogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -962,7 +962,7 @@ async def outgoing_message_modifier(client, message):
     if modified_text != original_text:
         try:
             if use_html:
-                await message.edit_text(modified_text, parse_mode='html')
+                await message.edit_text(modified_text, parse_mode=ParseMode.HTML)
             else:
                 await message.edit_text(modified_text)
         except Exception as e:
@@ -1495,7 +1495,7 @@ async def callback_panel_handler(client, callback):
             pass
         
         try:
-            await callback.message.reply_text(result_text, reply_markup=result_buttons, parse_mode="html")
+            await callback.message.reply_text(result_text, reply_markup=result_buttons, parse_mode=ParseMode.HTML)
         except Exception as e:
             logging.error(f"Result message error: {e}")
             await callback.message.reply_text(
@@ -2479,7 +2479,7 @@ async def group_handler(client, message):
         ])
         
         try:
-            await message.reply_text(text_msg, reply_markup=bal_buttons, parse_mode="html")
+            await message.reply_text(text_msg, reply_markup=bal_buttons, parse_mode=ParseMode.HTML)
         except Exception:
             await message.reply_text(f"💎 موجودی: {balance:,} الماس")
         return
@@ -2629,7 +2629,7 @@ async def group_handler(client, message):
             sent_message = await message.reply_text(
                 game_text,
                 reply_markup=InlineKeyboardMarkup(buttons),
-                parse_mode="html"
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             # اگر html هم مشکل داشت، بدون پارس بفرست و الماس رو برگردون

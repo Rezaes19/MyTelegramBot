@@ -511,6 +511,11 @@ PV_LOCK_STATUS = {}
 
 ACTIVE_BOTS = {}
 
+# =============================================
+# سیستم نبرد الماس
+# =============================================
+active_games = {}
+
 load_all_states()
 
 def backup_sessions():
@@ -520,6 +525,20 @@ def backup_sessions():
             logging.info(f"💾 Backed up {len(sessions)} sessions")
     except Exception as e:
         logging.error(f"Backup failed: {e}")
+
+# =============================================
+# تابع کمکی برای گرفتن نام کاربر
+# =============================================
+async def get_user_name(user_id):
+    try:
+        user = await manager_bot.get_users(user_id)
+        if user.username:
+            return f"@{user.username}"
+        else:
+            name = user.first_name or "کاربر"
+            return name[:18] + "..." if len(name) > 20 else name
+    except:
+        return f"کاربر {user_id}"
 
 # =============================================
 # توابع چک عضویت اجباری
@@ -1184,6 +1203,116 @@ async def callback_panel_handler(client, callback):
         await callback.answer("✅ مسدود شد")
         return
 
+    # =============================================
+    # کالبک‌های نبرد الماس
+    # =============================================
+    
+    # ====== پیوستن به نبرد ======
+    if data.startswith("game_join_"):
+        parts = data.split("_")
+        amount = int(parts[2])
+        organizer_id = int(parts[3])
+        joiner_id = callback.from_user.id
+        
+        if joiner_id == organizer_id:
+            await callback.answer("❌ شما برگزار کننده هستید!", show_alert=True)
+            return
+        
+        # چک کردن موجودی Joiner
+        db = get_user_db(joiner_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (joiner_id,))
+        result = cursor.fetchone()
+        joiner_balance = result[0] if result else 0
+        db.close()
+        
+        if joiner_balance < amount:
+            await callback.answer(f"❌ موجودی شما کافی نیست! ({joiner_balance:,})", show_alert=True)
+            return
+        
+        # کم کردن مبلغ از Joiner
+        db = get_user_db(joiner_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, joiner_id))
+        db.commit()
+        db.close()
+        
+        # محاسبه جایزه
+        total_prize = amount * 2
+        tax = int(total_prize * 0.05)
+        prize = total_prize - tax
+        
+        # انتخاب برنده تصادفی
+        winner_id = random.choice([organizer_id, joiner_id])
+        loser_id = organizer_id if winner_id == joiner_id else joiner_id
+        
+        # اضافه کردن جایزه به برنده
+        db = get_user_db(winner_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (prize, winner_id))
+        db.commit()
+        db.close()
+        
+        # گرفتن نام‌ها
+        winner_name = await get_user_name(winner_id)
+        loser_name = await get_user_name(loser_id)
+        
+        # نتیجه نبرد
+        result_text = f"⚔️ **نتیجه نبرد الماس**\n\n"
+        result_text += f"🏆 **برنده:** {winner_name}\n"
+        result_text += f"💔 **بازنده:** {loser_name}\n"
+        result_text += f"💰 **جایزه:** {prize:,} الماس\n"
+        result_text += f"🧾 **مالیات:** {tax:,} الماس (۵%)\n"
+        result_text += f"🎯 **مبلغ نبرد:** {amount:,} الماس"
+        
+        # حذف پیام نبرد
+        try:
+            await client.delete_messages(callback.message.chat.id, callback.message.id)
+        except:
+            pass
+        
+        await callback.message.reply_text(result_text, parse_mode='md')
+        await callback.answer("✅ نبرد به پایان رسید!")
+        
+        # حذف از لیست فعال
+        game_key = (callback.message.chat.id, callback.message.id)
+        if game_key in active_games:
+            del active_games[game_key]
+        return
+    
+    # ====== لغو نبرد ======
+    if data.startswith("game_cancel_"):
+        parts = data.split("_")
+        amount = int(parts[2])
+        organizer_id = int(parts[3])
+        user_id = callback.from_user.id
+        
+        if user_id != organizer_id:
+            await callback.answer("❌ فقط برگزار کننده می‌تواند نبرد را لغو کند!", show_alert=True)
+            return
+        
+        # برگرداندن مبلغ به برگزار کننده
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
+        db.commit()
+        db.close()
+        
+        # حذف پیام نبرد
+        try:
+            await client.delete_messages(callback.message.chat.id, callback.message.id)
+        except:
+            pass
+        
+        await callback.message.reply_text(f"❌ نبرد الماس با تعداد {amount:,} الماس لغو شد.\n💎 {amount:,} الماس به حساب شما برگشت داده شد.")
+        await callback.answer("✅ نبرد لغو شد!")
+        
+        # حذف از لیست فعال
+        game_key = (callback.message.chat.id, callback.message.id)
+        if game_key in active_games:
+            del active_games[game_key]
+        return
+
     if isinstance(data, str):
         parts = data.split("_")
         if len(parts) > 1:
@@ -1726,6 +1855,60 @@ async def group_handler(client, message):
             await message.delete()
         except Exception as e:
             await message.reply_text(f"❌ خطا: {str(e)}")
+        return
+
+    # ====== نبرد الماس ======
+    game_match = re.match(r'بازی\s+(\d+)$', text.strip(), re.IGNORECASE)
+    if game_match:
+        organizer_id = message.from_user.id
+        amount = int(game_match.group(1))
+        
+        if amount < 20:
+            await message.reply_text('❌ مبلغ نبرد باید حداقل 20 الماس باشد.')
+            return
+        
+        # چک کردن موجودی برگزار کننده
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (organizer_id,))
+        result = cursor.fetchone()
+        organizer_balance = result[0] if result else 0
+        db.close()
+        
+        if organizer_balance < amount:
+            await message.reply_text(f'❌ موجودی الماس شما ({organizer_balance:,}) برای شروع نبرد با مبلغ {amount:,} کافی نیست.')
+            return
+        
+        # کم کردن مبلغ از حساب برگزار کننده
+        db = get_user_db(organizer_id)
+        cursor = db.cursor()
+        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, organizer_id))
+        db.commit()
+        db.close()
+        
+        # ساخت پیام نبرد
+        organizer_name = f"[{message.from_user.first_name}](tg://user?id={organizer_id})"
+        game_text = f"⚔️ **نبرد الماس**\n\n"
+        game_text += f"👤 **برگزار کننده :** {organizer_name}\n"
+        game_text += f"💰 **مبلغ نبرد :** {amount:,} الماس\n"
+        game_text += f"🏆 **جایزه کل :** {amount * 2:,} الماس\n\n"
+        game_text += "📌 جهت پیوستن به نبرد الماس لطفا روی دکمه زیر کلیک کنید."
+        
+        buttons = [
+            [InlineKeyboardButton("⚔️ پیوستن به نبرد", callback_data=f"game_join_{amount}_{organizer_id}")],
+            [InlineKeyboardButton("❌ لغو نبرد", callback_data=f"game_cancel_{amount}_{organizer_id}")]
+        ]
+        
+        sent_message = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode='md')
+        
+        # ذخیره نبرد در لیست فعال
+        game_key = (message.chat.id, sent_message.id)
+        active_games[game_key] = {
+            'organizer_id': organizer_id,
+            'amount': amount,
+            'chat_id': message.chat.id,
+            'message_id': sent_message.id
+        }
         return
 
 async def finalize(message, user_c, phone):

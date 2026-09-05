@@ -1996,10 +1996,13 @@ async def start_login(client, message):
         f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس\n\n"
         f"🔗 **لینک دعوت شما:**\n`{ref_link}`\n"
         f"با دعوت هر نفر `{REFERRAL_REWARD}` الماس دریافت می‌کنید.\n\n"
-        f"برای فعال‌سازی سلف روی دکمه زیر کلیک کنید:"
+        f"برای فعال‌سازی سلف یکی از دکمه‌های زیر را بزنید:"
     )
 
-    buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
+    buttons = [
+        [KeyboardButton("🚀 فعال‌سازی سلف")],
+        [KeyboardButton("📱 ارسال شماره (اشتراک‌گذاری)", request_contact=True)]
+    ]
 
     if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
         buttons.append([
@@ -2153,7 +2156,8 @@ async def admin_back_to_menu(client, message):
     ADMIN_STATES[message.from_user.id] = None
     
     buttons = [
-        [KeyboardButton("📱 شماره و شروع", request_contact=True)],
+        [KeyboardButton("🚀 فعال‌سازی سلف")],
+        [KeyboardButton("📱 ارسال شماره (اشتراک‌گذاری)", request_contact=True)],
         [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
         [KeyboardButton("💎 پنل الماس"), KeyboardButton("🛠 پنل ادمین")],
         [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")]
@@ -2272,6 +2276,99 @@ async def private_handler(client, message):
     text = message.text
 
     if not await force_subscribe_check(client, message):
+        return
+
+    # ===== شروع فعال‌سازی سلف (مثل کد قدیمی) =====
+    if text and text.strip() == "🚀 فعال‌سازی سلف":
+        if is_banned(user_id):
+            await message.reply_text("🚫 شما مسدود شده‌اید.")
+            return
+        
+        balance = get_balance(user_id)
+        if balance < SELF_PRICE:
+            await message.reply_text(
+                f"❌ الماس کافی ندارید!\n\n"
+                f"💎 موجودی شما: `{balance:,}`\n"
+                f"💎 هزینه فعال‌سازی: `{SELF_PRICE:,}` الماس"
+            )
+            return
+        
+        LOGIN_STATES[message.chat.id] = {'step': 'phone'}
+        await message.reply_text(
+            f"📱 **فعال‌سازی self MR**\n\n"
+            f"لطفاً شماره اکانت خود را ارسال کنید (با + شروع شود):\n\n"
+            f"مثال: `+989123456789`\n\n"
+            f"💎 هزینه: `{SELF_PRICE}` الماس\n\n"
+            f"برای لغو، `لغو` را بفرستید.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    # ===== دریافت شماره به صورت متن =====
+    chat_id = message.chat.id
+    state = LOGIN_STATES.get(chat_id)
+    
+    if state and state.get('step') == 'phone' and text:
+        if text.strip() == "لغو":
+            del LOGIN_STATES[chat_id]
+            await message.reply_text("❌ عملیات لغو شد.")
+            return
+        
+        phone = text.strip().replace(" ", "").replace("-", "")
+        if not phone.startswith("+"):
+            if phone.startswith("0"):
+                phone = "+98" + phone[1:]
+            else:
+                phone = "+" + phone
+        
+        # ضد اسپم
+        now = time.time()
+        last_attempt = LOGIN_ATTEMPTS.get(user_id, 0)
+        if now - last_attempt < 30:
+            wait = int(30 - (now - last_attempt))
+            await message.reply_text(f"⏳ لطفاً {wait} ثانیه صبر کنید.")
+            return
+        LOGIN_ATTEMPTS[user_id] = now
+        
+        await message.reply_text(f"⏳ در حال ارسال کد به `{phone}` ...")
+        
+        user_client = Client(
+            f"login_{chat_id}_{int(time.time())}",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            in_memory=True,
+            no_updates=True
+        )
+        
+        try:
+            await user_client.connect()
+            sent_code = await user_client.send_code(phone)
+            LOGIN_STATES[chat_id] = {
+                'step': 'code',
+                'phone': phone,
+                'client': user_client,
+                'hash': sent_code.phone_code_hash,
+                'created_at': time.time()
+            }
+            await message.reply_text(
+                "✅ **کد تأیید ارسال شد**\n\n"
+                "کد را وارد کنید (مثال: `12345`)\n\n"
+                "⏱ حداکثر ۳ دقیقه فرصت دارید."
+            )
+        except Exception as e:
+            try:
+                await user_client.disconnect()
+            except:
+                pass
+            if chat_id in LOGIN_STATES:
+                del LOGIN_STATES[chat_id]
+            error_msg = str(e)
+            if "PHONE_NUMBER_INVALID" in error_msg:
+                await message.reply_text("❌ شماره نامعتبر است. دوباره با فرمت `+98...` ارسال کنید.")
+            elif "FLOOD" in error_msg.upper():
+                await message.reply_text("❌ محدود شده‌اید. چند دقیقه صبر کنید.")
+            else:
+                await message.reply_text(f"❌ خطا: `{error_msg}`")
         return
 
     # ===== ادمین: اضافه کردن الماس (از دکمه اینلاین قدیمی) =====

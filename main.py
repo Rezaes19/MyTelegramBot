@@ -1371,6 +1371,10 @@ async def inline_panel_handler(client, query):
 async def callback_panel_handler(client, callback):
     data = callback.data
 
+    if data == "noop":
+        await callback.answer()
+        return
+
     if data == "check_subscription":
         user_id = callback.from_user.id
         not_subscribed = await check_all_channels(user_id)
@@ -1461,21 +1465,42 @@ async def callback_panel_handler(client, callback):
         winner_name = await get_user_name(winner_id)
         loser_name = await get_user_name(loser_id)
         
+        winner_balance = get_balance(winner_id)
+        loser_balance = get_balance(loser_id)
+        
         result_text = (
-            f"⚔️ **نتیجه نبرد الماس | self MR**\n\n"
-            f"🏆 **برنده:** {winner_name}\n"
-            f"💔 **بازنده:** {loser_name}\n"
-            f"💰 **جایزه:** `{prize:,}` الماس\n"
-            f"🧾 **مالیات:** `{tax:,}` الماس ({GAME_TAX_PERCENT}%)\n"
-            f"🎯 **مبلغ نبرد:** `{amount:,}` الماس"
+            f"🎯 <b>نتیجه بازی مشخص شد</b>\n\n"
+            f"🏆 کاربر برنده: {winner_name}\n"
+            f"❌ کاربر بازنده: {loser_name}"
         )
+        
+        result_buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {prize:,}", callback_data="noop")
+            ],
+            [
+                InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {winner_balance:,}", callback_data="noop")
+            ],
+            [
+                InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {loser_balance:,}", callback_data="noop")
+            ]
+        ])
         
         try:
             await client.delete_messages(callback.message.chat.id, callback.message.id)
         except:
             pass
         
-        await callback.message.reply_text(result_text, parse_mode="markdown")
+        try:
+            await callback.message.reply_text(result_text, reply_markup=result_buttons, parse_mode="html")
+        except Exception as e:
+            logging.error(f"Result message error: {e}")
+            await callback.message.reply_text(
+                f"🎯 نتیجه بازی\n🏆 برنده: {winner_name}\n❌ بازنده: {loser_name}\n💎 جایزه: {prize:,}"
+            )
         await callback.answer("✅ نبرد به پایان رسید!")
         
         game_key = (callback.message.chat.id, callback.message.id)
@@ -2445,13 +2470,18 @@ async def group_handler(client, message):
         session_info = get_session_by_user_id(target_id)
         has_self = "✅ فعال" if session_info else "❌ غیرفعال"
         
-        text_msg = (
-            f"💎 **موجودی الماس | self MR**\n\n"
-            f"👤 کاربر: `{target_id}`\n"
-            f"💎 موجودی: `{balance:,}` الماس\n"
-            f"🔐 وضعیت سلف: {has_self}"
-        )
-        await message.reply_text(text_msg)
+        is_self = (target_id == user_id)
+        title = "موجودی شما" if is_self else f"موجودی کاربر"
+        text_msg = f"💎 <b>{title}</b>"
+        
+        bal_buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"💎 الماس {balance:,}", callback_data="noop")]
+        ])
+        
+        try:
+            await message.reply_text(text_msg, reply_markup=bal_buttons, parse_mode="html")
+        except Exception:
+            await message.reply_text(f"💎 موجودی: {balance:,} الماس")
         return
 
     # ====== انتقال الماس ======
@@ -2579,21 +2609,34 @@ async def group_handler(client, message):
             await message.reply_text("❌ خطا در کسر الماس.")
             return
         
-        organizer_name = f"[{message.from_user.first_name}](tg://user?id={organizer_id})"
+        first_name = (message.from_user.first_name or "کاربر").replace("<", "").replace(">", "")
         game_text = (
-            f"⚔️ **نبرد الماس | self MR**\n\n"
-            f"👤 **برگزار کننده :** {organizer_name}\n"
-            f"💰 **مبلغ نبرد :** `{amount:,}` الماس\n"
-            f"🏆 **جایزه کل :** `{amount * 2:,}` الماس\n\n"
+            f"⚔️ <b>نبرد الماس | self MR</b>\n\n"
+            f"👤 برگزار کننده: <a href=\"tg://user?id={organizer_id}\">{first_name}</a>\n"
+            f"💰 مبلغ نبرد: <code>{amount:,}</code> الماس\n"
+            f"🏆 جایزه کل: <code>{amount * 2:,}</code> الماس\n\n"
             f"📌 برای پیوستن روی دکمه زیر کلیک کنید."
         )
         
         buttons = [
-            [InlineKeyboardButton("⚔️ پیوستن به نبرد", callback_data=f"game_join_{amount}_{organizer_id}")],
-            [InlineKeyboardButton("❌ لغو نبرد", callback_data=f"game_cancel_{amount}_{organizer_id}")]
+            [
+                InlineKeyboardButton("⚔️ پیوستن به نبرد", callback_data=f"game_join_{amount}_{organizer_id}"),
+                InlineKeyboardButton("❌ لغو", callback_data=f"game_cancel_{amount}_{organizer_id}")
+            ]
         ]
         
-        sent_message = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="markdown")
+        try:
+            sent_message = await message.reply_text(
+                game_text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="html"
+            )
+        except Exception as e:
+            # اگر html هم مشکل داشت، بدون پارس بفرست و الماس رو برگردون
+            logging.error(f"Game message error: {e}")
+            add_balance(organizer_id, amount)
+            await message.reply_text(f"❌ خطا در ایجاد نبرد: {e}")
+            return
         
         game_key = (message.chat.id, sent_message.id)
         active_games[game_key] = {

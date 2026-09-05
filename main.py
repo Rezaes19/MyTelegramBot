@@ -1475,7 +1475,7 @@ async def callback_panel_handler(client, callback):
         except:
             pass
         
-        await callback.message.reply_text(result_text, parse_mode='md')
+        await callback.message.reply_text(result_text, parse_mode="markdown")
         await callback.answer("✅ نبرد به پایان رسید!")
         
         game_key = (callback.message.chat.id, callback.message.id)
@@ -2104,18 +2104,56 @@ async def contact_handler(client, message):
     chat_id = message.chat.id
     phone = message.contact.phone_number
 
-    await message.reply_text("⏳ در حال اتصال به self MR...", reply_markup=ReplyKeyboardRemove())
+    # تمیز کردن شماره
+    phone = phone.strip().replace(" ", "").replace("-", "")
+    if not phone.startswith("+"):
+        # اگر با صفر شروع شده باشه (مثل 09...) احتمالاً ایرانیه
+        if phone.startswith("0"):
+            phone = "+98" + phone[1:]
+        else:
+            phone = "+" + phone
 
-    user_client = Client(f"login_{chat_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True, no_updates=True)
-    await user_client.connect()
+    await message.reply_text(
+        f"⏳ در حال ارسال کد به شماره `{phone}` ...\n"
+        f"لطفاً چند لحظه صبر کنید.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    user_client = Client(
+        f"login_{chat_id}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        in_memory=True,
+        no_updates=True
+    )
 
     try:
+        await user_client.connect()
         sent_code = await user_client.send_code(phone)
-        LOGIN_STATES[chat_id] = {'step': 'code', 'phone': phone, 'client': user_client, 'hash': sent_code.phone_code_hash}
-        await message.reply_text("✅ کد را بفرستید (مثلاً `1 1 1 1 1 با فاصله`)")
+        LOGIN_STATES[chat_id] = {
+            'step': 'code',
+            'phone': phone,
+            'client': user_client,
+            'hash': sent_code.phone_code_hash
+        }
+        await message.reply_text(
+            "✅ **کد تأیید ارسال شد**\n\n"
+            "کد را دقیقاً همان‌طور که دریافت کردید بفرستید.\n"
+            "مثال: `12345` یا `1 2 3 4 5`\n\n"
+            "⏱ کد حدود ۲ دقیقه اعتبار دارد."
+        )
     except Exception as e:
-        await user_client.disconnect()
-        await message.reply_text(f"❌ خطا: {e}")
+        try:
+            await user_client.disconnect()
+        except:
+            pass
+        error_msg = str(e)
+        if "PHONE_NUMBER_INVALID" in error_msg:
+            await message.reply_text("❌ شماره تلفن نامعتبر است. لطفاً دوباره تلاش کنید.")
+        elif "FLOOD" in error_msg.upper():
+            await message.reply_text("❌ تعداد درخواست‌ها زیاد است. چند دقیقه صبر کنید و دوباره تلاش کنید.")
+        else:
+            await message.reply_text(f"❌ خطا در ارسال کد:\n`{error_msg}`")
 
 # =============================================
 # هندلر پیوی
@@ -2332,22 +2370,52 @@ async def private_handler(client, message):
     user_c = state['client']
 
     if state['step'] == 'code':
-        code = re.sub(r"\D+", "", message.text)
+        code = re.sub(r"\D+", "", message.text.strip())
+        
+        if not code or len(code) < 4:
+            await message.reply_text("❌ کد وارد شده نامعتبر است. لطفاً کد ۵ رقمی را دوباره بفرستید.")
+            return
+        
         try:
             await user_c.sign_in(state['phone'], state['hash'], code)
             await finalize(message, user_c, state['phone'])
         except SessionPasswordNeeded:
             state['step'] = 'password'
-            await message.reply_text("🔐 رمز دو مرحله‌ای را وارد کنید:")
+            await message.reply_text("🔐 این اکانت رمز دو مرحله‌ای دارد.\nلطفاً رمز دو مرحله‌ای را وارد کنید:")
         except Exception as e:
-            await message.reply_text(f"❌ خطا: {e}")
+            error_msg = str(e)
+            if "PHONE_CODE_INVALID" in error_msg or "code" in error_msg.lower() and "invalid" in error_msg.lower():
+                await message.reply_text(
+                    "❌ **کد نامعتبر است**\n\n"
+                    "• کد را دوباره با دقت وارد کنید\n"
+                    "• اگر کد منقضی شده، دوباره روی دکمه شماره کلیک کنید"
+                )
+            elif "PHONE_CODE_EXPIRED" in error_msg:
+                await message.reply_text(
+                    "⏰ **کد منقضی شده**\n\n"
+                    "لطفاً دوباره از اول شماره خود را ارسال کنید."
+                )
+                try:
+                    await user_c.disconnect()
+                except:
+                    pass
+                if chat_id in LOGIN_STATES:
+                    del LOGIN_STATES[chat_id]
+            elif "FLOOD" in error_msg.upper():
+                await message.reply_text("❌ تعداد تلاش زیاد است. چند دقیقه صبر کنید.")
+            else:
+                await message.reply_text(f"❌ خطا در ورود:\n`{error_msg}`")
 
     elif state['step'] == 'password':
         try:
-            await user_c.check_password(message.text)
+            await user_c.check_password(message.text.strip())
             await finalize(message, user_c, state['phone'])
         except Exception as e:
-            await message.reply_text(f"❌ خطا: {e}")
+            error_msg = str(e)
+            if "PASSWORD" in error_msg.upper() and "INVALID" in error_msg.upper():
+                await message.reply_text("❌ رمز دو مرحله‌ای اشتباه است. دوباره وارد کنید:")
+            else:
+                await message.reply_text(f"❌ خطا: `{error_msg}`")
 
 # =============================================
 # هندلر گروه
@@ -2522,7 +2590,7 @@ async def group_handler(client, message):
             [InlineKeyboardButton("❌ لغو نبرد", callback_data=f"game_cancel_{amount}_{organizer_id}")]
         ]
         
-        sent_message = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode='md')
+        sent_message = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="markdown")
         
         game_key = (message.chat.id, sent_message.id)
         active_games[game_key] = {

@@ -1671,19 +1671,54 @@ async def download_database_handler(client, message):
         return
     
     try:
-        db_path = DATA_FILE
-        if os.path.exists(db_path):
-            await message.reply_document(
-                document=db_path,
-                caption="✅ **دیتابیس با موفقیت دانلود شد!**\n\n"
-                       f"📅 تاریخ: {datetime.now(TEHRAN_TIMEZONE).strftime('%Y-%m-%d %H:%M')}\n"
-                       f"📁 حجم: {os.path.getsize(db_path) / 1024:.2f} KB"
+        import zipfile
+        import shutil
+        
+        timestamp = datetime.now(TEHRAN_TIMEZONE).strftime('%Y%m%d_%H%M%S')
+        zip_name = f"selfMR_backup_{timestamp}.zip"
+        
+        with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # 1. bot_data.json
+            if os.path.exists(DATA_FILE):
+                zipf.write(DATA_FILE, "bot_data.json")
+            
+            # 2. sessions.db
+            if os.path.exists("sessions.db"):
+                zipf.write("sessions.db", "sessions.db")
+            
+            # 3. تمام دیتابیس‌های کاربران (الماس‌ها)
+            if os.path.exists("database_users"):
+                for root, dirs, files in os.walk("database_users"):
+                    for file in files:
+                        if file.endswith(".db"):
+                            full_path = os.path.join(root, file)
+                            arcname = os.path.join("database_users", file)
+                            zipf.write(full_path, arcname)
+        
+        file_size = os.path.getsize(zip_name) / 1024
+        await message.reply_document(
+            document=zip_name,
+            caption=(
+                f"✅ **بکاپ کامل self MR**\n\n"
+                f"📅 تاریخ: {datetime.now(TEHRAN_TIMEZONE).strftime('%Y-%m-%d %H:%M')}\n"
+                f"📁 حجم: {file_size:.1f} KB\n\n"
+                f"شامل:\n"
+                f"• bot_data.json (تنظیمات + سشن‌ها)\n"
+                f"• sessions.db\n"
+                f"• database_users/ (موجودی الماس همه کاربران)"
             )
-            logging.info(f"📥 Database downloaded by admin {message.from_user.id}")
-        else:
-            await message.reply_text("❌ فایل دیتابیس پیدا نشد!")
+        )
+        
+        # پاک کردن فایل موقت
+        try:
+            os.remove(zip_name)
+        except:
+            pass
+            
+        logging.info(f"📥 Full backup downloaded by admin {message.from_user.id}")
+        
     except Exception as e:
-        await message.reply_text(f"❌ خطا در دانلود: {e}")
+        await message.reply_text(f"❌ خطا در دانلود بکاپ: {e}")
         logging.error(f"Download database error: {e}")
 
 @manager_bot.on_message(filters.text & filters.private & filters.regex("^📤 آپلود دیتابیس$"))
@@ -1693,9 +1728,11 @@ async def upload_database_request_handler(client, message):
     
     ADMIN_STATES[message.from_user.id] = "waiting_for_db_upload"
     await message.reply_text(
-        "📤 **لطفاً فایل دیتابیس (JSON) را ارسال کنید.**\n\n"
-        "⚠️ توجه: فایل باید با فرمت JSON و شامل تمام داده‌های ربات باشد.\n\n"
-        "برای لغو عملیات، دستور `لغو` را بفرستید."
+        "📤 **لطفاً فایل بکاپ را ارسال کنید.**\n\n"
+        "می‌توانید یکی از این دو را بفرستید:\n"
+        "• فایل **ZIP** کامل (پیشنهادی)\n"
+        "• یا فقط فایل **JSON**\n\n"
+        "برای لغو، `لغو` را بفرستید."
     )
 
 @manager_bot.on_message(filters.document & filters.private)
@@ -1707,33 +1744,80 @@ async def upload_database_handler(client, message):
         return
     
     try:
+        import zipfile
+        import shutil
+        
         file_path = await message.download()
         if not file_path:
             await message.reply_text("❌ خطا در دانلود فایل!")
             return
         
-        # بررسی فایل JSON
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            await message.reply_text("❌ فایل معتبر نیست! لطفاً فایل JSON دیتابیس را ارسال کنید.")
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            ADMIN_STATES[message.from_user.id] = None
-            return
+        is_zip = file_path.lower().endswith(".zip")
         
-        # پشتیبان‌گیری از دیتابیس فعلی
-        if os.path.exists(DATA_FILE):
-            backup_name = f"{DATA_FILE}.backup.{int(time.time())}"
-            os.rename(DATA_FILE, backup_name)
-            logging.info(f"📦 Database backed up to {backup_name}")
+        if is_zip:
+            # ====== آپلود فایل ZIP کامل ======
+            await message.reply_text("📦 فایل ZIP شناسایی شد. در حال استخراج بکاپ کامل...")
+            
+            extract_dir = f"temp_restore_{int(time.time())}"
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            try:
+                with zipfile.ZipFile(file_path, 'r') as zipf:
+                    zipf.extractall(extract_dir)
+                
+                # بازگردانی bot_data.json
+                json_src = os.path.join(extract_dir, "bot_data.json")
+                if os.path.exists(json_src):
+                    if os.path.exists(DATA_FILE):
+                        os.rename(DATA_FILE, f"{DATA_FILE}.backup.{int(time.time())}")
+                    shutil.copy2(json_src, DATA_FILE)
+                
+                # بازگردانی sessions.db
+                sess_src = os.path.join(extract_dir, "sessions.db")
+                if os.path.exists(sess_src):
+                    if os.path.exists("sessions.db"):
+                        os.rename("sessions.db", f"sessions.db.backup.{int(time.time())}")
+                    shutil.copy2(sess_src, "sessions.db")
+                
+                # بازگردانی database_users (الماس‌ها)
+                users_src = os.path.join(extract_dir, "database_users")
+                if os.path.exists(users_src):
+                    if os.path.exists("database_users"):
+                        # بکاپ پوشه قبلی
+                        shutil.move("database_users", f"database_users.backup.{int(time.time())}")
+                    shutil.copytree(users_src, "database_users")
+                
+                await message.reply_text("✅ بکاپ کامل با موفقیت بازگردانی شد!\n\n🔄 در حال لود مجدد...")
+                
+            finally:
+                # پاکسازی
+                try:
+                    shutil.rmtree(extract_dir)
+                    os.remove(file_path)
+                except:
+                    pass
+        else:
+            # ====== آپلود فقط JSON (حالت قدیمی) ======
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                await message.reply_text("❌ فایل معتبر نیست! لطفاً فایل ZIP یا JSON معتبر ارسال کنید.")
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                ADMIN_STATES[message.from_user.id] = None
+                return
+            
+            if os.path.exists(DATA_FILE):
+                backup_name = f"{DATA_FILE}.backup.{int(time.time())}"
+                os.rename(DATA_FILE, backup_name)
+            
+            os.rename(file_path, DATA_FILE)
+            await message.reply_text("✅ فایل JSON آپلود شد!\n\n🔄 در حال لود مجدد...")
         
-        # جایگزینی فایل
-        os.rename(file_path, DATA_FILE)
         ADMIN_STATES[message.from_user.id] = None
         
-        await message.reply_text("✅ **دیتابیس با موفقیت آپلود شد!**\n\n🔄 در حال لود مجدد و بررسی محتویات...")
+        await message.reply_text("🔄 در حال لود مجدد و بررسی محتویات...")
         
         # ====== لود مجدد دیتابیس ======
         data_manager.load_data()
@@ -2078,6 +2162,9 @@ async def admin_back_to_menu(client, message):
     await message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=kb)
 
 @manager_bot.on_message(filters.contact)
+# ضد اسپم لاگین
+LOGIN_ATTEMPTS = {}  # user_id -> last_attempt_time
+
 async def contact_handler(client, message):
     user_id = message.from_user.id
 
@@ -2088,6 +2175,15 @@ async def contact_handler(client, message):
     if is_banned(user_id):
         await message.reply_text("🚫 شما توسط ادمین مسدود شده‌اید و نمی‌توانید از self MR استفاده کنید.")
         return
+
+    # ضد اسپم: حداقل ۳۰ ثانیه بین هر تلاش لاگین
+    now = time.time()
+    last_attempt = LOGIN_ATTEMPTS.get(user_id, 0)
+    if now - last_attempt < 30:
+        wait = int(30 - (now - last_attempt))
+        await message.reply_text(f"⏳ لطفاً {wait} ثانیه صبر کنید و دوباره تلاش کنید.")
+        return
+    LOGIN_ATTEMPTS[user_id] = now
 
     # چک موجودی الماس
     balance = get_balance(user_id)
@@ -2107,11 +2203,18 @@ async def contact_handler(client, message):
     # تمیز کردن شماره
     phone = phone.strip().replace(" ", "").replace("-", "")
     if not phone.startswith("+"):
-        # اگر با صفر شروع شده باشه (مثل 09...) احتمالاً ایرانیه
         if phone.startswith("0"):
             phone = "+98" + phone[1:]
         else:
             phone = "+" + phone
+
+    # اگر قبلاً در حال لاگین بود، کلاینت قبلی رو ببند
+    if chat_id in LOGIN_STATES:
+        old = LOGIN_STATES.pop(chat_id)
+        try:
+            await old['client'].disconnect()
+        except:
+            pass
 
     await message.reply_text(
         f"⏳ در حال ارسال کد به شماره `{phone}` ...\n"
@@ -2120,7 +2223,7 @@ async def contact_handler(client, message):
     )
 
     user_client = Client(
-        f"login_{chat_id}",
+        f"login_{chat_id}_{int(time.time())}",
         api_id=API_ID,
         api_hash=API_HASH,
         in_memory=True,
@@ -2130,18 +2233,23 @@ async def contact_handler(client, message):
     try:
         await user_client.connect()
         sent_code = await user_client.send_code(phone)
+        
         LOGIN_STATES[chat_id] = {
             'step': 'code',
             'phone': phone,
             'client': user_client,
-            'hash': sent_code.phone_code_hash
+            'hash': sent_code.phone_code_hash,
+            'created_at': time.time()
         }
+        
         await message.reply_text(
             "✅ **کد تأیید ارسال شد**\n\n"
-            "کد را دقیقاً همان‌طور که دریافت کردید بفرستید.\n"
-            "مثال: `12345` یا `1 2 3 4 5`\n\n"
-            "⏱ کد حدود ۲ دقیقه اعتبار دارد."
+            "کد را **سریع** و دقیق وارد کنید.\n"
+            "مثال: `12345`\n\n"
+            "⏱ حداکثر ۳ دقیقه فرصت دارید.\n"
+            "اگر کد نیامد، ۱ دقیقه صبر کنید و دوباره شماره بفرستید."
         )
+        
     except Exception as e:
         try:
             await user_client.disconnect()
@@ -2149,9 +2257,9 @@ async def contact_handler(client, message):
             pass
         error_msg = str(e)
         if "PHONE_NUMBER_INVALID" in error_msg:
-            await message.reply_text("❌ شماره تلفن نامعتبر است. لطفاً دوباره تلاش کنید.")
-        elif "FLOOD" in error_msg.upper():
-            await message.reply_text("❌ تعداد درخواست‌ها زیاد است. چند دقیقه صبر کنید و دوباره تلاش کنید.")
+            await message.reply_text("❌ شماره تلفن نامعتبر است.")
+        elif "FLOOD" in error_msg.upper() or "wait" in error_msg.lower():
+            await message.reply_text("❌ تلگرام موقتاً محدودتان کرده. ۵ تا ۱۰ دقیقه صبر کنید و دوباره تلاش کنید.")
         else:
             await message.reply_text(f"❌ خطا در ارسال کد:\n`{error_msg}`")
 
@@ -2367,6 +2475,20 @@ async def private_handler(client, message):
     if not state:
         return
 
+    # اگر بیش از ۳ دقیقه از ارسال کد گذشته باشد، منقضی کن
+    created_at = state.get('created_at', 0)
+    if created_at and (time.time() - created_at) > 180:
+        try:
+            await state['client'].disconnect()
+        except:
+            pass
+        del LOGIN_STATES[chat_id]
+        await message.reply_text(
+            "⏰ **زمان وارد کردن کد به پایان رسید.**\n\n"
+            "لطفاً دوباره روی دکمه «شماره و شروع» کلیک کنید."
+        )
+        return
+
     user_c = state['client']
 
     if state['step'] == 'code':
@@ -2384,11 +2506,11 @@ async def private_handler(client, message):
             await message.reply_text("🔐 این اکانت رمز دو مرحله‌ای دارد.\nلطفاً رمز دو مرحله‌ای را وارد کنید:")
         except Exception as e:
             error_msg = str(e)
-            if "PHONE_CODE_INVALID" in error_msg or "code" in error_msg.lower() and "invalid" in error_msg.lower():
+            if "PHONE_CODE_INVALID" in error_msg or ("code" in error_msg.lower() and "invalid" in error_msg.lower()):
                 await message.reply_text(
                     "❌ **کد نامعتبر است**\n\n"
-                    "• کد را دوباره با دقت وارد کنید\n"
-                    "• اگر کد منقضی شده، دوباره روی دکمه شماره کلیک کنید"
+                    "کد را دوباره با دقت وارد کنید.\n"
+                    "اگر چند بار اشتباه زدید، ۱ دقیقه صبر کنید و از اول شماره بفرستید."
                 )
             elif "PHONE_CODE_EXPIRED" in error_msg:
                 await message.reply_text(

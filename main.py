@@ -2161,10 +2161,10 @@ async def admin_back_to_menu(client, message):
     kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     await message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=kb)
 
-@manager_bot.on_message(filters.contact)
 # ضد اسپم لاگین
 LOGIN_ATTEMPTS = {}  # user_id -> last_attempt_time
 
+@manager_bot.on_message(filters.contact)
 async def contact_handler(client, message):
     user_id = message.from_user.id
 

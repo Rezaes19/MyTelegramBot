@@ -1923,11 +1923,15 @@ async def start_login(client, message):
             KeyboardButton("📢 پیام همگانی")
         ])
         buttons.append([
+            KeyboardButton("💎 پنل الماس"),
+            KeyboardButton("🛠 پنل ادمین")
+        ])
+        buttons.append([
             KeyboardButton("📥 دانلود دیتابیس"),
             KeyboardButton("📤 آپلود دیتابیس")
         ])
 
-    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
     await message.reply_text(welcome_text, reply_markup=kb)
 
 @manager_bot.on_message(filters.private, group=-1)
@@ -1988,6 +1992,91 @@ async def admin_status_handler(client, message):
 
     await message.reply_text(text)
 
+# =============================================
+# 💎 پنل الماس ادمین
+# =============================================
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^💎 پنل الماس$"))
+async def admin_diamond_panel(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    
+    my_balance = get_balance(message.from_user.id)
+    text = (
+        f"💎 **پنل مدیریت الماس | self MR**\n\n"
+        f"موجودی شما: `{my_balance:,}` الماس\n\n"
+        f"یکی از گزینه‌های زیر را انتخاب کنید:"
+    )
+    
+    buttons = [
+        [KeyboardButton("➕ افزودن الماس به کاربر")],
+        [KeyboardButton("💰 موجودی خودم"), KeyboardButton("🔍 موجودی با آیدی")],
+        [KeyboardButton("🔙 بازگشت به منو")]
+    ]
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    await message.reply_text(text, reply_markup=kb)
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^➕ افزودن الماس به کاربر$"))
+async def admin_add_diamond_start(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    ADMIN_STATES[message.from_user.id] = "admin_add_diamond_id"
+    await message.reply_text(
+        "🆔 **آیدی عددی کاربر** را وارد کنید:\n\n"
+        "برای لغو، `لغو` را بفرستید.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^💰 موجودی خودم$"))
+async def admin_my_balance(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    balance = get_balance(message.from_user.id)
+    await message.reply_text(f"💎 موجودی شما: `{balance:,}` الماس")
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^🔍 موجودی با آیدی$"))
+async def admin_check_balance_start(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    ADMIN_STATES[message.from_user.id] = "admin_check_balance_id"
+    await message.reply_text(
+        "🆔 **آیدی عددی کاربر** را وارد کنید:\n\n"
+        "برای لغو، `لغو` را بفرستید.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^🛠 پنل ادمین$"))
+async def admin_main_panel(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    
+    text = (
+        "🛠 **پنل ادمین | self MR**\n\n"
+        "گزینه مورد نظر را انتخاب کنید:"
+    )
+    buttons = [
+        [KeyboardButton("💎 پنل الماس")],
+        [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
+        [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")],
+        [KeyboardButton("🔙 بازگشت به منو")]
+    ]
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    await message.reply_text(text, reply_markup=kb)
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^🔙 بازگشت به منو$"))
+async def admin_back_to_menu(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    ADMIN_STATES[message.from_user.id] = None
+    
+    buttons = [
+        [KeyboardButton("📱 شماره و شروع", request_contact=True)],
+        [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
+        [KeyboardButton("💎 پنل الماس"), KeyboardButton("🛠 پنل ادمین")],
+        [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")]
+    ]
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    await message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=kb)
+
 @manager_bot.on_message(filters.contact)
 async def contact_handler(client, message):
     user_id = message.from_user.id
@@ -2039,8 +2128,8 @@ async def private_handler(client, message):
     if not await force_subscribe_check(client, message):
         return
 
-    # ===== ادمین: اضافه کردن الماس =====
-    if user_id in GOD_ADMIN_IDS and text and ADMIN_STATES.get(user_id, "").startswith("add_balance_"):
+    # ===== ادمین: اضافه کردن الماس (از دکمه اینلاین قدیمی) =====
+    if user_id in GOD_ADMIN_IDS and text and str(ADMIN_STATES.get(user_id, "")).startswith("add_balance_"):
         try:
             target_id = int(ADMIN_STATES[user_id].split("_")[2])
             amount = int(text.strip())
@@ -2059,6 +2148,74 @@ async def private_handler(client, message):
                 pass
         except ValueError:
             await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
+        return
+
+    # ===== ادمین: افزودن الماس با آیدی (پنل جدید) =====
+    if user_id in GOD_ADMIN_IDS and text and ADMIN_STATES.get(user_id) == "admin_add_diamond_id":
+        if text.strip() == "لغو":
+            ADMIN_STATES[user_id] = None
+            await message.reply_text("❌ لغو شد.")
+            return
+        try:
+            target_id = int(text.strip())
+            ADMIN_STATES[user_id] = f"admin_add_diamond_amount_{target_id}"
+            await message.reply_text(f"💎 مقدار الماس برای کاربر `{target_id}` را وارد کنید:")
+        except ValueError:
+            await message.reply_text("❌ آیدی عددی نامعتبر است. دوباره وارد کنید یا `لغو` بفرستید.")
+        return
+
+    if user_id in GOD_ADMIN_IDS and text and str(ADMIN_STATES.get(user_id, "")).startswith("admin_add_diamond_amount_"):
+        if text.strip() == "لغو":
+            ADMIN_STATES[user_id] = None
+            await message.reply_text("❌ لغو شد.")
+            return
+        try:
+            target_id = int(ADMIN_STATES[user_id].split("_")[-1])
+            amount = int(text.strip())
+            if amount <= 0:
+                await message.reply_text("❌ مقدار باید بیشتر از صفر باشد.")
+                return
+            add_balance(target_id, amount)
+            ADMIN_STATES[user_id] = None
+            new_bal = get_balance(target_id)
+            await message.reply_text(
+                f"✅ **الماس اضافه شد | self MR**\n\n"
+                f"👤 کاربر: `{target_id}`\n"
+                f"💎 مقدار: `{amount:,}`\n"
+                f"✨ موجودی جدید: `{new_bal:,}`"
+            )
+            try:
+                await manager_bot.send_message(
+                    target_id,
+                    f"💎 `{amount:,}` الماس توسط ادمین به حساب شما اضافه شد.\nموجودی جدید: `{new_bal:,}`"
+                )
+            except:
+                pass
+        except ValueError:
+            await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
+        return
+
+    # ===== ادمین: چک موجودی با آیدی =====
+    if user_id in GOD_ADMIN_IDS and text and ADMIN_STATES.get(user_id) == "admin_check_balance_id":
+        if text.strip() == "لغو":
+            ADMIN_STATES[user_id] = None
+            await message.reply_text("❌ لغو شد.")
+            return
+        try:
+            target_id = int(text.strip())
+            init_user_db(target_id)
+            bal = get_balance(target_id)
+            session_info = get_session_by_user_id(target_id)
+            has_self = "✅ فعال" if session_info else "❌ غیرفعال"
+            ADMIN_STATES[user_id] = None
+            await message.reply_text(
+                f"💎 **اطلاعات کاربر | self MR**\n\n"
+                f"🆔 آیدی: `{target_id}`\n"
+                f"💎 موجودی: `{bal:,}` الماس\n"
+                f"🔐 سلف: {has_self}"
+            )
+        except ValueError:
+            await message.reply_text("❌ آیدی عددی نامعتبر است.")
         return
 
     # ===== لغو عملیات آپلود =====

@@ -95,10 +95,117 @@ if not os.path.exists('database_users'):
     os.makedirs('database_users')
 
 # =============================================
-# دیتابیس کاربران
+# دیتابیس کاربران + سیستم الماس (self MR)
 # =============================================
+SELF_PRICE = 50          # هزینه فعال‌سازی سلف
+HOURLY_COST = 2          # کسر ساعتی
+REFERRAL_REWARD = 25     # پاداش زیرمجموعه
+MIN_GAME_AMOUNT = 20     # حداقل مبلغ نبرد
+TRANSFER_TAX_PERCENT = 10
+GAME_TAX_PERCENT = 5
+
 def get_user_db(user_id):
     return sqlite3.connect(f'database_users/user_{user_id}.db')
+
+def init_user_db(user_id):
+    """ایجاد و آماده‌سازی دیتابیس کاربر"""
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            balance INTEGER DEFAULT 0,
+            banned INTEGER DEFAULT 0,
+            invited_by INTEGER DEFAULT 0,
+            self_start_time INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS self_sessions (
+            session_string TEXT,
+            is_active INTEGER DEFAULT 1,
+            start_time INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS referrals (
+            referrer_id INTEGER,
+            referred_id INTEGER PRIMARY KEY,
+            reward_claimed INTEGER DEFAULT 0
+        )
+    ''')
+    # اضافه کردن کاربر اگر وجود نداشته باشد
+    cursor.execute('INSERT OR IGNORE INTO users (user_id, balance, banned, invited_by, self_start_time) VALUES (?, 0, 0, 0, 0)', (user_id,))
+    db.commit()
+    db.close()
+
+def get_balance(user_id):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    db.close()
+    return result[0] if result else 0
+
+def add_balance(user_id, amount):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+    db.commit()
+    db.close()
+
+def deduct_balance(user_id, amount):
+    """کم کردن موجودی. اگر موجودی کافی نباشد False برمی‌گرداند"""
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    balance = result[0] if result else 0
+    if balance < amount:
+        db.close()
+        return False
+    cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
+    db.commit()
+    db.close()
+    return True
+
+def is_banned(user_id):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT banned FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    db.close()
+    return bool(result and result[0] == 1)
+
+def set_banned(user_id, status: bool):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('UPDATE users SET banned = ? WHERE user_id = ?', (1 if status else 0, user_id))
+    db.commit()
+    db.close()
+
+def set_self_start_time(user_id, timestamp=None):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    ts = timestamp if timestamp is not None else int(time.time())
+    cursor.execute('UPDATE users SET self_start_time = ? WHERE user_id = ?', (ts, user_id))
+    db.commit()
+    db.close()
+
+def get_self_start_time(user_id):
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT self_start_time FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    db.close()
+    return result[0] if result else 0
 
 def get_session(user_id):
     try:
@@ -758,6 +865,70 @@ async def status_action_task(client: Client, user_id: int):
             await asyncio.sleep(60)
 
 # =============================================
+# ⏰ سیستم کسر ساعتی الماس (self MR)
+# =============================================
+async def hourly_diamond_deduction_task():
+    """هر ساعت ۲ الماس از کاربران دارای سلف فعال کم می‌کند. اگر موجودی تمام شود سلف را خاموش می‌کند."""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # هر ۱ ساعت
+            
+            active_user_ids = list(ACTIVE_BOTS.keys())
+            for user_id in active_user_ids:
+                try:
+                    balance = get_balance(user_id)
+                    
+                    if balance < HOURLY_COST:
+                        # موجودی کافی نیست → سلف را خاموش کن
+                        logging.warning(f"💸 User {user_id} out of diamonds. Stopping self MR...")
+                        
+                        if user_id in ACTIVE_BOTS:
+                            client, tasks = ACTIVE_BOTS.pop(user_id)
+                            for t in tasks:
+                                t.cancel()
+                            try:
+                                await client.stop()
+                            except:
+                                pass
+                        
+                        # حذف از دیتابیس سشن
+                        delete_session_by_user_id(user_id)
+                        set_self_start_time(user_id, 0)
+                        
+                        try:
+                            await manager_bot.send_message(
+                                user_id,
+                                f"⛔ **self MR خاموش شد**\n\n"
+                                f"موجودی الماس شما تمام شده است.\n"
+                                f"💎 برای فعال‌سازی مجدد حداقل `{SELF_PRICE}` الماس نیاز دارید."
+                            )
+                        except:
+                            pass
+                    else:
+                        # کسر ساعتی
+                        deduct_balance(user_id, HOURLY_COST)
+                        new_balance = get_balance(user_id)
+                        logging.info(f"💎 Deducted {HOURLY_COST} from user {user_id} | Remaining: {new_balance}")
+                        
+                        # اگر موجودی خیلی کم شد هشدار بده
+                        if new_balance <= HOURLY_COST * 3:
+                            try:
+                                await manager_bot.send_message(
+                                    user_id,
+                                    f"⚠️ **هشدار کمبود الماس**\n\n"
+                                    f"موجودی فعلی شما: `{new_balance}` الماس\n"
+                                    f"سلف شما به زودی خاموش خواهد شد."
+                                )
+                            except:
+                                pass
+                except Exception as e:
+                    logging.error(f"Error in hourly deduction for {user_id}: {e}")
+                    
+        except Exception as e:
+            logging.error(f"Hourly deduction task error: {e}")
+            await asyncio.sleep(60)
+
+# =============================================
 # 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)
 # =============================================
 async def outgoing_message_modifier(client, message):
@@ -1269,54 +1440,36 @@ async def callback_panel_handler(client, callback):
             await callback.answer("❌ شما برگزار کننده هستید!", show_alert=True)
             return
         
-        # چک کردن موجودی Joiner
-        db = get_user_db(joiner_id)
-        cursor = db.cursor()
-        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (joiner_id,))
-        result = cursor.fetchone()
-        joiner_balance = result[0] if result else 0
-        db.close()
-        
+        joiner_balance = get_balance(joiner_id)
         if joiner_balance < amount:
             await callback.answer(f"❌ موجودی شما کافی نیست! ({joiner_balance:,})", show_alert=True)
             return
         
-        # کم کردن مبلغ از Joiner
-        db = get_user_db(joiner_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, joiner_id))
-        db.commit()
-        db.close()
+        if not deduct_balance(joiner_id, amount):
+            await callback.answer("❌ خطا در کسر الماس!", show_alert=True)
+            return
         
-        # محاسبه جایزه
         total_prize = amount * 2
-        tax = int(total_prize * 0.05)
+        tax = int(total_prize * GAME_TAX_PERCENT / 100)
         prize = total_prize - tax
         
-        # انتخاب برنده تصادفی
         winner_id = random.choice([organizer_id, joiner_id])
         loser_id = organizer_id if winner_id == joiner_id else joiner_id
         
-        # اضافه کردن جایزه به برنده
-        db = get_user_db(winner_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (prize, winner_id))
-        db.commit()
-        db.close()
+        add_balance(winner_id, prize)
         
-        # گرفتن نام‌ها
         winner_name = await get_user_name(winner_id)
         loser_name = await get_user_name(loser_id)
         
-        # نتیجه نبرد
-        result_text = f"⚔️ **نتیجه نبرد الماس**\n\n"
-        result_text += f"🏆 **برنده:** {winner_name}\n"
-        result_text += f"💔 **بازنده:** {loser_name}\n"
-        result_text += f"💰 **جایزه:** {prize:,} الماس\n"
-        result_text += f"🧾 **مالیات:** {tax:,} الماس (۵%)\n"
-        result_text += f"🎯 **مبلغ نبرد:** {amount:,} الماس"
+        result_text = (
+            f"⚔️ **نتیجه نبرد الماس | self MR**\n\n"
+            f"🏆 **برنده:** {winner_name}\n"
+            f"💔 **بازنده:** {loser_name}\n"
+            f"💰 **جایزه:** `{prize:,}` الماس\n"
+            f"🧾 **مالیات:** `{tax:,}` الماس ({GAME_TAX_PERCENT}%)\n"
+            f"🎯 **مبلغ نبرد:** `{amount:,}` الماس"
+        )
         
-        # حذف پیام نبرد
         try:
             await client.delete_messages(callback.message.chat.id, callback.message.id)
         except:
@@ -1325,7 +1478,6 @@ async def callback_panel_handler(client, callback):
         await callback.message.reply_text(result_text, parse_mode='md')
         await callback.answer("✅ نبرد به پایان رسید!")
         
-        # حذف از لیست فعال
         game_key = (callback.message.chat.id, callback.message.id)
         if game_key in active_games:
             del active_games[game_key]
@@ -1342,20 +1494,17 @@ async def callback_panel_handler(client, callback):
             await callback.answer("❌ فقط برگزار کننده می‌تواند نبرد را لغو کند!", show_alert=True)
             return
         
-        # برگرداندن مبلغ به برگزار کننده
-        db = get_user_db(organizer_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, organizer_id))
-        db.commit()
-        db.close()
+        add_balance(organizer_id, amount)
         
-        # حذف پیام نبرد
         try:
             await client.delete_messages(callback.message.chat.id, callback.message.id)
         except:
             pass
         
-        await callback.message.reply_text(f"❌ نبرد الماس با تعداد {amount:,} الماس لغو شد.\n💎 {amount:,} الماس به حساب شما برگشت داده شد.")
+        await callback.message.reply_text(
+            f"❌ نبرد الماس با تعداد `{amount:,}` الماس لغو شد.\n"
+            f"💎 `{amount:,}` الماس به حساب شما برگشت داده شد."
+        )
         await callback.answer("✅ نبرد لغو شد!")
         
         # حذف از لیست فعال
@@ -1709,9 +1858,62 @@ async def upload_database_handler(client, message):
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     user_id = message.from_user.id
+    init_user_db(user_id)
 
     if not await force_subscribe_check(client, message):
         return
+
+    # ====== سیستم زیرمجموعه ======
+    args = message.command
+    if len(args) > 1:
+        try:
+            referrer_id = int(args[1])
+            if referrer_id != user_id:
+                # چک کن قبلاً ثبت نشده باشه
+                db = get_user_db(user_id)
+                cursor = db.cursor()
+                cursor.execute('SELECT invited_by FROM users WHERE user_id = ?', (user_id,))
+                row = cursor.fetchone()
+                already_invited = row and row[0] and row[0] != 0
+                db.close()
+
+                if not already_invited:
+                    # ثبت زیرمجموعه
+                    db = get_user_db(user_id)
+                    cursor = db.cursor()
+                    cursor.execute('UPDATE users SET invited_by = ? WHERE user_id = ?', (referrer_id, user_id))
+                    cursor.execute('INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 0)', (referrer_id, user_id))
+                    db.commit()
+                    db.close()
+
+                    # پاداش به معرف
+                    add_balance(referrer_id, REFERRAL_REWARD)
+                    try:
+                        await manager_bot.send_message(
+                            referrer_id,
+                            f"🎉 **زیرمجموعه جدید | self MR**\n\n"
+                            f"یک نفر با لینک شما وارد شد.\n"
+                            f"💎 `{REFERRAL_REWARD}` الماس به حساب شما اضافه شد.\n"
+                            f"موجودی جدید: `{get_balance(referrer_id):,}` الماس"
+                        )
+                    except:
+                        pass
+        except:
+            pass
+
+    balance = get_balance(user_id)
+    bot_username = (await client.get_me()).username
+    ref_link = f"https://t.me/{bot_username}?start={user_id}"
+
+    welcome_text = (
+        f"👋 **خوش آمدید به self MR**\n\n"
+        f"💎 موجودی شما: `{balance:,}` الماس\n"
+        f"💰 هزینه فعال‌سازی سلف: `{SELF_PRICE}` الماس\n"
+        f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس\n\n"
+        f"🔗 **لینک دعوت شما:**\n`{ref_link}`\n"
+        f"با دعوت هر نفر `{REFERRAL_REWARD}` الماس دریافت می‌کنید.\n\n"
+        f"برای فعال‌سازی سلف روی دکمه زیر کلیک کنید:"
+    )
 
     buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
 
@@ -1720,14 +1922,13 @@ async def start_login(client, message):
             KeyboardButton("📊 وضعیت ربات"),
             KeyboardButton("📢 پیام همگانی")
         ])
-        # ===== دکمه‌های جدید برای مدیریت دیتابیس =====
         buttons.append([
             KeyboardButton("📥 دانلود دیتابیس"),
             KeyboardButton("📤 آپلود دیتابیس")
         ])
 
     kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
-    await message.reply_text("👋 خوش آمدید.", reply_markup=kb)
+    await message.reply_text(welcome_text, reply_markup=kb)
 
 @manager_bot.on_message(filters.private, group=-1)
 async def admin_broadcast_sender(client, message):
@@ -1794,10 +1995,27 @@ async def contact_handler(client, message):
     if not await force_subscribe_check(client, message):
         return
 
+    # چک بن بودن
+    if is_banned(user_id):
+        await message.reply_text("🚫 شما توسط ادمین مسدود شده‌اید و نمی‌توانید از self MR استفاده کنید.")
+        return
+
+    # چک موجودی الماس
+    balance = get_balance(user_id)
+    if balance < SELF_PRICE:
+        await message.reply_text(
+            f"❌ **الماس کافی ندارید!**\n\n"
+            f"💎 موجودی شما: `{balance:,}` الماس\n"
+            f"💎 هزینه فعال‌سازی self MR: `{SELF_PRICE:,}` الماس\n\n"
+            f"برای افزایش موجودی از دستورات گروه یا ادمین استفاده کنید.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
     chat_id = message.chat.id
     phone = message.contact.phone_number
 
-    await message.reply_text("⏳ در حال اتصال...", reply_markup=ReplyKeyboardRemove())
+    await message.reply_text("⏳ در حال اتصال به self MR...", reply_markup=ReplyKeyboardRemove())
 
     user_client = Client(f"login_{chat_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True, no_updates=True)
     await user_client.connect()
@@ -1819,6 +2037,28 @@ async def private_handler(client, message):
     text = message.text
 
     if not await force_subscribe_check(client, message):
+        return
+
+    # ===== ادمین: اضافه کردن الماس =====
+    if user_id in GOD_ADMIN_IDS and text and ADMIN_STATES.get(user_id, "").startswith("add_balance_"):
+        try:
+            target_id = int(ADMIN_STATES[user_id].split("_")[2])
+            amount = int(text.strip())
+            if amount <= 0:
+                await message.reply_text("❌ مقدار باید بیشتر از صفر باشد.")
+                return
+            add_balance(target_id, amount)
+            ADMIN_STATES[user_id] = None
+            await message.reply_text(
+                f"✅ `{amount:,}` الماس با موفقیت به کاربر `{target_id}` اضافه شد.\n"
+                f"💎 موجودی جدید: `{get_balance(target_id):,}`"
+            )
+            try:
+                await manager_bot.send_message(target_id, f"💎 `{amount:,}` الماس توسط ادمین به حساب شما اضافه شد.\nموجودی جدید: `{get_balance(target_id):,}`")
+            except:
+                pass
+        except ValueError:
+            await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
         return
 
     # ===== لغو عملیات آپلود =====
@@ -1962,7 +2202,83 @@ async def group_handler(client, message):
     if not text:
         return
 
-    if text and text.strip() == "آیدی":
+    user_id = message.from_user.id if message.from_user else None
+    if not user_id:
+        return
+
+    # ====== موجودی ======
+    if text.strip() == "موجودی":
+        target_id = user_id
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_id = message.reply_to_message.from_user.id
+        
+        init_user_db(target_id)
+        balance = get_balance(target_id)
+        session_info = get_session_by_user_id(target_id)
+        has_self = "✅ فعال" if session_info else "❌ غیرفعال"
+        
+        text_msg = (
+            f"💎 **موجودی الماس | self MR**\n\n"
+            f"👤 کاربر: `{target_id}`\n"
+            f"💎 موجودی: `{balance:,}` الماس\n"
+            f"🔐 وضعیت سلف: {has_self}"
+        )
+        await message.reply_text(text_msg)
+        return
+
+    # ====== انتقال الماس ======
+    transfer_match = re.match(r'انتقال\s+(?:الماس\s+)?(\d+)$', text.strip(), re.IGNORECASE)
+    if transfer_match:
+        amount = int(transfer_match.group(1))
+        
+        if not message.reply_to_message or not message.reply_to_message.from_user:
+            await message.reply_text("❌ لطفاً روی پیام کاربر مورد نظر **ریپلای** کنید و بعد دستور را بفرستید.")
+            return
+        
+        receiver_id = message.reply_to_message.from_user.id
+        
+        if user_id == receiver_id:
+            await message.reply_text("❌ نمی‌توانید به خودتان الماس انتقال دهید.")
+            return
+        
+        if amount < 10:
+            await message.reply_text("❌ حداقل مبلغ انتقال ۱۰ الماس است.")
+            return
+        
+        tax = max(1, int(amount * TRANSFER_TAX_PERCENT / 100))
+        total_deduct = amount + tax
+        
+        sender_balance = get_balance(user_id)
+        if sender_balance < total_deduct:
+            await message.reply_text(
+                f"❌ موجودی کافی نیست.\n\n"
+                f"💎 موجودی شما: `{sender_balance:,}`\n"
+                f"💎 مبلغ انتقال: `{amount:,}`\n"
+                f"🧾 مالیات ({TRANSFER_TAX_PERCENT}%): `{tax:,}`\n"
+                f"📉 مجموع کسر: `{total_deduct:,}`"
+            )
+            return
+        
+        deduct_balance(user_id, total_deduct)
+        add_balance(receiver_id, amount)
+        
+        new_sender = get_balance(user_id)
+        new_receiver = get_balance(receiver_id)
+        
+        await message.reply_text(
+            f"✅ **انتقال الماس انجام شد | self MR**\n\n"
+            f"👤 از: `{user_id}`\n"
+            f"👥 به: `{receiver_id}`\n"
+            f"💎 مبلغ خالص: `{amount:,}`\n"
+            f"🧾 مالیات: `{tax:,}`\n"
+            f"📉 کسر از فرستنده: `{total_deduct:,}`\n\n"
+            f"✨ موجودی جدید فرستنده: `{new_sender:,}`\n"
+            f"✨ موجودی جدید گیرنده: `{new_receiver:,}`"
+        )
+        return
+
+    # ====== آیدی ======
+    if text.strip() == "آیدی":
         if not message.reply_to_message:
             await message.reply_text("❌ روی پیام کاربر ریپلی کن و `آیدی` بفرست.")
             return
@@ -1980,14 +2296,15 @@ async def group_handler(client, message):
 
         session_info = get_session_by_user_id(user.id)
         has_session = session_info is not None
+        balance = get_balance(user.id)
 
         info = f"""
-👤 **اطلاعات کاربر VIP MR**
+👤 **اطلاعات کاربر | self MR**
 
 🆔 آیدی عددی: `{user.id}`
 👤 نام: {user.first_name or 'ندارد'}
 📱 یوزرنیم: @{user.username if user.username else 'ندارد'}
-
+💎 موجودی: `{balance:,}` الماس
 🔐 سلف: {'فعال ✅' if has_session else 'غیرفعال ❌'}
         """
 
@@ -2021,36 +2338,27 @@ async def group_handler(client, message):
         organizer_id = message.from_user.id
         amount = int(game_match.group(1))
         
-        if amount < 20:
-            await message.reply_text('❌ مبلغ نبرد باید حداقل 20 الماس باشد.')
+        if amount < MIN_GAME_AMOUNT:
+            await message.reply_text(f'❌ مبلغ نبرد باید حداقل {MIN_GAME_AMOUNT} الماس باشد.')
             return
         
-        # چک کردن موجودی برگزار کننده
-        db = get_user_db(organizer_id)
-        cursor = db.cursor()
-        cursor.execute('SELECT balance FROM users WHERE user_id = ?', (organizer_id,))
-        result = cursor.fetchone()
-        organizer_balance = result[0] if result else 0
-        db.close()
-        
+        organizer_balance = get_balance(organizer_id)
         if organizer_balance < amount:
-            await message.reply_text(f'❌ موجودی الماس شما ({organizer_balance:,}) برای شروع نبرد با مبلغ {amount:,} کافی نیست.')
+            await message.reply_text(f'❌ موجودی الماس شما (`{organizer_balance:,}`) برای شروع نبرد با مبلغ `{amount:,}` کافی نیست.')
             return
         
-        # کم کردن مبلغ از حساب برگزار کننده
-        db = get_user_db(organizer_id)
-        cursor = db.cursor()
-        cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, organizer_id))
-        db.commit()
-        db.close()
+        if not deduct_balance(organizer_id, amount):
+            await message.reply_text("❌ خطا در کسر الماس.")
+            return
         
-        # ساخت پیام نبرد
         organizer_name = f"[{message.from_user.first_name}](tg://user?id={organizer_id})"
-        game_text = f"⚔️ **نبرد الماس**\n\n"
-        game_text += f"👤 **برگزار کننده :** {organizer_name}\n"
-        game_text += f"💰 **مبلغ نبرد :** {amount:,} الماس\n"
-        game_text += f"🏆 **جایزه کل :** {amount * 2:,} الماس\n\n"
-        game_text += "📌 جهت پیوستن به نبرد الماس لطفا روی دکمه زیر کلیک کنید."
+        game_text = (
+            f"⚔️ **نبرد الماس | self MR**\n\n"
+            f"👤 **برگزار کننده :** {organizer_name}\n"
+            f"💰 **مبلغ نبرد :** `{amount:,}` الماس\n"
+            f"🏆 **جایزه کل :** `{amount * 2:,}` الماس\n\n"
+            f"📌 برای پیوستن روی دکمه زیر کلیک کنید."
+        )
         
         buttons = [
             [InlineKeyboardButton("⚔️ پیوستن به نبرد", callback_data=f"game_join_{amount}_{organizer_id}")],
@@ -2059,7 +2367,6 @@ async def group_handler(client, message):
         
         sent_message = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode='md')
         
-        # ذخیره نبرد در لیست فعال
         game_key = (message.chat.id, sent_message.id)
         active_games[game_key] = {
             'organizer_id': organizer_id,
@@ -2074,14 +2381,33 @@ async def finalize(message, user_c, phone):
     me = await user_c.get_me()
     await user_c.disconnect()
 
-    save_session_to_db(phone, s_str, me.id, me.first_name or "", me.username or "")
+    user_id = me.id
+
+    # کسر هزینه فعال‌سازی
+    if not deduct_balance(user_id, SELF_PRICE):
+        await message.reply_text("❌ خطا در کسر الماس. موجودی کافی نیست.")
+        del LOGIN_STATES[message.chat.id]
+        return
+
+    save_session_to_db(phone, s_str, user_id, me.first_name or "", me.username or "")
+    data_manager.save_session(phone, s_str, user_id, me.first_name or "", me.username or "")
     
-    data_manager.save_session(phone, s_str, me.id, me.first_name or "", me.username or "")
+    # ثبت زمان شروع سلف برای کسر ساعتی
+    set_self_start_time(user_id)
     
-    asyncio.create_task(start_bot_instance(s_str, phone, me.id, 'bold'))
+    asyncio.create_task(start_bot_instance(s_str, phone, user_id, 'bold'))
     
     del LOGIN_STATES[message.chat.id]
-    await message.reply_text("✅ فعال شد! دستور `پنل` را در اکانت خود بزنید.")
+    
+    new_balance = get_balance(user_id)
+    await message.reply_text(
+        f"✅ **self MR با موفقیت فعال شد!**\n\n"
+        f"💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.\n"
+        f"💎 موجودی باقی‌مانده: `{new_balance:,}` الماس\n\n"
+        f"⏰ هر ساعت `{HOURLY_COST}` الماس از حساب شما کسر می‌شود.\n"
+        f"اگر موجودی تمام شود، سلف به صورت خودکار خاموش خواهد شد.\n\n"
+        f"دستور `پنل` را در اکانت خود بزنید."
+    )
 
 # =============================================
 # تابع اصلی با مدیریت Flood
@@ -2104,6 +2430,8 @@ async def main():
         pass
     
     asyncio.create_task(cleanup_old_files())
+    asyncio.create_task(hourly_diamond_deduction_task())
+    logging.info("💎 Hourly diamond deduction task started")
 
     # ====== استارت سشن‌ها با delay بیشتر و مدیریت Flood ======
     try:

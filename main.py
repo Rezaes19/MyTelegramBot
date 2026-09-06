@@ -584,6 +584,12 @@ def load_all_states():
         ANTI_LOGIN_STATUS[user_id] = settings.get("anti_login", False)
         TYPING_MODE_STATUS[user_id] = settings.get("typing", False)
         PLAYING_MODE_STATUS[user_id] = settings.get("playing", False)
+        ACTION_STATUS[user_id] = settings.get("action")
+        if not ACTION_STATUS[user_id]:
+            if settings.get("typing"):
+                ACTION_STATUS[user_id] = "type"
+            elif settings.get("playing"):
+                ACTION_STATUS[user_id] = "game"
         GLOBAL_ENEMY_STATUS[user_id] = settings.get("global_enemy", False)
         COPY_MODE_STATUS[user_id] = settings.get("copy_mode", False)
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
@@ -615,6 +621,40 @@ GLOBAL_ENEMY_STATUS = {}
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
+# اکشن فعلی کاربر: None یا یکی از کلیدهای ACTION_MAP
+ACTION_STATUS = {}
+
+def _get_chat_action(name, fallback="TYPING"):
+    return getattr(ChatAction, name, getattr(ChatAction, fallback, ChatAction.TYPING))
+
+ACTION_MAP = {
+    "type": _get_chat_action("TYPING"),
+    "voice": _get_chat_action("RECORD_AUDIO", "RECORD_VOICE") if hasattr(ChatAction, "RECORD_AUDIO") or hasattr(ChatAction, "RECORD_VOICE") else _get_chat_action("TYPING"),
+    "round": _get_chat_action("RECORD_VIDEO_NOTE", "UPLOAD_VIDEO_NOTE"),
+    "photo": _get_chat_action("UPLOAD_PHOTO"),
+    "video": _get_chat_action("UPLOAD_VIDEO"),
+    "doc": _get_chat_action("UPLOAD_DOCUMENT"),
+    "sticker": _get_chat_action("CHOOSE_STICKER", "TYPING"),
+    "game": _get_chat_action("PLAYING"),
+    "online": _get_chat_action("TYPING"),
+}
+# اصلاح voice
+if hasattr(ChatAction, "RECORD_AUDIO"):
+    ACTION_MAP["voice"] = ChatAction.RECORD_AUDIO
+elif hasattr(ChatAction, "RECORD_VOICE"):
+    ACTION_MAP["voice"] = ChatAction.RECORD_VOICE
+
+ACTION_LABELS = {
+    "type": "تایپ",
+    "voice": "ویس",
+    "round": "ویدیو گرد",
+    "photo": "عکس",
+    "video": "ویدیو",
+    "doc": "سند",
+    "sticker": "استیکر",
+    "game": "بازی",
+    "online": "همیشه آنلاین",
+}
 
 ACTIVE_BOTS = {}
 
@@ -841,12 +881,19 @@ async def status_action_task(client: Client, user_id: int):
     last_fetch = 0
     while user_id in ACTIVE_BOTS:
         try:
-            typing = TYPING_MODE_STATUS.get(user_id, False)
-            playing = PLAYING_MODE_STATUS.get(user_id, False)
-            if not typing and not playing:
+            action_key = ACTION_STATUS.get(user_id)
+            # سازگاری با سیستم قبلی
+            if not action_key:
+                if TYPING_MODE_STATUS.get(user_id, False):
+                    action_key = "type"
+                elif PLAYING_MODE_STATUS.get(user_id, False):
+                    action_key = "game"
+
+            if not action_key or action_key not in ACTION_MAP:
                 await asyncio.sleep(2)
                 continue
-            action = ChatAction.TYPING if typing else ChatAction.PLAYING
+
+            action = ACTION_MAP[action_key]
             now = time.time()
             if not chat_ids or (now - last_fetch > 300):
                 new_chats = []
@@ -1400,15 +1447,29 @@ def build_panel_keyboard(user_id, page=1):
 
     # ========== صفحه ۴: اکشن‌ها ==========
     elif page == 4:
-        return [
-            [
-                _styled_btn("⌨️ تایپینگ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
-                _styled_btn("🎮 بازی (Playing)", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
-            ],
-            [
-                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
-            ],
-        ]
+        current = ACTION_STATUS.get(user_id)
+        # سازگاری با قبل
+        if not current:
+            if TYPING_MODE_STATUS.get(user_id, False):
+                current = "type"
+            elif PLAYING_MODE_STATUS.get(user_id, False):
+                current = "game"
+
+        order = ["type", "voice", "round", "photo", "video", "doc", "sticker", "game", "online"]
+        keyboard = []
+        row = []
+        for key in order:
+            label = ACTION_LABELS[key]
+            is_on = (current == key)
+            mark = "✓" if is_on else "X"
+            row.append(_styled_btn(f"{label} ({mark})", f"set_action_{key}_{user_id}", is_on))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        return keyboard
 
     # پیش‌فرض
     return build_panel_keyboard(user_id, 1)
@@ -1767,16 +1828,62 @@ async def callback_panel_handler(client, callback):
             TYPING_MODE_STATUS[target_user_id] = new_state
             if new_state:
                 PLAYING_MODE_STATUS[target_user_id] = False
+                ACTION_STATUS[target_user_id] = "type"
+            else:
+                if ACTION_STATUS.get(target_user_id) == "type":
+                    ACTION_STATUS[target_user_id] = None
             settings_update["typing"] = new_state
             settings_update["playing"] = PLAYING_MODE_STATUS[target_user_id]
+            settings_update["action"] = ACTION_STATUS.get(target_user_id)
 
         elif action == "toggle_game":
             new_state = not PLAYING_MODE_STATUS.get(target_user_id, False)
             PLAYING_MODE_STATUS[target_user_id] = new_state
             if new_state:
                 TYPING_MODE_STATUS[target_user_id] = False
+                ACTION_STATUS[target_user_id] = "game"
+            else:
+                if ACTION_STATUS.get(target_user_id) == "game":
+                    ACTION_STATUS[target_user_id] = None
             settings_update["playing"] = new_state
             settings_update["typing"] = TYPING_MODE_STATUS[target_user_id]
+            settings_update["action"] = ACTION_STATUS.get(target_user_id)
+
+        elif action.startswith("set_action_"):
+            # set_action_type_USERID  or set_action_voice_USERID ...
+            parts_a = data.split("_")
+            # data = set_action_{key}_{user_id}
+            action_key = parts_a[2]
+            target_user_id = int(parts_a[3])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+
+            current = ACTION_STATUS.get(target_user_id)
+            if current == action_key:
+                # خاموش کردن
+                ACTION_STATUS[target_user_id] = None
+                TYPING_MODE_STATUS[target_user_id] = False
+                PLAYING_MODE_STATUS[target_user_id] = False
+                await callback.answer("❌ اکشن خاموش شد")
+            else:
+                ACTION_STATUS[target_user_id] = action_key
+                TYPING_MODE_STATUS[target_user_id] = (action_key == "type")
+                PLAYING_MODE_STATUS[target_user_id] = (action_key == "game")
+                label = ACTION_LABELS.get(action_key, action_key)
+                await callback.answer(f"✅ {label} فعال شد")
+
+            settings_update = {
+                "action": ACTION_STATUS.get(target_user_id),
+                "typing": TYPING_MODE_STATUS.get(target_user_id, False),
+                "playing": PLAYING_MODE_STATUS.get(target_user_id, False),
+            }
+            data_manager.update_user_data(target_user_id, {"settings": settings_update})
+            try:
+                await edit_panel_colored(callback, target_user_id, 4)
+            except:
+                pass
+            return
 
         elif action == "toggle_g_enemy":
             GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
@@ -1824,7 +1931,7 @@ async def callback_panel_handler(client, callback):
         stay_page = 1
         if action in ("toggle_sec", "toggle_seen", "toggle_anti", "toggle_g_enemy"):
             stay_page = 3
-        elif action in ("toggle_type", "toggle_game"):
+        elif action in ("toggle_type", "toggle_game") or action.startswith("set_action"):
             stay_page = 4
         elif action == "toggle_pv":
             stay_page = 1

@@ -288,6 +288,7 @@ ENEMY_REPLIES = [
 # =============================================
 # فونت‌ها
 # =============================================
+# فونت‌های متن (برای پیام‌ها)
 FONT_STYLES = {
     "bold": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
     "italic": {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':':'},
@@ -312,7 +313,55 @@ FONT_PERSIAN_NAMES = {
     "codeblock": "کد بلاک",
 }
 
-ALL_CLOCK_CHARS = "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
+# فونت‌های ساعت (یونیکد واقعی برای اسم پروفایل)
+CLOCK_FONT_STYLES = {
+    "bold":        {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':'∶'},
+    "italic":      {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "mono":        {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':':'},
+    "double":      {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':':'},
+    "sans":        {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "sans_bold":   {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
+    "fullwidth":   {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "circled":     {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':':'},
+    "neg_circled": {'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "parenthesized":{'0':'0','1':'⑴','2':'⑵','3':'⑶','4':'⑷','5':'⑸','6':'⑹','7':'⑺','8':'⑻','9':'⑼',':':':'},
+    "subscript":   {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':':'},
+    "superscript": {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',':':':'},
+    "math_bold":   {'0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗',':':'꞉'},
+    "math_dbl":    {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':'ː'},
+    "segment":     {'0':'🯰','1':'🯱','2':'🯲','3':'🯳','4':'🯴','5':'🯵','6':'🯶','7':'🯷','8':'🯸','9':'🯹',':':':'},
+    "normal":      {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "dots":        {'0':'⓪','1':'➊','2':'➋','3':'➌','4':'➍','5':'➎','6':'➏','7':'➐','8':'➑','9':'➒',':':':'},
+    "square":      {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+}
+
+CLOCK_FONT_ORDER = [
+    "bold", "mono", "double", "sans", "sans_bold", "fullwidth",
+    "circled", "neg_circled", "subscript", "superscript",
+    "math_bold", "math_dbl", "segment", "dots", "normal",
+]
+
+CLOCK_FONT_NAMES = {
+    "bold": "بولد 𝟏𝟐𝟑",
+    "mono": "مونو 𝟷𝟸𝟹",
+    "double": "دوبل 𝟙𝟚𝟛",
+    "sans": "سانس 𝟣𝟤𝟥",
+    "sans_bold": "سانس‌بولد 𝟭𝟮𝟯",
+    "fullwidth": "کامل １２３",
+    "circled": "دایره‌ای ①②③",
+    "neg_circled": "دایره توپر ❶❷❸",
+    "subscript": "زیروند ۰₁₂",
+    "superscript": "بالاوند ⁰¹²",
+    "math_bold": "ریاضی‌بولد 𝟏𝟐𝟑",
+    "math_dbl": "ریاضی‌دوبل 𝟙𝟚𝟛",
+    "segment": "سگمنت 🯱🯲🯳",
+    "dots": "نقطه‌ای ➊➋➌",
+    "normal": "معمولی 123",
+}
+
+ALL_CLOCK_CHARS = "".join(set(char for font in CLOCK_FONT_STYLES.values() for char in font.values()))
+# کاراکترهای قدیمی فونت متن هم برای پاکسازی اسم
+ALL_CLOCK_CHARS += "".join(set(char for font in FONT_STYLES.values() for char in font.values()))
 CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 
 # =============================================
@@ -783,7 +832,7 @@ async def force_subscribe_check(client, message):
     return True
 
 def stylize_time(time_str: str, style: str) -> str:
-    font_map = FONT_STYLES.get(style, FONT_STYLES["bold"])
+    font_map = CLOCK_FONT_STYLES.get(style) or FONT_STYLES.get(style) or CLOCK_FONT_STYLES["bold"]
     return ''.join(font_map.get(char, char) for char in time_str)
 
 async def perform_clock_update_now(client, user_id):
@@ -1369,27 +1418,23 @@ def build_panel_keyboard(user_id, page=1):
     # ========== صفحه ۱: منوی اصلی ==========
     if page == 1:
         return [
-            # ردیف ساعت و حالت متن
             [
                 _styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
-                _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
+                _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
             ],
-            # نگهبان / امنیتی
             [
+                _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
                 _styled_btn("🛡 بخش امنیتی", f"panel_page_3_{user_id}", style="primary"),
             ],
-            # اکشن‌ها
             [
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
             ],
-            # ترجمه
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
             ],
-            # بستن
             [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
@@ -1468,6 +1513,30 @@ def build_panel_keyboard(user_id, page=1):
                 row = []
         if row:
             keyboard.append(row)
+        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        return keyboard
+
+    # ========== صفحه ۵: فونت‌های ساعت ==========
+    elif page == 5:
+        current = USER_FONT_CHOICES.get(user_id, "bold")
+        keyboard = []
+        row = []
+        for key in CLOCK_FONT_ORDER:
+            name = CLOCK_FONT_NAMES.get(key, key)
+            is_on = (current == key)
+            mark = "✓" if is_on else "X"
+            # نمایش نمونه کوتاه
+            sample = stylize_time("12:34", key)
+            label = f"{name.split()[0]} ({mark})"
+            row.append(_styled_btn(label, f"set_clock_font_{key}_{user_id}", is_on))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        # پیش‌نمایش
+        preview = stylize_time(datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M"), current)
+        keyboard.append([_styled_btn(f"پیش‌نمایش: {preview}", "noop", style="primary")])
         keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return keyboard
 
@@ -1772,8 +1841,12 @@ async def callback_panel_handler(client, callback):
 
         elif action == "cycle_font":
             cur = USER_FONT_CHOICES.get(target_user_id, 'bold')
-            idx = (FONT_KEYS_ORDER.index(cur) + 1) % len(FONT_KEYS_ORDER)
-            new_font = FONT_KEYS_ORDER[idx]
+            order = CLOCK_FONT_ORDER if cur in CLOCK_FONT_ORDER else FONT_KEYS_ORDER
+            try:
+                idx = (order.index(cur) + 1) % len(order)
+            except ValueError:
+                idx = 0
+            new_font = order[idx]
             USER_FONT_CHOICES[target_user_id] = new_font
             CLOCK_STATUS[target_user_id] = True
             settings_update["font"] = new_font
@@ -1781,6 +1854,35 @@ async def callback_panel_handler(client, callback):
 
             if target_user_id in ACTIVE_BOTS:
                 asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
+
+        elif action.startswith("set_clock_font_"):
+            # set_clock_font_{key}_{user_id}
+            parts_cf = data.split("_")
+            # set, clock, font, KEY, USERID - but key can have underscore
+            # data format: set_clock_font_bold_12345 or set_clock_font_sans_bold_12345
+            target_user_id = int(parts_cf[-1])
+            font_key = "_".join(parts_cf[3:-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            if font_key not in CLOCK_FONT_STYLES:
+                await callback.answer("❌ فونت نامعتبر", show_alert=True)
+                return
+
+            USER_FONT_CHOICES[target_user_id] = font_key
+            CLOCK_STATUS[target_user_id] = True
+            data_manager.update_user_data(target_user_id, {"settings": {"font": font_key, "clock": True}})
+
+            if target_user_id in ACTIVE_BOTS:
+                asyncio.create_task(perform_clock_update_now(ACTIVE_BOTS[target_user_id][0], target_user_id))
+
+            sample = stylize_time("12:34", font_key)
+            await callback.answer(f"✅ فونت ساعت: {sample}")
+            try:
+                await edit_panel_colored(callback, target_user_id, 5)
+            except:
+                pass
+            return
 
         elif action.startswith("set_text_font_"):
             parts = data.split("_")

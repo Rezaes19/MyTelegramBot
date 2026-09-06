@@ -1292,78 +1292,161 @@ manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=
 # =============================================
 # 🔥 پنل دو صفحه‌ای با پرچم انگلیس
 # =============================================
-def generate_panel_markup(user_id, page=1):
-    s_clock = "🟢" if CLOCK_STATUS.get(user_id, True) else "🔴"
-    s_sec = "🟢" if SECRETARY_MODE_STATUS.get(user_id, False) else "🔴"
-    s_seen = "🟢" if AUTO_SEEN_STATUS.get(user_id, False) else "🔴"
-    s_pv = "🟢" if PV_LOCK_STATUS.get(user_id, False) else "🔴"
-    s_anti = "🟢" if ANTI_LOGIN_STATUS.get(user_id, False) else "🔴"
-    s_type = "🟢" if TYPING_MODE_STATUS.get(user_id, False) else "🔴"
-    s_game = "🟢" if PLAYING_MODE_STATUS.get(user_id, False) else "🔴"
-    s_enemy = "🟢" if GLOBAL_ENEMY_STATUS.get(user_id, False) else "🔴"
+def _styled_btn(text, callback_data, active=None, style=None):
+    """ساخت دکمه رنگی
+    active=True  -> سبز (success)
+    active=False -> قرمز (danger)
+    style: primary / success / danger (اولویت دارد)
+    """
+    if style is None:
+        if active is True:
+            style = "success"
+        elif active is False:
+            style = "danger"
+    btn = {"text": text, "callback_data": callback_data}
+    if style in ("success", "danger", "primary"):
+        btn["style"] = style
+    return btn
 
+
+def build_panel_keyboard(user_id, page=1):
+    """کیبورد پنل به صورت لیست دیکشنری (با style رنگی)"""
     t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-    l_en = "🟢" if t_lang == "en" else "🔴"
-    l_ru = "🟢" if t_lang == "ru" else "🔴"
-    l_cn = "🟢" if t_lang == "zh-CN" else "🔴"
-
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
-    
+
     if page == 1:
-        keyboard = [
-            [InlineKeyboardButton(f"⏰ ساعت {s_clock}", callback_data=f"toggle_clock_{user_id}"),
-             InlineKeyboardButton(f"🤖 منشی {s_sec}", callback_data=f"toggle_sec_{user_id}")],
-            [InlineKeyboardButton(f"👁 سین {s_seen}", callback_data=f"toggle_seen_{user_id}"),
-             InlineKeyboardButton(f"🔒 پیوی {s_pv}", callback_data=f"toggle_pv_{user_id}")],
-            [InlineKeyboardButton(f"🛡 انتی لوگین {s_anti}", callback_data=f"toggle_anti_{user_id}"),
-             InlineKeyboardButton(f"⌨️ تایپ {s_type}", callback_data=f"toggle_type_{user_id}")],
-            [InlineKeyboardButton(f"👺 دشمن همگانی {s_enemy}", callback_data=f"toggle_g_enemy_{user_id}"),
-             InlineKeyboardButton(f"🎮 بازی {s_game}", callback_data=f"toggle_game_{user_id}")],
-            [InlineKeyboardButton(f"🇬🇧 EN {l_en}", callback_data=f"lang_en_{user_id}"),
-             InlineKeyboardButton(f"🇷🇺 RU {l_ru}", callback_data=f"lang_ru_{user_id}"),
-             InlineKeyboardButton(f"🇨🇳 CN {l_cn}", callback_data=f"lang_cn_{user_id}")],
-            [InlineKeyboardButton("📄 صفحه فونت‌ها ➡️", callback_data=f"panel_page_2_{user_id}"),
-             InlineKeyboardButton("❌ بستن", callback_data=f"close_panel_{user_id}")]
+        return [
+            [
+                _styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
+                _styled_btn("🤖 منشی", f"toggle_sec_{user_id}", SECRETARY_MODE_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("👁 سین", f"toggle_seen_{user_id}", AUTO_SEEN_STATUS.get(user_id, False)),
+                _styled_btn("🔒 پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("🛡 انتی‌لوگین", f"toggle_anti_{user_id}", ANTI_LOGIN_STATUS.get(user_id, False)),
+                _styled_btn("⌨️ تایپینگ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("👺 دشمن همگانی", f"toggle_g_enemy_{user_id}", GLOBAL_ENEMY_STATUS.get(user_id, False)),
+                _styled_btn("🎮 بازی", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
+                _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
+                _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
+            ],
+            [
+                _styled_btn("📄 فونت‌ها", f"panel_page_2_{user_id}", style="primary"),
+                _styled_btn("❌ بستن", f"close_panel_{user_id}", style="danger"),
+            ],
         ]
     else:
         keyboard = []
         row = []
-        
         for font in FONT_KEYS_ORDER:
-            check = "🟢" if current_font == font else "🔴"
             display_name = FONT_PERSIAN_NAMES.get(font, font)
-            
-            if font in ["bold", "italic", "strikethrough", "underline", "spoiler", "mono"]:
-                display_name = apply_telegram_style(display_name, font)
-            
-            row.append(InlineKeyboardButton(
-                f"{check} {display_name}",
-                callback_data=f"set_text_font_{font}_{user_id}"
-            ))
-            
+            row.append(_styled_btn(display_name, f"set_text_font_{font}_{user_id}", current_font == font))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
-        
         if row:
             keyboard.append(row)
-        
-        check = "✅" if current_font == "none" else "⬜"
-        keyboard.append([InlineKeyboardButton(f"{check} خاموش", callback_data=f"set_text_font_none_{user_id}")])
-        
-        keyboard.append([InlineKeyboardButton("⬅️ بازگشت به تنظیمات", callback_data=f"panel_page_1_{user_id}")])
+        keyboard.append([_styled_btn("خاموش", f"set_text_font_none_{user_id}", current_font == "none")])
+        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="primary")])
+        return keyboard
 
-    return InlineKeyboardMarkup(keyboard)
+
+def generate_panel_markup(user_id, page=1):
+    """نسخه سازگار با Pyrogram (بدون رنگ) - برای inline query اولیه"""
+    kb = build_panel_keyboard(user_id, page)
+    rows = []
+    for row in kb:
+        rows.append([
+            InlineKeyboardButton(b["text"], callback_data=b["callback_data"])
+            for b in row
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+async def edit_panel_colored(callback, user_id, page=1):
+    """ویرایش پنل با دکمه‌های رنگی واقعی از طریق Bot API"""
+    keyboard = build_panel_keyboard(user_id, page)
+    payload = {"reply_markup": json.dumps({"inline_keyboard": keyboard})}
+    if callback.inline_message_id:
+        payload["inline_message_id"] = callback.inline_message_id
+    else:
+        payload["chat_id"] = callback.message.chat.id
+        payload["message_id"] = callback.message.id
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageReplyMarkup"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=payload) as resp:
+                data = await resp.json()
+                if not data.get("ok"):
+                    # اگر style ساپورت نشد، فال‌بک به روش عادی
+                    logging.warning(f"Colored panel failed: {data}")
+                    try:
+                        await callback.edit_message_reply_markup(generate_panel_markup(user_id, page))
+                    except Exception:
+                        pass
+                return data
+    except Exception as e:
+        logging.error(f"edit_panel_colored error: {e}")
+        try:
+            await callback.edit_message_reply_markup(generate_panel_markup(user_id, page))
+        except Exception:
+            pass
 
 @manager_bot.on_inline_query()
 async def inline_panel_handler(client, query):
     user_id = query.from_user.id
-    if query.query == "panel":
+    if query.query != "panel":
+        return
+
+    keyboard = build_panel_keyboard(user_id, 1)
+    # ارسال پنل رنگی مستقیم از Bot API
+    payload = {
+        "inline_query_id": query.id,
+        "cache_time": 0,
+        "results": json.dumps([{
+            "type": "article",
+            "id": f"panel_{user_id}",
+            "title": "پنل مدیریت self MR",
+            "input_message_content": {
+                "message_text": f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {user_id}"
+            },
+            "reply_markup": {"inline_keyboard": keyboard}
+        }])
+    }
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerInlineQuery"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=payload) as resp:
+                data = await resp.json()
+                if not data.get("ok"):
+                    logging.warning(f"Colored inline panel failed: {data}")
+                    # فال‌بک
+                    result = InlineQueryResultArticle(
+                        id=f"panel_{user_id}",
+                        title="پنل مدیریت self MR",
+                        input_message_content=InputTextMessageContent(
+                            f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {user_id}"
+                        ),
+                        reply_markup=generate_panel_markup(user_id, 1),
+                    )
+                    await query.answer([result], cache_time=0)
+    except Exception as e:
+        logging.error(f"inline panel error: {e}")
         result = InlineQueryResultArticle(
-            title="پنل مدیریت",
-            input_message_content=InputTextMessageContent(f"⚡️ **مدیریت پیشرفته سلف بات**\n👤 کاربر: {user_id}"),
+            id=f"panel_{user_id}",
+            title="پنل مدیریت self MR",
+            input_message_content=InputTextMessageContent(
+                f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {user_id}"
+            ),
             reply_markup=generate_panel_markup(user_id, 1),
-            thumb_url="https://telegra.ph/file/1e3b567786f7800e80816.jpg"
         )
         await query.answer([result], cache_time=0)
 
@@ -1600,7 +1683,7 @@ async def callback_panel_handler(client, callback):
             data_manager.update_user_data(target_user_id, {"settings": settings_update})
             
             try:
-                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 2))
+                await edit_panel_colored(callback, target_user_id, 2)
             except:
                 pass
             
@@ -1663,7 +1746,7 @@ async def callback_panel_handler(client, callback):
             target_user_id = int(parts[-1])
             
             try:
-                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, page))
+                await edit_panel_colored(callback, target_user_id, page)
             except:
                 pass
             return
@@ -1682,7 +1765,7 @@ async def callback_panel_handler(client, callback):
             data_manager.update_user_data(target_user_id, {"settings": settings_update})
 
         try:
-            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
+            await edit_panel_colored(callback, target_user_id, 1)
         except:
             pass
 

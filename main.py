@@ -1296,7 +1296,7 @@ def _styled_btn(text, callback_data, active=None, style=None):
     """ساخت دکمه رنگی
     active=True  -> سبز (success)
     active=False -> قرمز (danger)
-    style: primary / success / danger (اولویت دارد)
+    style: primary / success / danger
     """
     if style is None:
         if active is True:
@@ -1310,56 +1310,112 @@ def _styled_btn(text, callback_data, active=None, style=None):
 
 
 def build_panel_keyboard(user_id, page=1):
-    """کیبورد پنل به صورت لیست دیکشنری (با style رنگی)"""
+    """
+    صفحه ۱: منوی اصلی (بخش‌بندی شده)
+    صفحه ۲: حالت متن / فونت‌ها
+    صفحه ۳: بخش امنیتی
+    صفحه ۴: بخش اکشن‌ها
+    """
     t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
 
+    # ========== صفحه ۱: منوی اصلی ==========
     if page == 1:
         return [
+            # ردیف ساعت و حالت متن
             [
                 _styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
-                _styled_btn("🤖 منشی", f"toggle_sec_{user_id}", SECRETARY_MODE_STATUS.get(user_id, False)),
+                _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
             ],
+            # نگهبان / امنیتی
             [
-                _styled_btn("👁 سین", f"toggle_seen_{user_id}", AUTO_SEEN_STATUS.get(user_id, False)),
-                _styled_btn("🔒 پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
+                _styled_btn("🛡 بخش امنیتی", f"panel_page_3_{user_id}", style="primary"),
             ],
+            # اکشن‌ها
             [
-                _styled_btn("🛡 انتی‌لوگین", f"toggle_anti_{user_id}", ANTI_LOGIN_STATUS.get(user_id, False)),
-                _styled_btn("⌨️ تایپینگ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
+                _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
+                _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
             ],
-            [
-                _styled_btn("👺 دشمن همگانی", f"toggle_g_enemy_{user_id}", GLOBAL_ENEMY_STATUS.get(user_id, False)),
-                _styled_btn("🎮 بازی", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
-            ],
+            # ترجمه
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
             ],
+            # بستن
             [
-                _styled_btn("📄 فونت‌ها", f"panel_page_2_{user_id}", style="primary"),
-                _styled_btn("❌ بستن", f"close_panel_{user_id}", style="danger"),
+                _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
-    else:
+
+    # ========== صفحه ۲: حالت متن / فونت‌ها ==========
+    elif page == 2:
+        fonts = [
+            ("bold", "بولد"),
+            ("italic", "ایتالیک"),
+            ("quote", "نقل قول"),
+            ("strikethrough", "خط‌خورده"),
+            ("underline", "زیرخط"),
+            ("spoiler", "اسپویلر"),
+            ("mono", "تک‌فاصله"),
+            ("codeblock", "کدبلاک"),
+        ]
         keyboard = []
         row = []
-        for font in FONT_KEYS_ORDER:
-            display_name = FONT_PERSIAN_NAMES.get(font, font)
-            row.append(_styled_btn(display_name, f"set_text_font_{font}_{user_id}", current_font == font))
+        for key, name in fonts:
+            is_on = (current_font == key)
+            mark = "✓" if is_on else "X"
+            row.append(_styled_btn(f"{name} ({mark})", f"set_text_font_{key}_{user_id}", is_on))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([_styled_btn("خاموش", f"set_text_font_none_{user_id}", current_font == "none")])
-        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="primary")])
+
+        # خاموش کردن فونت
+        is_off = (current_font == "none")
+        mark = "✓" if is_off else "X"
+        keyboard.append([_styled_btn(f"خاموش ({mark})", f"set_text_font_none_{user_id}", is_off)])
+        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return keyboard
+
+    # ========== صفحه ۳: بخش امنیتی ==========
+    elif page == 3:
+        return [
+            [
+                _styled_btn("🤖 منشی", f"toggle_sec_{user_id}", SECRETARY_MODE_STATUS.get(user_id, False)),
+                _styled_btn("👁 سین خودکار", f"toggle_seen_{user_id}", AUTO_SEEN_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("🛡 انتی‌لوگین", f"toggle_anti_{user_id}", ANTI_LOGIN_STATUS.get(user_id, False)),
+                _styled_btn("👺 دشمن همگانی", f"toggle_g_enemy_{user_id}", GLOBAL_ENEMY_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
+            ],
+        ]
+
+    # ========== صفحه ۴: اکشن‌ها ==========
+    elif page == 4:
+        return [
+            [
+                _styled_btn("⌨️ تایپینگ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
+                _styled_btn("🎮 بازی (Playing)", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
+            ],
+            [
+                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
+            ],
+        ]
+
+    # پیش‌فرض
+    return build_panel_keyboard(user_id, 1)
 
 
 def generate_panel_markup(user_id, page=1):
-    """نسخه سازگار با Pyrogram (بدون رنگ) - برای inline query اولیه"""
+    """نسخه سازگار با Pyrogram (بدون رنگ)"""
     kb = build_panel_keyboard(user_id, page)
     rows = []
     for row in kb:
@@ -1386,7 +1442,6 @@ async def edit_panel_colored(callback, user_id, page=1):
             async with session.post(url, data=payload) as resp:
                 data = await resp.json()
                 if not data.get("ok"):
-                    # اگر style ساپورت نشد، فال‌بک به روش عادی
                     logging.warning(f"Colored panel failed: {data}")
                     try:
                         await callback.edit_message_reply_markup(generate_panel_markup(user_id, page))
@@ -1399,6 +1454,7 @@ async def edit_panel_colored(callback, user_id, page=1):
             await callback.edit_message_reply_markup(generate_panel_markup(user_id, page))
         except Exception:
             pass
+
 
 @manager_bot.on_inline_query()
 async def inline_panel_handler(client, query):
@@ -1764,8 +1820,19 @@ async def callback_panel_handler(client, callback):
         if settings_update:
             data_manager.update_user_data(target_user_id, {"settings": settings_update})
 
+        # بعد از تغییر، همان بخش پنل را نگه دار
+        stay_page = 1
+        if action in ("toggle_sec", "toggle_seen", "toggle_anti", "toggle_g_enemy"):
+            stay_page = 3
+        elif action in ("toggle_type", "toggle_game"):
+            stay_page = 4
+        elif action == "toggle_pv":
+            stay_page = 1
+        elif action.startswith("lang_"):
+            stay_page = 1
+
         try:
-            await edit_panel_colored(callback, target_user_id, 1)
+            await edit_panel_colored(callback, target_user_id, stay_page)
         except:
             pass
 

@@ -1293,19 +1293,19 @@ manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=
 # 🔥 پنل دو صفحه‌ای با پرچم انگلیس
 # =============================================
 def generate_panel_markup(user_id, page=1):
-    s_clock = "✔" if CLOCK_STATUS.get(user_id, True) else "✖"
-    s_sec = "✔" if SECRETARY_MODE_STATUS.get(user_id, False) else "✖"
-    s_seen = "✔" if AUTO_SEEN_STATUS.get(user_id, False) else "✖"
-    s_pv = "🔒" if PV_LOCK_STATUS.get(user_id, False) else "🔓"
-    s_anti = "✔" if ANTI_LOGIN_STATUS.get(user_id, False) else "✖"
-    s_type = "✔" if TYPING_MODE_STATUS.get(user_id, False) else "✖"
-    s_game = "✔" if PLAYING_MODE_STATUS.get(user_id, False) else "✖"
-    s_enemy = "✔" if GLOBAL_ENEMY_STATUS.get(user_id, False) else "✖"
+    s_clock = "🟢" if CLOCK_STATUS.get(user_id, True) else "🔴"
+    s_sec = "🟢" if SECRETARY_MODE_STATUS.get(user_id, False) else "🔴"
+    s_seen = "🟢" if AUTO_SEEN_STATUS.get(user_id, False) else "🔴"
+    s_pv = "🟢" if PV_LOCK_STATUS.get(user_id, False) else "🔴"
+    s_anti = "🟢" if ANTI_LOGIN_STATUS.get(user_id, False) else "🔴"
+    s_type = "🟢" if TYPING_MODE_STATUS.get(user_id, False) else "🔴"
+    s_game = "🟢" if PLAYING_MODE_STATUS.get(user_id, False) else "🔴"
+    s_enemy = "🟢" if GLOBAL_ENEMY_STATUS.get(user_id, False) else "🔴"
 
     t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-    l_en = "✔" if t_lang == "en" else "✖"
-    l_ru = "✔" if t_lang == "ru" else "✖"
-    l_cn = "✔" if t_lang == "zh-CN" else "✖"
+    l_en = "🟢" if t_lang == "en" else "🔴"
+    l_ru = "🟢" if t_lang == "ru" else "🔴"
+    l_cn = "🟢" if t_lang == "zh-CN" else "🔴"
 
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
     
@@ -1330,7 +1330,7 @@ def generate_panel_markup(user_id, page=1):
         row = []
         
         for font in FONT_KEYS_ORDER:
-            check = "✅" if current_font == font else "⬜"
+            check = "🟢" if current_font == font else "🔴"
             display_name = FONT_PERSIAN_NAMES.get(font, font)
             
             if font in ["bold", "italic", "strikethrough", "underline", "spoiler", "mono"]:

@@ -16,3 +16,4 @@ edge-tts
 gTTS
 pilmoji
 python-bidi
+ffmpeg

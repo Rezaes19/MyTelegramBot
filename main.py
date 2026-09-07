@@ -1473,12 +1473,13 @@ async def god_mode_handler(client, message):
 
 
 async def convert_message_to_sticker(client, message):
-    """ریپلای روی عکس/متن/استیکر → ارسال استیکر"""
+    """ریپلای روی عکس/متن/استیکر → ارسال استیکر تمیز شبیه تلگرام"""
     reply = message.reply_to_message
     if not reply:
         return None, "❌ روی یک پیام ریپلای کنید."
 
     out = f"{DOWNLOAD_PATH}/sticker_{int(time.time())}_{random.randint(100,999)}.webp"
+    os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
     # اگر خودش استیکر است
     if reply.sticker:
@@ -1489,52 +1490,105 @@ async def convert_message_to_sticker(client, message):
         except Exception as e:
             return None, f"❌ دانلود استیکر: {e}"
 
-    # ===== متن → استیکر =====
     text = (reply.text or reply.caption or "").strip()
     has_photo = bool(reply.photo)
     has_image_doc = bool(reply.document and (reply.document.mime_type or "").startswith("image/"))
 
+    # ===== متن → استیکر شبیه پیام تلگرام =====
     if text and not has_photo and not has_image_doc and not reply.animation:
         try:
             from PIL import Image, ImageDraw, ImageFont, ImageFilter
-            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
 
-            # فونت مناسب متن و ایموجی
             def load_font(size):
-                candidates = [
+                for fp in (
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-                    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-                    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-                    "C:/Windows/Fonts/seguiemj.ttf",
-                    "C:/Windows/Fonts/arial.ttf",
+                    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+                    "C:/Windows/Fonts/segoeui.ttf",
                     "C:/Windows/Fonts/tahoma.ttf",
-                    "C:/Windows/Fonts/times.ttf",
-                ]
-                for fp in candidates:
+                    "C:/Windows/Fonts/arial.ttf",
+                ):
                     if os.path.exists(fp):
                         try:
                             return ImageFont.truetype(fp, size)
                         except Exception:
-                            continue
+                            pass
                 return ImageFont.load_default()
 
-            # اندازه فونت بر اساس طول متن
-            tlen = len(text)
-            if tlen <= 6:
-                fsize, max_chars, line_h = 72, 8, 84
-            elif tlen <= 20:
-                fsize, max_chars, line_h = 52, 12, 62
-            elif tlen <= 50:
-                fsize, max_chars, line_h = 40, 16, 50
+            # اطلاعات فرستنده
+            user = reply.from_user
+            name = "User"
+            if user:
+                name = (user.first_name or "") + ((" " + user.last_name) if user.last_name else "")
+                name = name.strip() or (f"@{user.username}" if user.username else "User")
+            if len(name) > 22:
+                name = name[:20] + "…"
+
+            # دانلود پروفایل
+            avatar = None
+            try:
+                if user:
+                    photos = []
+                    async for p in client.get_chat_photos(user.id, limit=1):
+                        photos.append(p)
+                    if photos:
+                        av_path = await client.download_media(photos[0])
+                        if av_path and os.path.exists(av_path):
+                            avatar = Image.open(av_path).convert("RGBA")
+                            try:
+                                os.remove(av_path)
+                            except Exception:
+                                pass
+            except Exception:
+                avatar = None
+
+            # اگر پروفایل نبود، آواتار رنگی با حرف اول
+            def make_default_avatar(letter, size=72):
+                img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                d = ImageDraw.Draw(img)
+                colors = [(90, 140, 220, 255), (220, 120, 90, 255), (90, 190, 140, 255), (180, 120, 210, 255)]
+                color = colors[hash(letter) % len(colors)]
+                d.ellipse([0, 0, size-1, size-1], fill=color)
+                f = load_font(max(18, size // 2))
+                try:
+                    bb = d.textbbox((0, 0), letter, font=f)
+                    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+                except Exception:
+                    tw, th = size // 3, size // 3
+                d.text(((size - tw) / 2, (size - th) / 2 - 2), letter, font=f, fill=(255, 255, 255, 255))
+                return img
+
+            def circle_crop(im, size=72):
+                im = im.resize((size, size), getattr(Image, "Resampling", Image).LANCZOS if hasattr(Image, "Resampling") else Image.BICUBIC)
+                mask = Image.new("L", (size, size), 0)
+                ImageDraw.Draw(mask).ellipse([0, 0, size-1, size-1], fill=255)
+                out_im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                out_im.paste(im, (0, 0))
+                out_im.putalpha(mask)
+                return out_im
+
+            av_size = 72
+            if avatar is not None:
+                avatar = circle_crop(avatar, av_size)
             else:
-                fsize, max_chars, line_h = 32, 20, 40
+                letter = (name[0] if name else "U").upper()
+                avatar = make_default_avatar(letter, av_size)
+
+            # آماده‌سازی متن
+            tlen = len(text)
+            if tlen <= 8:
+                fsize, max_chars, line_h = 48, 10, 56
+            elif tlen <= 30:
+                fsize, max_chars, line_h = 36, 16, 44
+            else:
+                fsize, max_chars, line_h = 28, 20, 36
 
             font = load_font(fsize)
+            name_font = load_font(22)
+            time_font = load_font(18)
 
             def wrap(t, max_chars=16):
-                # حفظ ایموجی و کلمات
                 words = t.split()
                 lines, cur = [], ""
                 for w in words:
@@ -1548,66 +1602,95 @@ async def convert_message_to_sticker(client, message):
                 if cur:
                     lines.append(cur)
                 if not lines:
-                    lines = [t[i:i + max_chars] for i in range(0, len(t), max_chars)]
-                return lines[:8]
+                    lines = [t[i:i+max_chars] for i in range(0, len(t), max_chars)]
+                return lines[:7]
 
-            lines = wrap(text[:180], max_chars)
-            draw_tmp = ImageDraw.Draw(canvas)
-            widths = []
+            lines = wrap(text[:160], max_chars)
+
+            # اندازه حباب
+            tmp = ImageDraw.Draw(Image.new("RGBA", (512, 512)))
+            max_tw = 0
             for line in lines:
                 try:
-                    bbox = draw_tmp.textbbox((0, 0), line, font=font)
-                    widths.append(bbox[2] - bbox[0])
+                    bb = tmp.textbbox((0, 0), line, font=font)
+                    max_tw = max(max_tw, bb[2] - bb[0])
                 except Exception:
-                    widths.append(len(line) * (fsize // 2))
-            content_w = min(440, max(widths) if widths else 200)
-            content_h = len(lines) * line_h
-            pad_x, pad_y = 36, 28
-            box_w = content_w + pad_x * 2
-            box_h = content_h + pad_y * 2
-            box_w = max(180, min(480, box_w))
-            box_h = max(120, min(480, box_h))
-            x0 = (512 - box_w) // 2
-            y0 = (512 - box_h) // 2
+                    max_tw = max(max_tw, len(line) * fsize // 2)
+            try:
+                nb = tmp.textbbox((0, 0), name, font=name_font)
+                name_w = nb[2] - nb[0]
+            except Exception:
+                name_w = len(name) * 12
 
-            # سایه نرم
+            pad_x, pad_y = 20, 16
+            inner_w = max(max_tw, name_w, 120)
+            bubble_w = min(360, inner_w + pad_x * 2)
+            bubble_h = pad_y + 28 + len(lines) * line_h + 26  # name + lines + time
+            bubble_h = max(100, min(420, bubble_h))
+
+            # چیدمان کلی: آواتار چپ + حباب
+            gap = 12
+            total_w = av_size + gap + bubble_w
+            total_h = max(av_size, bubble_h)
+            # مرکز در بوم ۵۱۲
+            left = (512 - total_w) // 2
+            top = (512 - total_h) // 2
+
+            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+
+            # سایه حباب
             shadow = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
             sd = ImageDraw.Draw(shadow)
+            bx0 = left + av_size + gap
+            by0 = top + (total_h - bubble_h) // 2
             try:
-                sd.rounded_rectangle([x0+6, y0+8, x0+box_w+6, y0+box_h+8], radius=36, fill=(0, 0, 0, 90))
+                sd.rounded_rectangle([bx0+3, by0+5, bx0+bubble_w+3, by0+bubble_h+5], radius=22, fill=(0, 0, 0, 80))
             except Exception:
-                sd.rectangle([x0+6, y0+8, x0+box_w+6, y0+box_h+8], fill=(0, 0, 0, 90))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+                sd.rectangle([bx0+3, by0+5, bx0+bubble_w+3, by0+bubble_h+5], fill=(0, 0, 0, 80))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(8))
             canvas = Image.alpha_composite(canvas, shadow)
             draw = ImageDraw.Draw(canvas)
 
-            # حباب تیره شبیه تلگرام
+            # آواتار
+            av_x = left
+            av_y = by0 + bubble_h - av_size
+            canvas.paste(avatar, (av_x, av_y), avatar)
+
+            # حباب
             try:
-                draw.rounded_rectangle([x0, y0, x0+box_w, y0+box_h], radius=36, fill=(40, 38, 52, 245))
+                draw.rounded_rectangle([bx0, by0, bx0+bubble_w, by0+bubble_h], radius=22, fill=(45, 43, 58, 250))
             except Exception:
-                draw.rectangle([x0, y0, x0+box_w, y0+box_h], fill=(40, 38, 52, 245))
+                draw.rectangle([bx0, by0, bx0+bubble_w, by0+bubble_h], fill=(45, 43, 58, 250))
 
-            # متن سفید/نارنجی مرکزچین
-            # اگر شبیه ساعت بود رنگ نارنجی
+            # اسم (آبی روشن مثل تلگرام)
+            name_color = (110, 175, 255, 255)
+            draw.text((bx0 + pad_x, by0 + 12), name, font=name_font, fill=name_color)
+
+            # متن پیام
             is_time = bool(re.match(r"^\d{1,2}:\d{2}$", text.strip()))
-            fill = (255, 170, 60, 255) if is_time else (245, 245, 250, 255)
-
-            text_y = y0 + pad_y
+            text_color = (255, 175, 70, 255) if is_time else (245, 245, 248, 255)
+            ty = by0 + 12 + 28
             for i, line in enumerate(lines):
-                try:
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    tw = bbox[2] - bbox[0]
-                except Exception:
-                    tw = widths[i] if i < len(widths) else 100
-                tx = x0 + (box_w - tw) // 2
-                ty = text_y + i * line_h
-                draw.text((tx, ty), line, font=font, fill=fill)
+                draw.text((bx0 + pad_x, ty + i * line_h), line, font=font, fill=text_color)
+
+            # ساعت پایین راست حباب
+            try:
+                msg_time = datetime.fromtimestamp(reply.date.timestamp(), TEHRAN_TIMEZONE).strftime("%H:%M")
+            except Exception:
+                msg_time = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
+            try:
+                tb = draw.textbbox((0, 0), msg_time, font=time_font)
+                tw = tb[2] - tb[0]
+            except Exception:
+                tw = 40
+            draw.text((bx0 + bubble_w - pad_x - tw, by0 + bubble_h - 28), msg_time, font=time_font, fill=(160, 160, 175, 255))
 
             canvas.save(out, "WEBP", quality=95)
             return out, None
         except ImportError:
             return None, "❌ کتابخانه Pillow نصب نیست.\n`pip install Pillow`"
         except Exception as e:
+            logging.error(f"text sticker error: {e}")
             return None, f"❌ تبدیل متن به استیکر: {e}"
 
     # ===== عکس / سند تصویری =====
@@ -1636,11 +1719,9 @@ async def convert_message_to_sticker(client, message):
         if w <= 0 or h <= 0:
             return None, "❌ تصویر نامعتبر است."
         if w >= h:
-            new_w = 512
-            new_h = max(1, int(h * 512 / w))
+            new_w, new_h = 512, max(1, int(h * 512 / w))
         else:
-            new_h = 512
-            new_w = max(1, int(w * 512 / h))
+            new_h, new_w = 512, max(1, int(w * 512 / h))
         try:
             resample = Image.Resampling.LANCZOS
         except Exception:

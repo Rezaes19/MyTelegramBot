@@ -15,5 +15,4 @@ deep-translator
 edge-tts
 gTTS
 pilmoji
-arabic-reshaper
 python-bidi

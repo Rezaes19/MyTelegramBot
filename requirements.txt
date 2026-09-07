@@ -12,3 +12,5 @@ lxml
 Pillow
 psutil
 deep-translator
+edge-tts
+gTTS

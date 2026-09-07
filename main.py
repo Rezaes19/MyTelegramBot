@@ -404,105 +404,139 @@ TTS_VOICES = {
 }
 
 async def text_to_speech(text: str, voice_key: str = "زن"):
-    """تبدیل متن به ویس با چند روش + خطای واضح"""
+    """تبدیل متن به ویس - برای همه زبان‌ها پایدار"""
     text = (text or "").strip()
     if not text:
         return None, "❌ متن خالی است."
     text = text[:400]
+
+    os.makedirs(DOWNLOAD_PATH, exist_ok=True)
     path = f"{DOWNLOAD_PATH}/tts_{int(time.time())}_{random.randint(100,999)}.mp3"
     errors = []
 
-    edge_voices = {
-        "زن": "fa-IR-DilaraNeural",
-        "مرد": "fa-IR-FaridNeural",
-        "انگلیسی": "en-US-JennyNeural",
-        "عربی": "ar-SA-ZariyahNeural",
-        "ترکی": "tr-TR-EmelNeural",
-        "روسی": "ru-RU-SvetlanaNeural",
+    # چند صدا برای هر زبان (اگر اولی خالی بود بره بعدی)
+    edge_voice_list = {
+        "زن": ["fa-IR-DilaraNeural", "fa-IR-FaridNeural"],
+        "مرد": ["fa-IR-FaridNeural", "fa-IR-DilaraNeural"],
+        "انگلیسی": ["en-US-JennyNeural", "en-US-GuyNeural", "en-GB-SoniaNeural", "en-US-AriaNeural"],
+        "عربی": ["ar-SA-ZariyahNeural", "ar-EG-SalmaNeural", "ar-SA-HamedNeural"],
+        "ترکی": ["tr-TR-EmelNeural", "tr-TR-AhmetNeural"],
+        "روسی": ["ru-RU-SvetlanaNeural", "ru-RU-DmitryNeural"],
     }
-    voice = edge_voices.get(voice_key, "fa-IR-DilaraNeural")
-    tl_map = {"زن": "fa", "مرد": "fa", "انگلیسی": "en", "عربی": "ar", "ترکی": "tr", "روسی": "ru"}
-    tl = tl_map.get(voice_key, "fa")
+    gtts_lang = {
+        "زن": "fa", "مرد": "fa",
+        "انگلیسی": "en", "عربی": "ar", "ترکی": "tr", "روسی": "ru",
+    }
+    voices = edge_voice_list.get(voice_key, edge_voice_list["زن"])
+    tl = gtts_lang.get(voice_key, "fa")
 
-    # ----- 1) edge-tts ماژول -----
+    def _file_ok(p):
+        try:
+            return os.path.exists(p) and os.path.getsize(p) > 2000
+        except Exception:
+            return False
+
+    def _cleanup(p):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+
+    # ----- 1) edge-tts -----
     try:
         import edge_tts
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(path)
-        if os.path.exists(path) and os.path.getsize(path) > 500:
-            return path, None
-        errors.append("edge-tts: فایل خالی")
+        for v in voices:
+            try:
+                _cleanup(path)
+                communicate = edge_tts.Communicate(text, v)
+                await communicate.save(path)
+                if _file_ok(path):
+                    return path, None
+                errors.append(f"edge:{v}:empty")
+            except Exception as e:
+                errors.append(f"edge:{v}:{type(e).__name__}")
+                _cleanup(path)
     except ImportError:
         errors.append("edge-tts نصب نیست")
     except Exception as e:
-        errors.append(f"edge-tts: {type(e).__name__}: {e}")
+        errors.append(f"edge:{type(e).__name__}:{e}")
 
-    # ----- 2) edge-tts از طریق CLI -----
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "edge-tts",
-            "--voice", voice,
-            "--text", text,
-            "--write-media", path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        if proc.returncode == 0 and os.path.exists(path) and os.path.getsize(path) > 500:
-            return path, None
-        err_txt = (stderr or b"").decode("utf-8", errors="ignore")[:120]
-        errors.append(f"edge-tts-cli: {err_txt or proc.returncode}")
-    except FileNotFoundError:
-        errors.append("edge-tts-cli: دستور پیدا نشد")
-    except Exception as e:
-        errors.append(f"edge-tts-cli: {type(e).__name__}: {e}")
+    # ----- 2) edge-tts CLI -----
+    for v in voices:
+        try:
+            _cleanup(path)
+            proc = await asyncio.create_subprocess_exec(
+                "edge-tts",
+                "--voice", v,
+                "--text", text,
+                "--write-media", path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode == 0 and _file_ok(path):
+                return path, None
+            errors.append(f"cli:{v}:rc={proc.returncode}")
+            _cleanup(path)
+        except FileNotFoundError:
+            errors.append("edge-tts-cli نیست")
+            break
+        except Exception as e:
+            errors.append(f"cli:{v}:{type(e).__name__}")
+            _cleanup(path)
 
-    # ----- 3) gTTS -----
+    # ----- 3) gTTS (برای en/tr/ru خیلی پایدار) -----
     try:
         from gtts import gTTS
         def _gtts():
-            tts = gTTS(text=text, lang=tl)
+            # slow=False
+            tts = gTTS(text=text, lang=tl, lang_check=False)
             tts.save(path)
+        _cleanup(path)
         await asyncio.to_thread(_gtts)
-        if os.path.exists(path) and os.path.getsize(path) > 500:
+        if _file_ok(path):
             return path, None
-        errors.append("gTTS: فایل خالی")
+        errors.append("gTTS:empty")
+        _cleanup(path)
     except ImportError:
         errors.append("gTTS نصب نیست")
     except Exception as e:
-        errors.append(f"gTTS: {type(e).__name__}: {e}")
+        errors.append(f"gTTS:{type(e).__name__}:{e}")
+        _cleanup(path)
 
-    # ----- 4) Google TTS HTTP -----
+    # ----- 4) Google HTTP -----
     try:
         q = quote(text)
-        urls = [
-            f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob",
-            f"https://translate.googleapis.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=gtx",
-        ]
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://translate.google.com/",
-            "Accept": "*/*",
         }
+        urls = [
+            f"https://translate.googleapis.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=gtx",
+            f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob",
+        ]
         async with aiohttp.ClientSession() as session:
             for url in urls:
                 try:
+                    _cleanup(path)
                     async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                         if resp.status == 200:
                             data = await resp.read()
-                            if len(data) > 500:
+                            if len(data) > 2000:
                                 with open(path, "wb") as f:
                                     f.write(data)
-                                return path, None
-                        errors.append(f"http-tts status={resp.status}")
+                                if _file_ok(path):
+                                    return path, None
+                        errors.append(f"http:{resp.status}")
                 except Exception as e:
-                    errors.append(f"http-tts: {type(e).__name__}")
+                    errors.append(f"http:{type(e).__name__}")
     except Exception as e:
-        errors.append(f"http-tts: {e}")
+        errors.append(f"http:{e}")
 
-    detail = " | ".join(errors[-4:])
-    logging.error(f"TTS all methods failed: {detail}")
-    return None, f"❌ ساخت ویس ناموفق بود.\n\n🔧 جزئیات:\n`{detail}`\n\nاگر edge-tts نصب است و باز خطا می‌دهد، احتمالاً سرور به مایکروسافت/گوگل دسترسی ندارد."
+    detail = " | ".join(errors[-5:])
+    logging.error(f"TTS failed for voice={voice_key}: {detail}")
+    return None, f"❌ ساخت ویس ناموفق بود.\\n🔧 `{detail}`"
 
 
 async def cleanup_old_files():
@@ -1437,6 +1471,155 @@ async def god_mode_handler(client, message):
         except Exception as e:
             await message.reply_text(f"❌ خطا: {e}")
 
+
+async def convert_message_to_sticker(client, message):
+    """ریپلای روی عکس/متن/استیکر → ارسال استیکر"""
+    reply = message.reply_to_message
+    if not reply:
+        return None, "❌ روی یک پیام ریپلای کنید."
+
+    out = f"{DOWNLOAD_PATH}/sticker_{int(time.time())}_{random.randint(100,999)}.webp"
+
+    # اگر خودش استیکر است
+    if reply.sticker:
+        try:
+            path = await client.download_media(reply.sticker)
+            if path:
+                return path, None
+        except Exception as e:
+            return None, f"❌ دانلود استیکر: {e}"
+
+    # ===== متن → استیکر =====
+    text = (reply.text or reply.caption or "").strip()
+    has_photo = bool(reply.photo)
+    has_image_doc = bool(reply.document and (reply.document.mime_type or "").startswith("image/"))
+
+    if text and not has_photo and not has_image_doc and not reply.animation:
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            # پس‌زمینه شفاف / تیره شیشه‌ای
+            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(canvas)
+
+            # فونت
+            font = None
+            for fp in (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/tahoma.ttf",
+            ):
+                if os.path.exists(fp):
+                    try:
+                        font = ImageFont.truetype(fp, 42)
+                        break
+                    except Exception:
+                        pass
+            if font is None:
+                font = ImageFont.load_default()
+
+            # شکستن خطوط
+            def wrap(t, max_chars=16):
+                words = t.split()
+                lines, cur = [], ""
+                for w in words:
+                    trial = (cur + " " + w).strip()
+                    if len(trial) <= max_chars:
+                        cur = trial
+                    else:
+                        if cur:
+                            lines.append(cur)
+                        cur = w
+                if cur:
+                    lines.append(cur)
+                # اگر متن بدون فاصله خیلی بلند بود
+                if not lines:
+                    lines = [t[i:i+max_chars] for i in range(0, len(t), max_chars)]
+                return lines[:10]
+
+            lines = wrap(text[:200])
+            line_h = 52
+            total_h = len(lines) * line_h
+            y0 = max(20, (512 - total_h) // 2)
+
+            # باکس نیمه‌شفاف پشت متن
+            pad = 20
+            box = [30, y0 - pad, 482, y0 + total_h + pad]
+            try:
+                # rounded rectangle
+                draw.rounded_rectangle(box, radius=24, fill=(30, 30, 40, 210))
+            except Exception:
+                draw.rectangle(box, fill=(30, 30, 40, 210))
+
+            for i, line in enumerate(lines):
+                # مرکز چین
+                try:
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    tw = bbox[2] - bbox[0]
+                except Exception:
+                    tw = len(line) * 20
+                x = max(40, (512 - tw) // 2)
+                y = y0 + i * line_h
+                draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+
+            canvas.save(out, "WEBP", quality=95)
+            return out, None
+        except ImportError:
+            return None, "❌ کتابخانه Pillow نصب نیست.\n`pip install Pillow`"
+        except Exception as e:
+            return None, f"❌ تبدیل متن به استیکر: {e}"
+
+    # ===== عکس / سند تصویری =====
+    media = reply.photo or reply.document
+    if not media and reply.animation:
+        return None, "❌ گیف را نمی‌توان به استیکر ثابت تبدیل کرد."
+    if not media:
+        return None, "❌ روی عکس یا متن ریپلای کنید."
+
+    if reply.document:
+        mime = (reply.document.mime_type or "")
+        if not mime.startswith("image/"):
+            return None, "❌ فقط فایل تصویری قابل تبدیل است."
+
+    try:
+        path = await client.download_media(media)
+        if not path or not os.path.exists(path):
+            return None, "❌ دانلود تصویر ناموفق بود."
+    except Exception as e:
+        return None, f"❌ دانلود: {e}"
+
+    try:
+        from PIL import Image
+        img = Image.open(path).convert("RGBA")
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return None, "❌ تصویر نامعتبر است."
+        if w >= h:
+            new_w = 512
+            new_h = max(1, int(h * 512 / w))
+        else:
+            new_h = 512
+            new_w = max(1, int(w * 512 / h))
+        try:
+            resample = Image.Resampling.LANCZOS
+        except Exception:
+            resample = getattr(Image, "LANCZOS", Image.BICUBIC)
+        img = img.resize((new_w, new_h), resample)
+        canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        canvas.paste(img, ((512 - new_w) // 2, (512 - new_h) // 2), img)
+        canvas.save(out, "WEBP", quality=90)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        return out, None
+    except ImportError:
+        return None, "❌ کتابخانه Pillow نصب نیست.\n`pip install Pillow`"
+    except Exception as e:
+        return None, f"❌ تبدیل استیکر: {e}"
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
@@ -1647,6 +1830,45 @@ async def reply_based_controller(client, message):
             await message.edit_text(info)
         except Exception:
             await client.send_message(message.chat.id, info)
+        return
+
+    # ========== تبدیل به استیکر ==========
+    if cmd in (".تبدیل به استیکر", "تبدیل به استیکر"):
+        if not message.reply_to_message:
+            await message.edit_text("❌ روی یک عکس یا متن ریپلای کنید و دوباره بفرستید.")
+            return
+        try:
+            await message.edit_text("⏳ در حال ساخت استیکر...")
+        except Exception:
+            pass
+        path, err = await convert_message_to_sticker(client, message)
+        if err:
+            try:
+                await message.edit_text(err)
+            except Exception:
+                await client.send_message(message.chat.id, err)
+            return
+        try:
+            await client.send_sticker(message.chat.id, path)
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                # فال‌بک: ارسال به صورت فایل webp
+                await client.send_document(message.chat.id, path, caption="🧷 استیکر")
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+            except Exception as e2:
+                await message.edit_text(f"❌ ارسال استیکر ناموفق: {e2}")
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
         return
 
     if not message.reply_to_message:

@@ -1496,31 +1496,45 @@ async def convert_message_to_sticker(client, message):
 
     if text and not has_photo and not has_image_doc and not reply.animation:
         try:
-            from PIL import Image, ImageDraw, ImageFont
-            # پس‌زمینه شفاف / تیره شیشه‌ای
+            from PIL import Image, ImageDraw, ImageFont, ImageFilter
             canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(canvas)
 
-            # فونت
-            font = None
-            for fp in (
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                "C:/Windows/Fonts/arial.ttf",
-                "C:/Windows/Fonts/tahoma.ttf",
-            ):
-                if os.path.exists(fp):
-                    try:
-                        font = ImageFont.truetype(fp, 42)
-                        break
-                    except Exception:
-                        pass
-            if font is None:
-                font = ImageFont.load_default()
+            # فونت مناسب متن و ایموجی
+            def load_font(size):
+                candidates = [
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+                    "C:/Windows/Fonts/seguiemj.ttf",
+                    "C:/Windows/Fonts/arial.ttf",
+                    "C:/Windows/Fonts/tahoma.ttf",
+                    "C:/Windows/Fonts/times.ttf",
+                ]
+                for fp in candidates:
+                    if os.path.exists(fp):
+                        try:
+                            return ImageFont.truetype(fp, size)
+                        except Exception:
+                            continue
+                return ImageFont.load_default()
 
-            # شکستن خطوط
+            # اندازه فونت بر اساس طول متن
+            tlen = len(text)
+            if tlen <= 6:
+                fsize, max_chars, line_h = 72, 8, 84
+            elif tlen <= 20:
+                fsize, max_chars, line_h = 52, 12, 62
+            elif tlen <= 50:
+                fsize, max_chars, line_h = 40, 16, 50
+            else:
+                fsize, max_chars, line_h = 32, 20, 40
+
+            font = load_font(fsize)
+
             def wrap(t, max_chars=16):
+                # حفظ ایموجی و کلمات
                 words = t.split()
                 lines, cur = [], ""
                 for w in words:
@@ -1533,35 +1547,61 @@ async def convert_message_to_sticker(client, message):
                         cur = w
                 if cur:
                     lines.append(cur)
-                # اگر متن بدون فاصله خیلی بلند بود
                 if not lines:
-                    lines = [t[i:i+max_chars] for i in range(0, len(t), max_chars)]
-                return lines[:10]
+                    lines = [t[i:i + max_chars] for i in range(0, len(t), max_chars)]
+                return lines[:8]
 
-            lines = wrap(text[:200])
-            line_h = 52
-            total_h = len(lines) * line_h
-            y0 = max(20, (512 - total_h) // 2)
+            lines = wrap(text[:180], max_chars)
+            draw_tmp = ImageDraw.Draw(canvas)
+            widths = []
+            for line in lines:
+                try:
+                    bbox = draw_tmp.textbbox((0, 0), line, font=font)
+                    widths.append(bbox[2] - bbox[0])
+                except Exception:
+                    widths.append(len(line) * (fsize // 2))
+            content_w = min(440, max(widths) if widths else 200)
+            content_h = len(lines) * line_h
+            pad_x, pad_y = 36, 28
+            box_w = content_w + pad_x * 2
+            box_h = content_h + pad_y * 2
+            box_w = max(180, min(480, box_w))
+            box_h = max(120, min(480, box_h))
+            x0 = (512 - box_w) // 2
+            y0 = (512 - box_h) // 2
 
-            # باکس نیمه‌شفاف پشت متن
-            pad = 20
-            box = [30, y0 - pad, 482, y0 + total_h + pad]
+            # سایه نرم
+            shadow = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(shadow)
             try:
-                # rounded rectangle
-                draw.rounded_rectangle(box, radius=24, fill=(30, 30, 40, 210))
+                sd.rounded_rectangle([x0+6, y0+8, x0+box_w+6, y0+box_h+8], radius=36, fill=(0, 0, 0, 90))
             except Exception:
-                draw.rectangle(box, fill=(30, 30, 40, 210))
+                sd.rectangle([x0+6, y0+8, x0+box_w+6, y0+box_h+8], fill=(0, 0, 0, 90))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+            canvas = Image.alpha_composite(canvas, shadow)
+            draw = ImageDraw.Draw(canvas)
 
+            # حباب تیره شبیه تلگرام
+            try:
+                draw.rounded_rectangle([x0, y0, x0+box_w, y0+box_h], radius=36, fill=(40, 38, 52, 245))
+            except Exception:
+                draw.rectangle([x0, y0, x0+box_w, y0+box_h], fill=(40, 38, 52, 245))
+
+            # متن سفید/نارنجی مرکزچین
+            # اگر شبیه ساعت بود رنگ نارنجی
+            is_time = bool(re.match(r"^\d{1,2}:\d{2}$", text.strip()))
+            fill = (255, 170, 60, 255) if is_time else (245, 245, 250, 255)
+
+            text_y = y0 + pad_y
             for i, line in enumerate(lines):
-                # مرکز چین
                 try:
                     bbox = draw.textbbox((0, 0), line, font=font)
                     tw = bbox[2] - bbox[0]
                 except Exception:
-                    tw = len(line) * 20
-                x = max(40, (512 - tw) // 2)
-                y = y0 + i * line_h
-                draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+                    tw = widths[i] if i < len(widths) else 100
+                tx = x0 + (box_w - tw) // 2
+                ty = text_y + i * line_h
+                draw.text((tx, ty), line, font=font, fill=fill)
 
             canvas.save(out, "WEBP", quality=95)
             return out, None
@@ -2088,6 +2128,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🎤 تبدیل متن به ویس", f"panel_page_7_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🧩 تبدیل به استیکر", f"panel_page_8_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -2245,6 +2288,16 @@ def build_panel_keyboard(user_id, page=1):
         rows.append([_styled_btn("مثال: .تبدیل متن به ویس سلام", "noop", style="primary")])
         rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return rows
+
+    # ========== صفحه ۸: راهنمای استیکر ==========
+    elif page == 8:
+        return [
+            [_styled_btn("🧩 تبدیل به استیکر", "noop", style="primary")],
+            [_styled_btn("📖 راهنما:", "noop")],
+            [_styled_btn("ریپلای + .تبدیل به استیکر", "noop", style="success")],
+            [_styled_btn("روی عکس یا متن ریپلای کنید", "noop")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
 
     # پیش‌فرض
     return build_panel_keyboard(user_id, 1)

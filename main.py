@@ -1502,24 +1502,23 @@ async def ensure_vazir_font():
 
 
 def prepare_rtl_text(text: str) -> str:
-    """فقط بخش فارسی/عربی را reshape کن، لاتین و ایموجی خراب نشوند"""
+    """آماده‌سازی متن فارسی برای رسم صحیح در Pillow"""
     if not text:
+        return text
+    if not re.search(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]", text):
         return text
     try:
         import arabic_reshaper
         from bidi.algorithm import get_display
-    except Exception:
-        return text
-
-    # اگر حروف فارسی/عربی ندارد
-    if not re.search(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]", text):
-        return text
-
-    try:
         reshaped = arabic_reshaper.reshape(text)
+        # get_display برای ترتیب درست حروف فارسی در تصویر LTR لازم است
         return get_display(reshaped)
     except Exception:
-        return text
+        try:
+            import arabic_reshaper
+            return arabic_reshaper.reshape(text)
+        except Exception:
+            return text
 
 
 async def convert_message_to_sticker(client, message):
@@ -1599,16 +1598,26 @@ async def convert_message_to_sticker(client, message):
                 return img
 
             def smart_text(img, xy, s, font, fill):
-                """اول pilmoji، اگر نبود PIL عادی"""
-                # حذف کاراکترهای کنترلی خراب‌کننده
-                s = "".join(ch for ch in s if ch == "\n" or ord(ch) >= 32)
-                try:
-                    from pilmoji import Pilmoji
-                    with Pilmoji(img) as pm:
-                        pm.text(xy, s, font=font, fill=fill[:3] if isinstance(fill, tuple) and len(fill) > 3 else fill)
+                """رسم متن. فارسی با PIL؛ ایموجی‌alone با pilmoji"""
+                if not s:
                     return
-                except Exception:
-                    pass
+                s = "".join(ch for ch in s if ch == "\n" or ord(ch) >= 32)
+                fill3 = fill[:3] if isinstance(fill, tuple) and len(fill) >= 3 else fill
+                has_fa = bool(re.search(r"[\u0600-\u06FF]", s))
+                has_emoji = bool(re.search(r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U0001F600-\U0001F64F]", s))
+                # فارسی: فقط PIL (pilmoji ترتیب را خراب می‌کند)
+                if has_fa:
+                    ImageDraw.Draw(img).text(xy, s, font=font, fill=fill)
+                    return
+                # فقط ایموجی/لاتین
+                if has_emoji:
+                    try:
+                        from pilmoji import Pilmoji
+                        with Pilmoji(img) as pm:
+                            pm.text(xy, s, font=font, fill=fill3)
+                        return
+                    except Exception:
+                        pass
                 ImageDraw.Draw(img).text(xy, s, font=font, fill=fill)
 
             def measure(s, font):
@@ -1660,7 +1669,7 @@ async def convert_message_to_sticker(client, message):
                 fsize, max_chars, line_h = 26, 20, 34
 
             font = load_font(fsize)
-            name_font = load_font(21)
+            name_font = load_font(24)
             time_font = load_font(17)
 
             def wrap(t, n):
@@ -1690,9 +1699,9 @@ async def convert_message_to_sticker(client, message):
                 max_tw = max(max_tw, w)
             name_w, _ = measure(name_draw, name_font)
 
-            pad_x, pad_top = 16, 12
+            pad_x, pad_top = 18, 16
             bubble_w = int(min(380, max(max_tw, name_w, 140) + pad_x * 2))
-            bubble_h = int(pad_top + 30 + len(lines_draw) * line_h + 28)
+            bubble_h = int(pad_top + 36 + len(lines_draw) * line_h + 30)
             bubble_h = max(100, min(440, bubble_h))
 
             gap = 12
@@ -1726,15 +1735,17 @@ async def convert_message_to_sticker(client, message):
             except Exception:
                 draw.rectangle([bx0, by0, bx0+bubble_w, by0+bubble_h], fill=(42, 40, 54, 250))
 
-            # ----- اسم (داخل حباب، نه بیرون) -----
+            # ----- اسم (واضح و داخل حباب) -----
             name_x = bx0 + pad_x
             name_y = by0 + pad_top
-            smart_text(canvas, (name_x, name_y), name_draw, name_font, (120, 180, 255, 255))
+            # سایه خیلی کم برای خوانایی اسم
+            smart_text(canvas, (name_x+1, name_y+1), name_draw, name_font, (0, 0, 0, 120))
+            smart_text(canvas, (name_x, name_y), name_draw, name_font, (140, 200, 255, 255))
 
             # ----- متن -----
             is_time = bool(re.match(r"^\d{1,2}:\d{2}$", raw.strip()))
-            fill = (255, 175, 70, 255) if is_time else (245, 245, 248, 255)
-            ty = name_y + 28
+            fill = (255, 175, 70, 255) if is_time else (250, 250, 252, 255)
+            ty = name_y + 32
             for i, ln in enumerate(lines_draw):
                 has_fa = bool(re.search(r"[\u0600-\u06FF]", lines_raw[i]))
                 if has_fa:

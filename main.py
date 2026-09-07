@@ -1559,6 +1559,75 @@ async def force_join_pv_handler(client, message):
         logging.error(f"force_join_pv_handler: {e}")
 
 
+
+async def convert_video_to_note(client, message):
+    """ریپلای روی ویدیو → ویدیو مسیج (گرد)"""
+    reply = message.reply_to_message
+    if not reply:
+        return None, "❌ روی یک ویدیو ریپلای کنید."
+    media = reply.video or reply.video_note or reply.animation or (
+        reply.document if reply.document and (reply.document.mime_type or "").startswith("video/") else None
+    )
+    if not media:
+        return None, "❌ این پیام ویدیو نیست."
+
+    try:
+        path = await client.download_media(media)
+        if not path or not os.path.exists(path):
+            return None, "❌ دانلود ویدیو ناموفق بود."
+    except Exception as e:
+        return None, f"❌ دانلود: {e}"
+
+    out = f"{DOWNLOAD_PATH}/vnote_{int(time.time())}_{random.randint(100,999)}.mp4"
+    # مربع + حداکثر ۶۰ ثانیه — مناسب ویدیو مسیج تلگرام
+    cmd = [
+        "ffmpeg", "-y", "-i", path,
+        "-t", "60",
+        "-vf", "crop=min(iw\\,ih):min(iw\\,ih),scale=240:240",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "96k",
+        "-movflags", "+faststart",
+        out
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 1000:
+            # تلاش بدون صدا
+            cmd2 = [
+                "ffmpeg", "-y", "-i", path,
+                "-t", "60",
+                "-vf", "crop=min(iw\\,ih):min(iw\\,ih),scale=240:240",
+                "-c:v", "libx264", "-preset", "veryfast", "-an",
+                out
+            ]
+            proc2 = await asyncio.create_subprocess_exec(
+                *cmd2,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc2.communicate(), timeout=120)
+            if not os.path.exists(out) or os.path.getsize(out) < 1000:
+                err = (stderr or b"").decode("utf-8", errors="ignore")[-200:]
+                return None, f"❌ تبدیل ناموفق. ffmpeg را نصب کنید.\n{err}"
+    except FileNotFoundError:
+        return None, "❌ ffmpeg روی سرور نصب نیست."
+    except Exception as e:
+        return None, f"❌ خطا در تبدیل: {e}"
+    finally:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    return out, None
+
+
 async def ensure_vazir_font():
     """دانلود فونت وزیر برای فارسی تمیز"""
     font_dir = os.path.join(DOWNLOAD_PATH, "fonts")
@@ -2192,6 +2261,45 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ عضویت اجباری پیوی خاموش شد | self MR")
         return
 
+    # ========== ویدیو مسیج / ویدیو گرد ==========
+    if cmd in (".ویدیو مسیج", "ویدیو مسیج", ".ویدیو مسیج", ".ویدیومسیج"):
+        if not message.reply_to_message:
+            await message.edit_text("❌ روی یک ویدیو ریپلای کنید.\nمثال: ریپلای + `.ویدیو مسیج`")
+            return
+        try:
+            await message.edit_text("⏳ در حال ساخت ویدیو گرد...")
+        except Exception:
+            pass
+        path, err = await convert_video_to_note(client, message)
+        if err:
+            try:
+                await message.edit_text(err)
+            except Exception:
+                await client.send_message(message.chat.id, err)
+            return
+        try:
+            await client.send_video_note(message.chat.id, path)
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                # فال‌بک: ارسال ویدیو عادی
+                await client.send_video(message.chat.id, path, caption="🎥 ویدیو گرد | self MR")
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+            except Exception as e2:
+                await message.edit_text(f"❌ ارسال ناموفق: {e2}")
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+        return
+
     # ========== تبدیل به استیکر ==========
     if cmd in (".تبدیل به استیکر", "تبدیل به استیکر"):
         if not message.reply_to_message:
@@ -2461,6 +2569,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔐 عضویت اجباری پیوی", f"panel_page_9_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🎥 ساخت ویدیو گرد", f"panel_page_10_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -2629,12 +2740,18 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
-    # ========== صفحه ۹: عضویت اجباری پیوی (فقط دکمه وضعیت + بازگشت؛ راهنما متنی است) ==========
+    # ========== صفحه ۹: عضویت اجباری پیوی ==========
     elif page == 9:
         st = FORCE_JOIN_PV_STATUS.get(user_id, False)
         label = f"وضعیت : ( {'on ✅' if st else 'off ❌'} )"
         return [
             [_styled_btn(label, f"toggle_force_join_{user_id}", st)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحه ۱۰: ساخت ویدیو گرد ==========
+    elif page == 10:
+        return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
@@ -3127,6 +3244,32 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 10:
+                    help_text = (
+                        "ساخت ویدیو گرد | self MR\n\n"
+                        "دستورات\n"
+                        ".ویدیو مسیج\n\n"
+                        "روی یک ویدیو ریپلای کن؛ خروجی به صورت ویدیو گرد در همان چت ارسال می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(
+                                callback.inline_message_id,
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 10),
+                            )
+                        else:
+                            await callback.message.edit_text(
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 10),
+                            )
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 10)
+                    except Exception:
+                        pass
+                    return
                 # صفحه عضویت اجباری: متن راهنما + دکمه‌های وضعیت
                 if page == 9:
                     st = FORCE_JOIN_PV_STATUS.get(target_user_id, False)

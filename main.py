@@ -222,14 +222,20 @@ def get_session(user_id):
 # تابع دانلود
 # =============================================
 async def download_media(url, media_type="video"):
+    """دانلود از یوتیوب، تیک‌تاک، اینستا و ۱۰۰۰+ سایت"""
     try:
+        safe_name = f"{int(time.time())}_{random.randint(1000,9999)}"
+        outtmpl = f'{DOWNLOAD_PATH}/{safe_name}.%(ext)s'
         ydl_opts = {
-            'outtmpl': f'{DOWNLOAD_PATH}/%(title)s.%(ext)s',
+            'outtmpl': outtmpl,
             'quiet': True,
             'no_warnings': True,
-            'ignoreerrors': True,
+            'ignoreerrors': False,
+            'noplaylist': True,
+            'socket_timeout': 30,
+            'retries': 3,
         }
-        
+
         if media_type == "audio":
             ydl_opts.update({
                 'format': 'bestaudio/best',
@@ -241,31 +247,223 @@ async def download_media(url, media_type="video"):
             })
         else:
             ydl_opts.update({
-                'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+                'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best',
                 'merge_output_format': 'mp4',
             })
-        
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            
-            if media_type == "audio":
-                filename = filename.rsplit('.', 1)[0] + '.mp3'
-            
-            if os.path.exists(filename):
-                file_size = os.path.getsize(filename)
-                if file_size > MAX_FILE_SIZE:
-                    os.remove(filename)
-                    return None, "❌ حجم فایل بیشتر از ۵۰ مگابایت است!"
-                return filename, None
-            else:
-                return None, "❌ خطا در دانلود فایل!"
+
+        def _run():
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if not info:
+                    return None, None
+                filename = ydl.prepare_filename(info)
+                if media_type == "audio":
+                    base = filename.rsplit('.', 1)[0]
+                    for ext in ('.mp3', '.m4a', '.webm', '.opus'):
+                        if os.path.exists(base + ext):
+                            return base + ('.mp3' if ext != '.mp3' and os.path.exists(base + '.mp3') else ext), info.get('title')
+                    if os.path.exists(base + '.mp3'):
+                        return base + '.mp3', info.get('title')
+                if os.path.exists(filename):
+                    return filename, info.get('title')
+                # جستجو در پوشه
+                for f in os.listdir(DOWNLOAD_PATH):
+                    if f.startswith(safe_name):
+                        return os.path.join(DOWNLOAD_PATH, f), info.get('title')
+                return None, None
+
+        filename, title = await asyncio.to_thread(_run)
+        if not filename or not os.path.exists(filename):
+            return None, "❌ دانلود ناموفق بود. لینک را بررسی کنید."
+
+        file_size = os.path.getsize(filename)
+        if file_size > MAX_FILE_SIZE:
+            os.remove(filename)
+            return None, "❌ حجم فایل بیشتر از ۵۰ مگابایت است!"
+        if file_size < 1000:
+            os.remove(filename)
+            return None, "❌ فایل خیلی کوچک است یا دانلود ناقص بود."
+        return filename, None
     except Exception as e:
-        return None, f"❌ خطا: {str(e)}"
+        err = str(e)
+        if "Unsupported URL" in err:
+            return None, "❌ این لینک پشتیبانی نمی‌شود."
+        if "Private video" in err or "private" in err.lower():
+            return None, "❌ ویدیو خصوصی است."
+        return None, f"❌ خطا در دانلود: {err[:120]}"
 
 # =============================================
 # تابع پاک‌سازی فایل‌های قدیمی
 # =============================================
+
+# =============================================
+# قیمت ارز
+# =============================================
+CURRENCY_ALIASES = {
+    "دلار": "usd", "dollar": "usd", "usd": "usd", "دلار آمریکا": "usd",
+    "یورو": "eur", "euro": "eur", "eur": "eur",
+    "پوند": "gbp", "gbp": "gbp",
+    "درهم": "aed", "aed": "aed", "درهم امارات": "aed",
+    "لیر": "try", "try": "try", "لیر ترکیه": "try",
+    "یوان": "cny", "cny": "cny",
+    "روبل": "rub", "rub": "rub",
+    "بیتکوین": "btc", "بیت‌کوین": "btc", "btc": "btc", "bitcoin": "btc",
+    "اتریوم": "eth", "eth": "eth",
+    "تتر": "usdt", "usdt": "usdt",
+    "طلا": "gold", "انس": "gold", "انس طلا": "gold",
+    "سکه": "coin", "سکه امامی": "coin",
+}
+
+CURRENCY_NAMES = {
+    "usd": "دلار آمریکا", "eur": "یورو", "gbp": "پوند انگلیس",
+    "aed": "درهم امارات", "try": "لیر ترکیه", "cny": "یوان چین",
+    "rub": "روبل روسیه", "btc": "بیت‌کوین", "eth": "اتریوم",
+    "usdt": "تتر", "gold": "انس طلا", "coin": "سکه امامی",
+}
+
+async def fetch_currency_price(key: str):
+    """دریافت قیمت ارز به تومان"""
+    key = key.lower()
+    try:
+        async with aiohttp.ClientSession() as session:
+            # منبع ۱: tgju-like free endpoints via navasan-style
+            if key in ("usd", "eur", "gbp", "aed", "try", "cny", "rub", "usdt", "gold", "coin"):
+                # تلاش با API عمومی
+                try:
+                    url = "https://api.codebazan.ir/arz/?type=json"
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            # ساختارهای مختلف
+                            mapping = {
+                                "usd": ["دلار", "usd", "dollar", "usd_buy"],
+                                "eur": ["یورو", "euro", "eur"],
+                                "gbp": ["پوند", "pound", "gbp"],
+                                "aed": ["درهم", "dirham", "aed"],
+                                "try": ["لیر", "lira", "try"],
+                                "cny": ["یوان", "yuan", "cny"],
+                                "rub": ["روبل", "ruble", "rub"],
+                                "usdt": ["تتر", "usdt", "tether"],
+                                "gold": ["انس", "طلا", "gold", "ons"],
+                                "coin": ["سکه", "سکه امامی", "coin"],
+                            }
+                            names = mapping.get(key, [])
+                            if isinstance(data, dict):
+                                # جستجو در دیکشنری
+                                for k, v in data.items():
+                                    kl = str(k).lower()
+                                    if any(n in kl for n in names):
+                                        if isinstance(v, dict):
+                                            price = v.get("price") or v.get("sell") or v.get("buy") or v.get("value")
+                                        else:
+                                            price = v
+                                        if price:
+                                            return str(price), None
+                                # اگر لیست داخل result
+                                items = data.get("result") or data.get("data") or data.get("arz") or []
+                                if isinstance(items, list):
+                                    for item in items:
+                                        if not isinstance(item, dict):
+                                            continue
+                                        title = str(item.get("name") or item.get("title") or item.get("currency") or "").lower()
+                                        if any(n in title for n in names):
+                                            price = item.get("price") or item.get("sell") or item.get("buy")
+                                            if price:
+                                                return str(price), None
+                except Exception:
+                    pass
+
+            # منبع ۲: برای ارزهای جهانی + تبدیل تقریبی
+            if key in ("usd", "eur", "gbp", "aed", "try", "cny", "rub"):
+                try:
+                    async with session.get("https://open.er-api.com/v6/latest/USD", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            rates = data.get("rates", {})
+                            # قیمت دلار آزاد تقریبی از یک API دیگر
+                            usd_irr = None
+                            try:
+                                async with session.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=aiohttp.ClientTimeout(total=8)) as r2:
+                                    if r2.status == 200:
+                                        d2 = await r2.json()
+                                        # IRR sometimes available
+                                        usd_irr = d2.get("rates", {}).get("IRR")
+                            except Exception:
+                                pass
+                            if not usd_irr:
+                                usd_irr = 920000  # فال‌بک تقریبی ریال
+                            # تبدیل به تومان
+                            usd_toman = float(usd_irr) / 10
+                            if key == "usd":
+                                return f"{int(usd_toman):,}", None
+                            rate = rates.get(key.upper())
+                            if rate and rate > 0:
+                                # USD per unit of currency inverted
+                                # rates are "1 USD = X currency", so 1 currency = usd_toman / X
+                                toman = usd_toman / float(rate)
+                                return f"{int(toman):,}", None
+                except Exception:
+                    pass
+
+            # منبع ۳: کریپتو
+            if key in ("btc", "eth"):
+                try:
+                    async with session.get(
+                        f"https://api.coingecko.com/api/v3/simple/price?ids={'bitcoin' if key=='btc' else 'ethereum'}&vs_currencies=usd",
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            cid = "bitcoin" if key == "btc" else "ethereum"
+                            usd = data.get(cid, {}).get("usd")
+                            if usd:
+                                return f"{usd:,} دلار", None
+                except Exception:
+                    pass
+
+        return None, "❌ دریافت قیمت ممکن نشد. بعداً تلاش کنید."
+    except Exception as e:
+        return None, f"❌ خطا: {e}"
+
+
+# =============================================
+# تبدیل متن به ویس (TTS)
+# =============================================
+TTS_VOICE_STATUS = {}  # user_id -> voice key
+
+TTS_VOICES = {
+    "زن": {"tl": "fa", "label": "زن (فارسی)"},
+    "مرد": {"tl": "fa", "label": "مرد (فارسی)"},
+    "انگلیسی": {"tl": "en", "label": "انگلیسی"},
+    "عربی": {"tl": "ar", "label": "عربی"},
+    "ترکی": {"tl": "tr", "label": "ترکی"},
+    "روسی": {"tl": "ru", "label": "روسی"},
+}
+
+async def text_to_speech(text: str, voice_key: str = "زن"):
+    """تبدیل متن به ویس با Google TTS"""
+    try:
+        voice = TTS_VOICES.get(voice_key, TTS_VOICES["زن"])
+        tl = voice["tl"]
+        # Google Translate TTS
+        q = quote(text[:200])
+        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob"
+        path = f"{DOWNLOAD_PATH}/tts_{int(time.time())}_{random.randint(100,999)}.mp3"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    return None, "❌ سرویس ویس در دسترس نیست."
+                data = await resp.read()
+                if len(data) < 500:
+                    return None, "❌ دریافت ویس ناموفق بود."
+                with open(path, "wb") as f:
+                    f.write(data)
+                return path, None
+    except Exception as e:
+        return None, f"❌ خطا در ساخت ویس: {e}"
+
+
 async def cleanup_old_files():
     while True:
         await asyncio.sleep(3600)
@@ -333,30 +531,44 @@ CLOCK_FONT_STYLES = {
     "normal":      {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
     "dots":        {'0':'⓪','1':'➊','2':'➋','3':'➌','4':'➍','5':'➎','6':'➏','7':'➐','8':'➑','9':'➒',':':':'},
     "square":      {'0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8','9':'9',':':':'},
+    "roman":       {'0':'0','1':'Ⅰ','2':'Ⅱ','3':'Ⅲ','4':'Ⅳ','5':'Ⅴ','6':'Ⅵ','7':'Ⅶ','8':'Ⅷ','9':'Ⅸ',':':':'},
+    "small":       {'0':'⁰','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':':'},
+    "wide":        {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "outline":     {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':':'},
+    "heavy":       {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
+    "fancy":       {'0':'０','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "inverted":    {'0':'⓿','1':'➀','2':'➁','3':'➂','4':'➃','5':'➄','6':'➅','7':'➆','8':'➇','9':'➈',':':':'},
 }
 
 CLOCK_FONT_ORDER = [
     "bold", "mono", "double", "sans", "sans_bold", "fullwidth",
     "circled", "neg_circled", "subscript", "superscript",
     "math_bold", "math_dbl", "segment", "dots", "normal",
+    "roman", "wide", "outline", "heavy", "fancy", "inverted",
 ]
 
 CLOCK_FONT_NAMES = {
-    "bold": "بولد 𝟏𝟐𝟑",
-    "mono": "مونو 𝟷𝟸𝟹",
-    "double": "دوبل 𝟙𝟚𝟛",
-    "sans": "سانس 𝟣𝟤𝟥",
-    "sans_bold": "سانس‌بولد 𝟭𝟮𝟯",
-    "fullwidth": "کامل １２３",
-    "circled": "دایره‌ای ①②③",
-    "neg_circled": "دایره توپر ❶❷❸",
-    "subscript": "زیروند ۰₁₂",
-    "superscript": "بالاوند ⁰¹²",
-    "math_bold": "ریاضی‌بولد 𝟏𝟐𝟑",
-    "math_dbl": "ریاضی‌دوبل 𝟙𝟚𝟛",
-    "segment": "سگمنت 🯱🯲🯳",
-    "dots": "نقطه‌ای ➊➋➌",
-    "normal": "معمولی 123",
+    "bold": "بولد",
+    "mono": "مونو",
+    "double": "دوبل",
+    "sans": "سانس",
+    "sans_bold": "سانس‌بولد",
+    "fullwidth": "کامل",
+    "circled": "دایره‌ای",
+    "neg_circled": "دایره توپر",
+    "subscript": "زیروند",
+    "superscript": "بالاوند",
+    "math_bold": "ریاضی‌بولد",
+    "math_dbl": "ریاضی‌دوبل",
+    "segment": "سگمنت",
+    "dots": "نقطه‌ای",
+    "normal": "معمولی",
+    "roman": "رومن",
+    "wide": "عریض",
+    "outline": "خالی",
+    "heavy": "ضخیم",
+    "fancy": "فانتزی",
+    "inverted": "معکوس",
 }
 
 ALL_CLOCK_CHARS = "".join(set(char for font in CLOCK_FONT_STYLES.values() for char in font.values()))
@@ -428,7 +640,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 👤 اطلاعات کاربر
 
-✦ آیدی (ریپلای روی پیام) - نمایش اطلاعات کاربر
+✦ آیدی / .آیدی - اطلاعات کامل کاربر\n✦ دانلود [لینک] | صوت [لینک]\n✦ .دلار | .یورو | .طلا | ...\n✦ .تبدیل متن به ویس [متن]\n✦ .صدا زن | .صدا مرد | ...
 
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 🎲 سرگرمی
@@ -439,7 +651,7 @@ HELP_TEXT = """
 ✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
 """
 
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*)$"
+COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*|آیدی|\.آیدی|\.دلار|\.یورو|\.صدا .*|\.تبدیل متن به ویس.*|\..+)$"
 
 class DataManager:
     def __init__(self, file_path):
@@ -1186,14 +1398,25 @@ async def god_mode_handler(client, message):
 
 async def reply_based_controller(client, message):
     user_id = client.me.id
-    cmd = message.text
+    cmd = (message.text or "").strip()
+    if not cmd:
+        return
 
+    # ========== تاس / بولینگ ==========
     if cmd == "تاس":
         await client.send_dice(message.chat.id, "🎲")
+        try:
+            await message.delete()
+        except:
+            pass
         return
 
     if cmd == "بولینگ":
         await client.send_dice(message.chat.id, "🎳")
+        try:
+            await message.delete()
+        except:
+            pass
         return
 
     if cmd.startswith("تاس "):
@@ -1216,6 +1439,155 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"✅ متن منشی تنظیم شد:\n\n`{new_msg}`")
         else:
             await message.edit_text("⚠️ لطفا متن منشی را وارد کنید.")
+        return
+
+    # ========== دانلود ویدیو ==========
+    if cmd.startswith("دانلود ") or cmd.startswith(".دانلود "):
+        url = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if not url.startswith("http"):
+            await message.edit_text("❌ لینک نامعتبر است!")
+            return
+        await message.edit_text("⏳ در حال دانلود...")
+        filename, error = await download_media(url, "video")
+        if error:
+            await message.edit_text(error)
+            return
+        try:
+            await client.send_video(message.chat.id, filename, caption="✅ دانلود شد | self MR")
+            await message.delete()
+        except Exception as e:
+            try:
+                await client.send_document(message.chat.id, filename, caption="✅ دانلود شد | self MR")
+                await message.delete()
+            except Exception as e2:
+                await message.edit_text(f"❌ ارسال ناموفق: {e2}")
+        try:
+            os.remove(filename)
+        except:
+            pass
+        return
+
+    # ========== دانلود صوت ==========
+    if cmd.startswith("صوت ") or cmd.startswith(".صوت "):
+        url = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if not url.startswith("http"):
+            await message.edit_text("❌ لینک نامعتبر است!")
+            return
+        await message.edit_text("⏳ در حال استخراج صوت...")
+        filename, error = await download_media(url, "audio")
+        if error:
+            await message.edit_text(error)
+            return
+        try:
+            await client.send_audio(message.chat.id, filename, caption="🎵 صوت آماده شد | self MR")
+            await message.delete()
+        except Exception as e:
+            await message.edit_text(f"❌ ارسال ناموفق: {e}")
+        try:
+            os.remove(filename)
+        except:
+            pass
+        return
+
+    # ========== قیمت ارز با نقطه ==========
+    if cmd.startswith(".") and len(cmd) > 1 and not cmd.startswith(".تبدیل") and not cmd.startswith(".صدا") and not cmd.startswith(".دانلود") and not cmd.startswith(".صوت"):
+        raw = cmd[1:].strip()
+        # فقط یک کلمه یا عبارت ارز
+        if raw and chr(10) not in raw and len(raw) < 30:
+            alias = CURRENCY_ALIASES.get(raw) or CURRENCY_ALIASES.get(raw.lower())
+            if alias:
+                await message.edit_text(f"⏳ در حال دریافت قیمت {raw}...")
+                price, err = await fetch_currency_price(alias)
+                name = CURRENCY_NAMES.get(alias, raw)
+                if err:
+                    await message.edit_text(err)
+                else:
+                    unit = "تومان" if alias not in ("btc", "eth") else ""
+                    await message.edit_text(
+                        f"💱 قیمت {name} الان:\n\n"
+                        f"💰 {price} {unit}\n\n"
+                        f"⏱ {datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')}"
+                    )
+                return
+
+    # ========== انتخاب صدای TTS ==========
+    if cmd.startswith(".صدا "):
+        voice_name = cmd.replace(".صدا ", "").strip()
+        if voice_name in TTS_VOICES:
+            TTS_VOICE_STATUS[user_id] = voice_name
+            await message.edit_text(f"✅ صدای TTS تنظیم شد: {TTS_VOICES[voice_name]['label']}")
+        else:
+            voices = " | ".join(TTS_VOICES.keys())
+            await message.edit_text(f"❌ صدا نامعتبر.\nصداهای موجود: {voices}\nمثال: `.صدا زن`")
+        return
+
+    # ========== تبدیل متن به ویس ==========
+    if cmd.startswith(".تبدیل متن به ویس"):
+        text_part = cmd.replace(".تبدیل متن به ویس", "", 1).strip()
+        if not text_part:
+            await message.edit_text("❌ متن را بعد از دستور بنویس.\nمثال: `.تبدیل متن به ویس سلام دوست عزیز`")
+            return
+        voice_key = TTS_VOICE_STATUS.get(user_id, "زن")
+        await message.edit_text("⏳ در حال ساخت ویس...")
+        path, err = await text_to_speech(text_part, voice_key)
+        if err:
+            await message.edit_text(err)
+            return
+        try:
+            await client.send_voice(message.chat.id, path, caption=f"🎤 {text_part[:80]}")
+            await message.delete()
+        except Exception as e:
+            await message.edit_text(f"❌ ارسال ویس ناموفق: {e}")
+        try:
+            os.remove(path)
+        except:
+            pass
+        return
+
+    # ========== آیدی (با یا بدون ریپلای) ==========
+    if cmd == "آیدی" or cmd == ".آیدی":
+        target = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target = message.reply_to_message.from_user
+        else:
+            target = await client.get_me()
+        try:
+            chat = await client.get_chat(target.id)
+        except Exception:
+            chat = target
+
+        # تعداد عکس پروفایل
+        photo_count = 0
+        try:
+            async for _ in client.get_chat_photos(target.id, limit=100):
+                photo_count += 1
+        except Exception:
+            photo_count = getattr(chat, "photo", None) and 1 or 0
+
+        bio = ""
+        try:
+            bio = getattr(chat, "bio", None) or ""
+        except Exception:
+            bio = ""
+
+        username = f"@{target.username}" if getattr(target, "username", None) else "ندارد"
+        phone = getattr(target, "phone_number", None) or "مخفی / در دسترس نیست"
+        dc_id = getattr(getattr(target, "photo", None), "dc_id", None) or "-"
+
+        info = (
+            f"👤 اطلاعات کاربر | self MR\n\n"
+            f"🆔 آیدی عددی: `{target.id}`\n"
+            f"👤 نام: {target.first_name or ''} {target.last_name or ''}\n"
+            f"📱 یوزرنیم: {username}\n"
+            f"📞 شماره: {phone}\n"
+            f"📝 بیو: {bio or 'ندارد'}\n"
+            f"🖼 تعداد عکس پروفایل: {photo_count}\n"
+            f"🌐 DC: {dc_id}"
+        )
+        try:
+            await message.edit_text(info)
+        except Exception:
+            await client.send_message(message.chat.id, info)
         return
 
     if not message.reply_to_message:

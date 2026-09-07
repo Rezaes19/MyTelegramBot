@@ -404,69 +404,105 @@ TTS_VOICES = {
 }
 
 async def text_to_speech(text: str, voice_key: str = "زن"):
-    """تبدیل متن به ویس با چند منبع پشتیبان"""
+    """تبدیل متن به ویس با چند روش + خطای واضح"""
     text = (text or "").strip()
     if not text:
         return None, "❌ متن خالی است."
-    text = text[:300]
-    voice = TTS_VOICES.get(voice_key, TTS_VOICES["زن"])
-    tl = voice.get("tl", "fa")
+    text = text[:400]
     path = f"{DOWNLOAD_PATH}/tts_{int(time.time())}_{random.randint(100,999)}.mp3"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Referer": "https://translate.google.com/",
+    errors = []
+
+    edge_voices = {
+        "زن": "fa-IR-DilaraNeural",
+        "مرد": "fa-IR-FaridNeural",
+        "انگلیسی": "en-US-JennyNeural",
+        "عربی": "ar-SA-ZariyahNeural",
+        "ترکی": "tr-TR-EmelNeural",
+        "روسی": "ru-RU-SvetlanaNeural",
     }
+    voice = edge_voices.get(voice_key, "fa-IR-DilaraNeural")
+    tl_map = {"زن": "fa", "مرد": "fa", "انگلیسی": "en", "عربی": "ar", "ترکی": "tr", "روسی": "ru"}
+    tl = tl_map.get(voice_key, "fa")
 
-    # روش ۱: Google TTS
+    # ----- 1) edge-tts ماژول -----
+    try:
+        import edge_tts
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(path)
+        if os.path.exists(path) and os.path.getsize(path) > 500:
+            return path, None
+        errors.append("edge-tts: فایل خالی")
+    except ImportError:
+        errors.append("edge-tts نصب نیست")
+    except Exception as e:
+        errors.append(f"edge-tts: {type(e).__name__}: {e}")
+
+    # ----- 2) edge-tts از طریق CLI -----
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "edge-tts",
+            "--voice", voice,
+            "--text", text,
+            "--write-media", path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode == 0 and os.path.exists(path) and os.path.getsize(path) > 500:
+            return path, None
+        err_txt = (stderr or b"").decode("utf-8", errors="ignore")[:120]
+        errors.append(f"edge-tts-cli: {err_txt or proc.returncode}")
+    except FileNotFoundError:
+        errors.append("edge-tts-cli: دستور پیدا نشد")
+    except Exception as e:
+        errors.append(f"edge-tts-cli: {type(e).__name__}: {e}")
+
+    # ----- 3) gTTS -----
+    try:
+        from gtts import gTTS
+        def _gtts():
+            tts = gTTS(text=text, lang=tl)
+            tts.save(path)
+        await asyncio.to_thread(_gtts)
+        if os.path.exists(path) and os.path.getsize(path) > 500:
+            return path, None
+        errors.append("gTTS: فایل خالی")
+    except ImportError:
+        errors.append("gTTS نصب نیست")
+    except Exception as e:
+        errors.append(f"gTTS: {type(e).__name__}: {e}")
+
+    # ----- 4) Google TTS HTTP -----
     try:
         q = quote(text)
-        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob"
+        urls = [
+            f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob",
+            f"https://translate.googleapis.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=gtx",
+        ]
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://translate.google.com/",
+            "Accept": "*/*",
+        }
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if len(data) > 500:
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        return path, None
+            for url in urls:
+                try:
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            if len(data) > 500:
+                                with open(path, "wb") as f:
+                                    f.write(data)
+                                return path, None
+                        errors.append(f"http-tts status={resp.status}")
+                except Exception as e:
+                    errors.append(f"http-tts: {type(e).__name__}")
     except Exception as e:
-        logging.warning(f"TTS google failed: {e}")
+        errors.append(f"http-tts: {e}")
 
-    # روش ۲: StreamElements (انگلیسی بهتر کار می‌کند، برای فارسی هم امتحان)
-    try:
-        se_voice = "Brian" if tl == "en" else "Farid"  # Farid ممکن است نباشد
-        # صداهای SE
-        se_map = {"fa": "Farid", "en": "Brian", "ar": "Hala", "tr": "Ahmet", "ru": "Maxim"}
-        se_voice = se_map.get(tl, "Brian")
-        url = f"https://api.streamelements.com/kappa/v2/speech?voice={se_voice}&text={quote(text)}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if len(data) > 500:
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        return path, None
-    except Exception as e:
-        logging.warning(f"TTS SE failed: {e}")
-
-    # روش ۳: Google TTS با client=gtx
-    try:
-        q = quote(text)
-        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=gtx"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if len(data) > 500:
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        return path, None
-    except Exception as e:
-        logging.warning(f"TTS gtx failed: {e}")
-
-    return None, "❌ سرویس ویس در دسترس نیست. بعداً دوباره تلاش کنید."
+    detail = " | ".join(errors[-4:])
+    logging.error(f"TTS all methods failed: {detail}")
+    return None, f"❌ ساخت ویس ناموفق بود.\n\n🔧 جزئیات:\n`{detail}`\n\nاگر edge-tts نصب است و باز خطا می‌دهد، احتمالاً سرور به مایکروسافت/گوگل دسترسی ندارد."
 
 
 async def cleanup_old_files():
@@ -1529,25 +1565,41 @@ async def reply_based_controller(client, message):
         return
 
     # ========== تبدیل متن به ویس ==========
-    if cmd.startswith(".تبدیل متن به ویس"):
-        text_part = cmd.replace(".تبدیل متن به ویس", "", 1).strip()
+    if cmd.startswith(".تبدیل متن به ویس") or cmd.startswith("تبدیل متن به ویس"):
+        if cmd.startswith("."):
+            text_part = cmd.replace(".تبدیل متن به ویس", "", 1).strip()
+        else:
+            text_part = cmd.replace("تبدیل متن به ویس", "", 1).strip()
         if not text_part:
-            await message.edit_text("❌ متن را بعد از دستور بنویس.\nمثال: `.تبدیل متن به ویس سلام دوست عزیز`")
+            await message.edit_text("❌ متن را بعد از دستور بنویس.\nمثال:\n`.تبدیل متن به ویس سلام دوست عزیز`")
             return
         voice_key = TTS_VOICE_STATUS.get(user_id, "زن")
-        await message.edit_text("⏳ در حال ساخت ویس...")
+        try:
+            await message.edit_text("⏳ در حال ساخت ویس...")
+        except Exception:
+            pass
         path, err = await text_to_speech(text_part, voice_key)
         if err:
-            await message.edit_text(err)
+            try:
+                await message.edit_text(err)
+            except Exception:
+                await client.send_message(message.chat.id, err)
             return
         try:
             await client.send_voice(message.chat.id, path, caption=f"🎤 {text_part[:80]}")
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
         except Exception as e:
-            await message.edit_text(f"❌ ارسال ویس ناموفق: {e}")
+            try:
+                await message.edit_text(f"❌ ارسال ویس ناموفق: {e}")
+            except Exception:
+                await client.send_message(message.chat.id, f"❌ ارسال ویس ناموفق: {e}")
         try:
-            os.remove(path)
-        except:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
             pass
         return
 

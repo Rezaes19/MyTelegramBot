@@ -322,113 +322,76 @@ CURRENCY_NAMES = {
 }
 
 async def fetch_currency_price(key: str):
-    """دریافت قیمت ارز به تومان"""
+    """دریافت قیمت از tgju.org"""
     key = key.lower()
+    # کلیدهای tgju (مبالغ غالباً به ریال)
+    TGJU_KEYS = {
+        "usd": ("price_dollar_rl", True, "تومان"),
+        "eur": ("price_eur", True, "تومان"),
+        "gbp": ("price_gbp", True, "تومان"),
+        "aed": ("price_aed", True, "تومان"),
+        "try": ("price_try", True, "تومان"),
+        "cny": ("price_cny", True, "تومان"),
+        "rub": ("price_rub", True, "تومان"),
+        "usdt": ("crypto-tether-irr", True, "تومان"),
+        "btc": ("crypto-bitcoin-irr", True, "تومان"),
+        "eth": ("crypto-ethereum-irr", True, "تومان"),
+        "gold": ("ons", False, "دلار"),  # انس جهانی دلاری
+        "coin": ("sekee", True, "تومان"),
+    }
+    mapping = TGJU_KEYS.get(key)
+    if not mapping:
+        return None, "❌ این ارز پشتیبانی نمی‌شود."
+
+    tgju_key, is_rial, unit = mapping
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.tgju.org/",
+    }
+    urls = [
+        "https://call1.tgju.org/ajax.json",
+        "https://call2.tgju.org/ajax.json",
+        "https://call3.tgju.org/ajax.json",
+    ]
     try:
         async with aiohttp.ClientSession() as session:
-            # منبع ۱: tgju-like free endpoints via navasan-style
-            if key in ("usd", "eur", "gbp", "aed", "try", "cny", "rub", "usdt", "gold", "coin"):
-                # تلاش با API عمومی
+            for url in urls:
                 try:
-                    url = "https://api.codebazan.ir/arz/?type=json"
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            # ساختارهای مختلف
-                            mapping = {
-                                "usd": ["دلار", "usd", "dollar", "usd_buy"],
-                                "eur": ["یورو", "euro", "eur"],
-                                "gbp": ["پوند", "pound", "gbp"],
-                                "aed": ["درهم", "dirham", "aed"],
-                                "try": ["لیر", "lira", "try"],
-                                "cny": ["یوان", "yuan", "cny"],
-                                "rub": ["روبل", "ruble", "rub"],
-                                "usdt": ["تتر", "usdt", "tether"],
-                                "gold": ["انس", "طلا", "gold", "ons"],
-                                "coin": ["سکه", "سکه امامی", "coin"],
-                            }
-                            names = mapping.get(key, [])
-                            if isinstance(data, dict):
-                                # جستجو در دیکشنری
-                                for k, v in data.items():
-                                    kl = str(k).lower()
-                                    if any(n in kl for n in names):
-                                        if isinstance(v, dict):
-                                            price = v.get("price") or v.get("sell") or v.get("buy") or v.get("value")
-                                        else:
-                                            price = v
-                                        if price:
-                                            return str(price), None
-                                # اگر لیست داخل result
-                                items = data.get("result") or data.get("data") or data.get("arz") or []
-                                if isinstance(items, list):
-                                    for item in items:
-                                        if not isinstance(item, dict):
-                                            continue
-                                        title = str(item.get("name") or item.get("title") or item.get("currency") or "").lower()
-                                        if any(n in title for n in names):
-                                            price = item.get("price") or item.get("sell") or item.get("buy")
-                                            if price:
-                                                return str(price), None
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        current = data.get("current") or {}
+                        item = current.get(tgju_key)
+                        if not item:
+                            continue
+                        raw = item.get("p") if isinstance(item, dict) else item
+                        if raw is None:
+                            continue
+                        # پاکسازی عدد
+                        s = str(raw).replace(",", "").replace(" ", "").replace("٬", "")
+                        try:
+                            val = float(s)
+                        except Exception:
+                            return str(raw), None
+                        if is_rial:
+                            # تبدیل ریال به تومان
+                            val = val / 10
+                        # فرمت خوانا
+                        if val >= 100:
+                            formatted = f"{int(round(val)):,}"
+                        else:
+                            formatted = f"{val:,.2f}"
+                        updated = item.get("t", "") if isinstance(item, dict) else ""
+                        return f"{formatted} {unit}", updated
                 except Exception:
-                    pass
-
-            # منبع ۲: برای ارزهای جهانی + تبدیل تقریبی
-            if key in ("usd", "eur", "gbp", "aed", "try", "cny", "rub"):
-                try:
-                    async with session.get("https://open.er-api.com/v6/latest/USD", timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            rates = data.get("rates", {})
-                            # قیمت دلار آزاد تقریبی از یک API دیگر
-                            usd_irr = None
-                            try:
-                                async with session.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=aiohttp.ClientTimeout(total=8)) as r2:
-                                    if r2.status == 200:
-                                        d2 = await r2.json()
-                                        # IRR sometimes available
-                                        usd_irr = d2.get("rates", {}).get("IRR")
-                            except Exception:
-                                pass
-                            if not usd_irr:
-                                usd_irr = 920000  # فال‌بک تقریبی ریال
-                            # تبدیل به تومان
-                            usd_toman = float(usd_irr) / 10
-                            if key == "usd":
-                                return f"{int(usd_toman):,}", None
-                            rate = rates.get(key.upper())
-                            if rate and rate > 0:
-                                # USD per unit of currency inverted
-                                # rates are "1 USD = X currency", so 1 currency = usd_toman / X
-                                toman = usd_toman / float(rate)
-                                return f"{int(toman):,}", None
-                except Exception:
-                    pass
-
-            # منبع ۳: کریپتو
-            if key in ("btc", "eth"):
-                try:
-                    async with session.get(
-                        f"https://api.coingecko.com/api/v3/simple/price?ids={'bitcoin' if key=='btc' else 'ethereum'}&vs_currencies=usd",
-                        timeout=aiohttp.ClientTimeout(total=10)
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            cid = "bitcoin" if key == "btc" else "ethereum"
-                            usd = data.get(cid, {}).get("usd")
-                            if usd:
-                                return f"{usd:,} دلار", None
-                except Exception:
-                    pass
-
-        return None, "❌ دریافت قیمت ممکن نشد. بعداً تلاش کنید."
+                    continue
+        return None, "❌ دریافت قیمت از tgju ممکن نشد. دوباره تلاش کنید."
     except Exception as e:
         return None, f"❌ خطا: {e}"
 
 
-# =============================================
-# تبدیل متن به ویس (TTS)
-# =============================================
 TTS_VOICE_STATUS = {}  # user_id -> voice key
 
 TTS_VOICES = {
@@ -441,27 +404,69 @@ TTS_VOICES = {
 }
 
 async def text_to_speech(text: str, voice_key: str = "زن"):
-    """تبدیل متن به ویس با Google TTS"""
+    """تبدیل متن به ویس با چند منبع پشتیبان"""
+    text = (text or "").strip()
+    if not text:
+        return None, "❌ متن خالی است."
+    text = text[:300]
+    voice = TTS_VOICES.get(voice_key, TTS_VOICES["زن"])
+    tl = voice.get("tl", "fa")
+    path = f"{DOWNLOAD_PATH}/tts_{int(time.time())}_{random.randint(100,999)}.mp3"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Referer": "https://translate.google.com/",
+    }
+
+    # روش ۱: Google TTS
     try:
-        voice = TTS_VOICES.get(voice_key, TTS_VOICES["زن"])
-        tl = voice["tl"]
-        # Google Translate TTS
-        q = quote(text[:200])
+        q = quote(text)
         url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=tw-ob"
-        path = f"{DOWNLOAD_PATH}/tts_{int(time.time())}_{random.randint(100,999)}.mp3"
-        headers = {"User-Agent": "Mozilla/5.0"}
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status != 200:
-                    return None, "❌ سرویس ویس در دسترس نیست."
-                data = await resp.read()
-                if len(data) < 500:
-                    return None, "❌ دریافت ویس ناموفق بود."
-                with open(path, "wb") as f:
-                    f.write(data)
-                return path, None
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 500:
+                        with open(path, "wb") as f:
+                            f.write(data)
+                        return path, None
     except Exception as e:
-        return None, f"❌ خطا در ساخت ویس: {e}"
+        logging.warning(f"TTS google failed: {e}")
+
+    # روش ۲: StreamElements (انگلیسی بهتر کار می‌کند، برای فارسی هم امتحان)
+    try:
+        se_voice = "Brian" if tl == "en" else "Farid"  # Farid ممکن است نباشد
+        # صداهای SE
+        se_map = {"fa": "Farid", "en": "Brian", "ar": "Hala", "tr": "Ahmet", "ru": "Maxim"}
+        se_voice = se_map.get(tl, "Brian")
+        url = f"https://api.streamelements.com/kappa/v2/speech?voice={se_voice}&text={quote(text)}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 500:
+                        with open(path, "wb") as f:
+                            f.write(data)
+                        return path, None
+    except Exception as e:
+        logging.warning(f"TTS SE failed: {e}")
+
+    # روش ۳: Google TTS با client=gtx
+    try:
+        q = quote(text)
+        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={q}&tl={tl}&client=gtx"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 500:
+                        with open(path, "wb") as f:
+                            f.write(data)
+                        return path, None
+    except Exception as e:
+        logging.warning(f"TTS gtx failed: {e}")
+
+    return None, "❌ سرویس ویس در دسترس نیست. بعداً دوباره تلاش کنید."
 
 
 async def cleanup_old_files():
@@ -1497,16 +1502,18 @@ async def reply_based_controller(client, message):
             alias = CURRENCY_ALIASES.get(raw) or CURRENCY_ALIASES.get(raw.lower())
             if alias:
                 await message.edit_text(f"⏳ در حال دریافت قیمت {raw}...")
-                price, err = await fetch_currency_price(alias)
+                price, extra = await fetch_currency_price(alias)
                 name = CURRENCY_NAMES.get(alias, raw)
-                if err:
-                    await message.edit_text(err)
+                if price is None:
+                    await message.edit_text(extra or "❌ خطا در دریافت قیمت")
                 else:
-                    unit = "تومان" if alias not in ("btc", "eth") else ""
+                    time_str = datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')
+                    upd = f"\n📅 بروزرسانی tgju: {extra}" if extra else ""
                     await message.edit_text(
                         f"💱 قیمت {name} الان:\n\n"
-                        f"💰 {price} {unit}\n\n"
-                        f"⏱ {datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')}"
+                        f"💰 {price}\n"
+                        f"📡 منبع: tgju.org\n"
+                        f"⏱ {time_str}{upd}"
                     )
                 return
 
@@ -1803,6 +1810,10 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
             ],
             [
+                _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
+                _styled_btn("🎤 تبدیل متن به ویس", f"panel_page_7_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -1911,6 +1922,55 @@ def build_panel_keyboard(user_id, page=1):
         keyboard.append([_styled_btn(f"پیش‌نمایش: {preview}", "noop", style="primary")])
         keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return keyboard
+
+    # ========== صفحه ۶: راهنمای قیمت ارز ==========
+    elif page == 6:
+        return [
+            [_styled_btn("💱 دستورات قیمت ارز (tgju.org)", "noop", style="primary")],
+            [
+                _styled_btn(".دلار", "noop"),
+                _styled_btn(".یورو", "noop"),
+            ],
+            [
+                _styled_btn(".پوند", "noop"),
+                _styled_btn(".درهم", "noop"),
+            ],
+            [
+                _styled_btn(".لیر", "noop"),
+                _styled_btn(".یوان", "noop"),
+            ],
+            [
+                _styled_btn(".روبل", "noop"),
+                _styled_btn(".تتر", "noop"),
+            ],
+            [
+                _styled_btn(".بیتکوین", "noop"),
+                _styled_btn(".اتریوم", "noop"),
+            ],
+            [
+                _styled_btn(".طلا", "noop"),
+                _styled_btn(".سکه", "noop"),
+            ],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحه ۷: تبدیل متن به ویس ==========
+    elif page == 7:
+        current = TTS_VOICE_STATUS.get(user_id, "زن")
+        rows = []
+        row = []
+        for name in TTS_VOICES:
+            is_on = (current == name)
+            mark = "✓" if is_on else "X"
+            row.append(_styled_btn(f"{name} ({mark})", f"set_tts_voice_{name}_{user_id}", is_on))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([_styled_btn("مثال: .تبدیل متن به ویس سلام", "noop", style="primary")])
+        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        return rows
 
     # پیش‌فرض
     return build_panel_keyboard(user_id, 1)
@@ -2252,6 +2312,25 @@ async def callback_panel_handler(client, callback):
             await callback.answer(f"✅ فونت ساعت: {sample}")
             try:
                 await edit_panel_colored(callback, target_user_id, 5)
+            except:
+                pass
+            return
+
+        elif action.startswith("set_tts_voice_"):
+            # set_tts_voice_زن_USERID
+            parts_tv = data.split("_")
+            target_user_id = int(parts_tv[-1])
+            voice_name = "_".join(parts_tv[3:-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            if voice_name not in TTS_VOICES:
+                await callback.answer("❌ صدا نامعتبر", show_alert=True)
+                return
+            TTS_VOICE_STATUS[target_user_id] = voice_name
+            await callback.answer(f"✅ صدا: {TTS_VOICES[voice_name]['label']}")
+            try:
+                await edit_panel_colored(callback, target_user_id, 7)
             except:
                 pass
             return

@@ -1472,8 +1472,58 @@ async def god_mode_handler(client, message):
             await message.reply_text(f"❌ خطا: {e}")
 
 
+async def ensure_vazir_font():
+    """دانلود فونت وزیر برای فارسی تمیز"""
+    font_dir = os.path.join(DOWNLOAD_PATH, "fonts")
+    os.makedirs(font_dir, exist_ok=True)
+    font_path = os.path.join(font_dir, "Vazirmatn-Bold.ttf")
+    if os.path.exists(font_path) and os.path.getsize(font_path) > 10000:
+        return font_path
+    urls = [
+        "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Bold.ttf",
+    ]
+    try:
+        async with aiohttp.ClientSession() as session:
+            for url in urls:
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            if len(data) > 10000:
+                                with open(font_path, "wb") as f:
+                                    f.write(data)
+                                return font_path
+                except Exception:
+                    continue
+    except Exception as e:
+        logging.warning(f"font download failed: {e}")
+    return None
+
+
+def prepare_rtl_text(text: str) -> str:
+    """فقط بخش فارسی/عربی را reshape کن، لاتین و ایموجی خراب نشوند"""
+    if not text:
+        return text
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+    except Exception:
+        return text
+
+    # اگر حروف فارسی/عربی ندارد
+    if not re.search(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]", text):
+        return text
+
+    try:
+        reshaped = arabic_reshaper.reshape(text)
+        return get_display(reshaped)
+    except Exception:
+        return text
+
+
 async def convert_message_to_sticker(client, message):
-    """ریپلای روی عکس/متن/استیکر → استیکر تمیز (فارسی + ایموجی سالم)"""
+    """ریپلای روی عکس/متن/استیکر → استیکر تمیز"""
     reply = message.reply_to_message
     if not reply:
         return None, "❌ روی یک پیام ریپلای کنید."
@@ -1498,39 +1548,28 @@ async def convert_message_to_sticker(client, message):
         try:
             from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-            def fix_fa(t: str) -> str:
-                """اصلاح نمایش فارسی/عربی"""
-                try:
-                    import arabic_reshaper
-                    from bidi.algorithm import get_display
-                    return get_display(arabic_reshaper.reshape(t))
-                except Exception:
-                    return t
+            vazir = await ensure_vazir_font()
 
             def load_font(size):
-                candidates = [
-                    # فونت‌های فارسی رایج روی سرور
+                paths = []
+                if vazir:
+                    paths.append(vazir)
+                paths.extend([
                     "/usr/share/fonts/truetype/vazirmatn/Vazirmatn-Bold.ttf",
-                    "/usr/share/fonts/truetype/vazir/Vazir-Bold.ttf",
-                    "/usr/share/fonts/opentype/vazirmatn/Vazirmatn-Bold.ttf",
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-                    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
-                    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                     "C:/Windows/Fonts/tahoma.ttf",
                     "C:/Windows/Fonts/arial.ttf",
-                    "C:/Windows/Fonts/segoeui.ttf",
-                ]
-                for fp in candidates:
-                    if os.path.exists(fp):
+                ])
+                for fp in paths:
+                    if fp and os.path.exists(fp):
                         try:
                             return ImageFont.truetype(fp, size)
                         except Exception:
-                            pass
+                            continue
                 return ImageFont.load_default()
 
-            def circle_crop(im, size=80):
+            def circle_crop(im, size=78):
                 try:
                     resample = Image.Resampling.LANCZOS
                 except Exception:
@@ -1543,35 +1582,56 @@ async def convert_message_to_sticker(client, message):
                 out_im.putalpha(mask)
                 return out_im
 
-            def default_avatar(letter, size=80):
+            def default_avatar(letter, size=78):
                 img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
                 d = ImageDraw.Draw(img)
-                palette = [(88, 150, 230), (230, 120, 90), (90, 190, 140), (180, 120, 210), (230, 180, 70)]
-                color = palette[hash(letter) % len(palette)]
-                d.ellipse((0, 0, size - 1, size - 1), fill=color + (255,))
-                f = load_font(max(22, size // 2))
-                letter = fix_fa(letter)
+                colors = [(88, 150, 230), (230, 120, 90), (90, 190, 140), (180, 120, 210)]
+                c = colors[hash(letter) % len(colors)]
+                d.ellipse((0, 0, size - 1, size - 1), fill=c + (255,))
+                f = load_font(max(24, size // 2))
+                L = prepare_rtl_text(letter)
                 try:
-                    bb = d.textbbox((0, 0), letter, font=f)
+                    bb = d.textbbox((0, 0), L, font=f)
                     tw, th = bb[2] - bb[0], bb[3] - bb[1]
                 except Exception:
                     tw, th = size // 3, size // 3
-                d.text(((size - tw) / 2, (size - th) / 2 - 2), letter, font=f, fill=(255, 255, 255, 255))
+                d.text(((size - tw) / 2, (size - th) / 2 - 2), L, font=f, fill=(255, 255, 255, 255))
                 return img
 
-            # اطلاعات کاربر
+            def smart_text(img, xy, s, font, fill):
+                """اول pilmoji، اگر نبود PIL عادی"""
+                # حذف کاراکترهای کنترلی خراب‌کننده
+                s = "".join(ch for ch in s if ch == "\n" or ord(ch) >= 32)
+                try:
+                    from pilmoji import Pilmoji
+                    with Pilmoji(img) as pm:
+                        pm.text(xy, s, font=font, fill=fill[:3] if isinstance(fill, tuple) and len(fill) > 3 else fill)
+                    return
+                except Exception:
+                    pass
+                ImageDraw.Draw(img).text(xy, s, font=font, fill=fill)
+
+            def measure(s, font):
+                try:
+                    bb = ImageDraw.Draw(Image.new("RGBA", (64, 64))).textbbox((0, 0), s, font=font)
+                    return bb[2] - bb[0], bb[3] - bb[1]
+                except Exception:
+                    return max(10, len(s) * 12), 20
+
+            # نام کاربر
             user = reply.from_user
             name = "User"
             if user:
-                name = ((user.first_name or "") + (" " + user.last_name if user.last_name else "")).strip()
+                name = f"{user.first_name or ''} {user.last_name or ''}".strip()
                 if not name:
                     name = f"@{user.username}" if user.username else "User"
-            if len(name) > 24:
-                name = name[:22] + "…"
-            name_draw = fix_fa(name)
+            # حذف ایموجی‌های مشکل‌دار از اسم برای جلوگیری از مربع (اختیاری نگه می‌داریم ولی با pilmoji)
+            if len(name) > 22:
+                name = name[:20] + "…"
+            name_draw = prepare_rtl_text(name)
 
-            # پروفایل
-            av_size = 80
+            # آواتار
+            av_size = 78
             avatar = None
             try:
                 if user:
@@ -1587,29 +1647,28 @@ async def convert_message_to_sticker(client, message):
             except Exception:
                 avatar = None
             if avatar is None:
-                letter = name[0] if name else "U"
-                avatar = default_avatar(letter, av_size)
+                avatar = default_avatar(name[0] if name else "U", av_size)
 
-            # متن
-            raw_text = text[:180]
-            tlen = len(raw_text)
+            # متن پیام
+            raw = text[:170]
+            tlen = len(raw)
             if tlen <= 8:
-                fsize, max_chars, line_h = 50, 10, 58
-            elif tlen <= 30:
-                fsize, max_chars, line_h = 36, 16, 44
+                fsize, max_chars, line_h = 48, 10, 56
+            elif tlen <= 28:
+                fsize, max_chars, line_h = 34, 16, 42
             else:
-                fsize, max_chars, line_h = 28, 20, 36
+                fsize, max_chars, line_h = 26, 20, 34
 
             font = load_font(fsize)
-            name_font = load_font(22)
-            time_font = load_font(18)
+            name_font = load_font(21)
+            time_font = load_font(17)
 
-            def wrap_keep(t, max_chars=16):
+            def wrap(t, n):
                 words = t.split()
                 lines, cur = [], ""
                 for w in words:
                     trial = (cur + " " + w).strip()
-                    if len(trial) <= max_chars:
+                    if len(trial) <= n:
                         cur = trial
                     else:
                         if cur:
@@ -1618,39 +1677,31 @@ async def convert_message_to_sticker(client, message):
                 if cur:
                     lines.append(cur)
                 if not lines:
-                    lines = [t[i:i + max_chars] for i in range(0, len(t), max_chars)]
+                    lines = [t[i:i+n] for i in range(0, len(t), n)]
                 return lines[:7]
 
-            lines_raw = wrap_keep(raw_text, max_chars)
-            lines_draw = [fix_fa(x) for x in lines_raw]
+            lines_raw = wrap(raw, max_chars)
+            lines_draw = [prepare_rtl_text(x) for x in lines_raw]
 
-            # اندازه‌گیری
-            probe = ImageDraw.Draw(Image.new("RGBA", (512, 512)))
+            # عرض محتوا
             max_tw = 0
-            for line in lines_draw:
-                try:
-                    bb = probe.textbbox((0, 0), line, font=font)
-                    max_tw = max(max_tw, bb[2] - bb[0])
-                except Exception:
-                    max_tw = max(max_tw, len(line) * fsize // 2)
-            try:
-                nb = probe.textbbox((0, 0), name_draw, font=name_font)
-                name_w = nb[2] - nb[0]
-            except Exception:
-                name_w = len(name) * 12
+            for ln in lines_draw:
+                w, _ = measure(ln, font)
+                max_tw = max(max_tw, w)
+            name_w, _ = measure(name_draw, name_font)
 
-            pad_x, pad_y = 18, 14
-            bubble_w = min(370, max(max_tw, name_w, 130) + pad_x * 2)
-            bubble_h = pad_y + 26 + len(lines_draw) * line_h + 24
-            bubble_h = max(96, min(430, bubble_h))
+            pad_x, pad_top = 16, 12
+            bubble_w = int(min(380, max(max_tw, name_w, 140) + pad_x * 2))
+            bubble_h = int(pad_top + 30 + len(lines_draw) * line_h + 28)
+            bubble_h = max(100, min(440, bubble_h))
 
-            gap = 14
+            gap = 12
             total_w = av_size + gap + bubble_w
-            total_h = max(av_size, bubble_h)
+            total_h = max(av_size + 8, bubble_h)
             left = (512 - total_w) // 2
             top = (512 - total_h) // 2
             bx0 = left + av_size + gap
-            by0 = top + (total_h - bubble_h) // 2
+            by0 = top + max(0, (total_h - bubble_h) // 2)
 
             canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
 
@@ -1658,66 +1709,49 @@ async def convert_message_to_sticker(client, message):
             shadow = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
             sd = ImageDraw.Draw(shadow)
             try:
-                sd.rounded_rectangle([bx0 + 3, by0 + 5, bx0 + bubble_w + 3, by0 + bubble_h + 5], radius=24, fill=(0, 0, 0, 85))
+                sd.rounded_rectangle([bx0+3, by0+5, bx0+bubble_w+3, by0+bubble_h+5], radius=22, fill=(0, 0, 0, 80))
             except Exception:
-                sd.rectangle([bx0 + 3, by0 + 5, bx0 + bubble_w + 3, by0 + bubble_h + 5], fill=(0, 0, 0, 85))
-            canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(8)))
-            draw = ImageDraw.Draw(canvas)
+                sd.rectangle([bx0+3, by0+5, bx0+bubble_w+3, by0+bubble_h+5], fill=(0, 0, 0, 80))
+            canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(7)))
 
-            # آواتار پایین-چپ حباب
-            av_x, av_y = left, by0 + bubble_h - av_size
-            canvas.paste(avatar, (av_x, av_y), avatar)
+            # آواتار
+            av_x = left
+            av_y = by0 + bubble_h - av_size
+            canvas.paste(avatar, (int(av_x), int(av_y)), avatar)
 
             # حباب
+            draw = ImageDraw.Draw(canvas)
             try:
-                draw.rounded_rectangle([bx0, by0, bx0 + bubble_w, by0 + bubble_h], radius=24, fill=(43, 41, 56, 250))
+                draw.rounded_rectangle([bx0, by0, bx0+bubble_w, by0+bubble_h], radius=22, fill=(42, 40, 54, 250))
             except Exception:
-                draw.rectangle([bx0, by0, bx0 + bubble_w, by0 + bubble_h], fill=(43, 41, 56, 250))
+                draw.rectangle([bx0, by0, bx0+bubble_w, by0+bubble_h], fill=(42, 40, 54, 250))
 
-            # رسم متن با پشتیبانی ایموجی (pilmoji) در صورت وجود
-            def draw_text_smart(base_img, xy, s, font, fill):
-                try:
-                    from pilmoji import Pilmoji
-                    with Pilmoji(base_img) as pm:
-                        pm.text(xy, s, font=font, fill=fill)
-                    return True
-                except Exception:
-                    ImageDraw.Draw(base_img).text(xy, s, font=font, fill=fill)
-                    return False
+            # ----- اسم (داخل حباب، نه بیرون) -----
+            name_x = bx0 + pad_x
+            name_y = by0 + pad_top
+            smart_text(canvas, (name_x, name_y), name_draw, name_font, (120, 180, 255, 255))
 
-            # اسم
-            draw_text_smart(canvas, (bx0 + pad_x, by0 + 10), name_draw, name_font, (120, 180, 255, 255))
-
-            # متن
-            is_time = bool(re.match(r"^\d{1,2}:\d{2}$", raw_text.strip()))
+            # ----- متن -----
+            is_time = bool(re.match(r"^\d{1,2}:\d{2}$", raw.strip()))
             fill = (255, 175, 70, 255) if is_time else (245, 245, 248, 255)
-            ty = by0 + 10 + 28
-            for i, line in enumerate(lines_draw):
-                # برای فارسی reshaped، چپ‌چین داخل حباب بهتر است؛ برای LTR مرکز
+            ty = name_y + 28
+            for i, ln in enumerate(lines_draw):
                 has_fa = bool(re.search(r"[\u0600-\u06FF]", lines_raw[i]))
                 if has_fa:
-                    draw_text_smart(canvas, (bx0 + pad_x, ty + i * line_h), line, font, fill)
+                    smart_text(canvas, (bx0 + pad_x, ty + i * line_h), ln, font, fill)
                 else:
-                    try:
-                        bb = ImageDraw.Draw(canvas).textbbox((0, 0), line, font=font)
-                        tw = bb[2] - bb[0]
-                    except Exception:
-                        tw = len(line) * fsize // 2
-                    x = bx0 + (bubble_w - tw) // 2
-                    draw_text_smart(canvas, (x, ty + i * line_h), line, font, fill)
+                    w, _ = measure(ln, font)
+                    x = bx0 + max(pad_x, (bubble_w - w) // 2)
+                    smart_text(canvas, (x, ty + i * line_h), ln, font, fill)
 
-            # ساعت
+            # ----- ساعت -----
             try:
                 msg_time = datetime.fromtimestamp(reply.date.timestamp(), TEHRAN_TIMEZONE).strftime("%H:%M")
             except Exception:
                 msg_time = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
-            try:
-                tb = ImageDraw.Draw(canvas).textbbox((0, 0), msg_time, font=time_font)
-                tw = tb[2] - tb[0]
-            except Exception:
-                tw = 36
+            tw, _ = measure(msg_time, time_font)
             ImageDraw.Draw(canvas).text(
-                (bx0 + bubble_w - pad_x - tw, by0 + bubble_h - 26),
+                (bx0 + bubble_w - pad_x - tw, by0 + bubble_h - 24),
                 msg_time,
                 font=time_font,
                 fill=(155, 155, 170, 255),
@@ -1725,10 +1759,8 @@ async def convert_message_to_sticker(client, message):
 
             canvas.save(out, "WEBP", quality=95)
             return out, None
-        except ImportError as e:
-            return None, f"❌ کتابخانه کم است: {e}\n`pip install Pillow pilmoji arabic-reshaper python-bidi`"
         except Exception as e:
-            logging.error(f"text sticker error: {e}")
+            logging.error(f"text sticker error: {e}", exc_info=True)
             return None, f"❌ تبدیل متن به استیکر: {e}"
 
     # ===== عکس =====

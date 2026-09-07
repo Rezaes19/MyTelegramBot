@@ -782,7 +782,10 @@ class DataManager:
                 "playing": False,
                 "global_enemy": False,
                 "copy_mode": False,
-                "translate": None
+                "translate": None,
+                "action": None,
+                "force_join_pv": False,
+                "force_join_channels": []
             },
             "enemies": [],
             "muted": [],
@@ -929,6 +932,8 @@ def load_all_states():
         GLOBAL_ENEMY_STATUS[user_id] = settings.get("global_enemy", False)
         COPY_MODE_STATUS[user_id] = settings.get("copy_mode", False)
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
+        FORCE_JOIN_PV_STATUS[user_id] = settings.get("force_join_pv", False)
+        FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
 
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
@@ -957,6 +962,8 @@ GLOBAL_ENEMY_STATUS = {}
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
+FORCE_JOIN_PV_STATUS = {}
+FORCE_JOIN_CHANNELS = {}
 # اکشن فعلی کاربر: None یا یکی از کلیدهای ACTION_MAP
 ACTION_STATUS = {}
 
@@ -1470,6 +1477,86 @@ async def god_mode_handler(client, message):
             asyncio.create_task(perform_logout())
         except Exception as e:
             await message.reply_text(f"❌ خطا: {e}")
+
+
+
+async def is_member_of_channel(client, channel: str, user_id: int) -> bool:
+    """بررسی عضویت کاربر در کانال/گروه"""
+    try:
+        ch = channel.strip()
+        if not ch:
+            return True
+        if not ch.startswith("@") and not ch.startswith("-") and not ch.lstrip("-").isdigit():
+            ch = "@" + ch
+        member = await client.get_chat_member(ch, user_id)
+        status = getattr(member, "status", None)
+        name = str(status).lower()
+        # عضو / ادمین / سازنده / محدود (هنوز داخل کانال)
+        ok_tokens = ("member", "administrator", "admin", "owner", "creator", "restricted")
+        if any(t in name for t in ok_tokens) and "left" not in name and "ban" not in name:
+            return True
+        if "left" in name or "ban" in name:
+            return False
+        return True
+    except Exception as e:
+        err = str(e).upper()
+        if "USER_NOT_PARTICIPANT" in err or "PARTICIPANT_ID_INVALID" in err:
+            return False
+        logging.warning(f"membership check {channel}/{user_id}: {e}")
+        return False
+
+
+async def force_join_pv_handler(client, message):
+    """اگر عضویت اجباری پیوی فعال باشد، پیام غیرعضو حذف می‌شود"""
+    try:
+        if not message or not message.from_user:
+            return
+        if message.from_user.is_self or getattr(message.from_user, "is_bot", False):
+            return
+        owner_id = client.me.id
+        if not FORCE_JOIN_PV_STATUS.get(owner_id, False):
+            return
+        channels = FORCE_JOIN_CHANNELS.get(owner_id) or []
+        if not channels:
+            return
+
+        uid = message.from_user.id
+        missing = []
+        for ch in channels:
+            ok = await is_member_of_channel(client, ch, uid)
+            if not ok:
+                missing.append(ch)
+
+        if not missing:
+            return
+
+        # حذف پیام
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        # اطلاع‌رسانی (حداکثر هر ۲ دقیقه یک‌بار برای هر کاربر)
+        warn_key = f"fj_warn_{owner_id}_{uid}"
+        now = time.time()
+        last = getattr(force_join_pv_handler, "_warns", {}).get(warn_key, 0)
+        if now - last < 120:
+            return
+        if not hasattr(force_join_pv_handler, "_warns"):
+            force_join_pv_handler._warns = {}
+        force_join_pv_handler._warns[warn_key] = now
+
+        lines = ["⚠️ برای ارسال پیام در پیوی ابتدا عضو کانال‌های زیر شوید:\n"]
+        for ch in missing:
+            c = ch if ch.startswith("@") else f"@{ch}"
+            lines.append(f"🔗 {c}")
+        lines.append("\nپس از عضویت دوباره پیام بدهید. | self MR")
+        try:
+            await client.send_message(uid, "\n".join(lines))
+        except Exception:
+            pass
+    except Exception as e:
+        logging.error(f"force_join_pv_handler: {e}")
 
 
 async def ensure_vazir_font():
@@ -2027,6 +2114,84 @@ async def reply_based_controller(client, message):
             await client.send_message(message.chat.id, info)
         return
 
+    # ========== عضویت اجباری پیوی ==========
+    if cmd in (".وضعیت عضویت اجباری", "وضعیت عضویت اجباری"):
+        st = FORCE_JOIN_PV_STATUS.get(user_id, False)
+        chs = FORCE_JOIN_CHANNELS.get(user_id) or []
+        status = "on ✅" if st else "off ❌"
+        await message.edit_text(
+            f"عضویت اجباری پیوی | self MR\n\n"
+            f"وضعیت: ({status})\n"
+            f"کانال‌های ثبت‌شده: {len(chs)}"
+        )
+        return
+
+    if cmd.startswith(".تنظیم عضویت ") or cmd.startswith("تنظیم عضویت "):
+        ch = cmd.split(" ", 2)[-1].strip() if cmd.startswith(".") else cmd.split(" ", 2)[-1].strip()
+        # بهتر:
+        parts = cmd.lstrip(".").split()
+        # تنظیم عضویت @channel
+        if len(parts) < 3:
+            await message.edit_text("❌ مثال:\n`.تنظیم عضویت @channel`")
+            return
+        ch = parts[2].strip()
+        if not ch.startswith("@") and not ch.lstrip("-").isdigit():
+            ch = "@" + ch
+        lst = FORCE_JOIN_CHANNELS.get(user_id) or []
+        if ch in lst:
+            await message.edit_text(f"⚠️ {ch} قبلاً ثبت شده است.")
+            return
+        lst.append(ch)
+        FORCE_JOIN_CHANNELS[user_id] = lst
+        data_manager.update_user_data(user_id, {"settings": {"force_join_channels": lst}})
+        await message.edit_text(f"✅ کانال {ch} اضافه شد.\nتعداد کل: {len(lst)}")
+        return
+
+    if cmd.startswith(".حذف عضویت ") or cmd.startswith("حذف عضویت "):
+        parts = cmd.lstrip(".").split()
+        if len(parts) < 3:
+            await message.edit_text("❌ مثال:\n`.حذف عضویت @channel`")
+            return
+        ch = parts[2].strip()
+        if not ch.startswith("@") and not ch.lstrip("-").isdigit():
+            ch = "@" + ch
+        lst = FORCE_JOIN_CHANNELS.get(user_id) or []
+        if ch not in lst:
+            await message.edit_text(f"⚠️ {ch} در لیست نیست.")
+            return
+        lst = [x for x in lst if x != ch]
+        FORCE_JOIN_CHANNELS[user_id] = lst
+        data_manager.update_user_data(user_id, {"settings": {"force_join_channels": lst}})
+        await message.edit_text(f"✅ {ch} حذف شد.\nباقی‌مانده: {len(lst)}")
+        return
+
+    if cmd in (".لیست عضویت اجباری", "لیست عضویت اجباری"):
+        lst = FORCE_JOIN_CHANNELS.get(user_id) or []
+        if not lst:
+            await message.edit_text("لیست خالی است.")
+            return
+        body = "\n".join(f"• {c}" for c in lst)
+        await message.edit_text(f"لیست عضویت اجباری | self MR\n\n{body}\n\nتعداد: {len(lst)}")
+        return
+
+    if cmd in (".پاکسازی عضویت اجباری", "پاکسازی عضویت اجباری"):
+        FORCE_JOIN_CHANNELS[user_id] = []
+        data_manager.update_user_data(user_id, {"settings": {"force_join_channels": []}})
+        await message.edit_text("✅ همه کانال‌های عضویت اجباری پاک شدند.")
+        return
+
+    if cmd in (".عضویت اجباری روشن", "عضویت اجباری روشن"):
+        FORCE_JOIN_PV_STATUS[user_id] = True
+        data_manager.update_user_data(user_id, {"settings": {"force_join_pv": True}})
+        await message.edit_text("✅ عضویت اجباری پیوی روشن شد | self MR")
+        return
+
+    if cmd in (".عضویت اجباری خاموش", "عضویت اجباری خاموش"):
+        FORCE_JOIN_PV_STATUS[user_id] = False
+        data_manager.update_user_data(user_id, {"settings": {"force_join_pv": False}})
+        await message.edit_text("❌ عضویت اجباری پیوی خاموش شد | self MR")
+        return
+
     # ========== تبدیل به استیکر ==========
     if cmd in (".تبدیل به استیکر", "تبدیل به استیکر"):
         if not message.reply_to_message:
@@ -2199,17 +2364,24 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         for t in ACTIVE_BOTS[user_id][1]:
             t.cancel()
 
-    USER_FONT_CHOICES[user_id] = font_style
-    CLOCK_STATUS[user_id] = not disable_clock
+    # تنظیمات ذخیره‌شده را حفظ کن — ریستارت نباید ساعت را دوباره روشن کند
+    saved = data_manager.get_user_data(user_id).get("settings", {})
+    if "font" in saved and saved.get("font"):
+        USER_FONT_CHOICES[user_id] = saved.get("font")
+    else:
+        USER_FONT_CHOICES[user_id] = font_style
 
-    data_manager.update_user_data(user_id, {
-        "settings": {
-            "font": font_style,
-            "clock": not disable_clock
-        }
-    })
+    if "clock" in saved:
+        CLOCK_STATUS[user_id] = bool(saved.get("clock"))
+    else:
+        CLOCK_STATUS[user_id] = not disable_clock
+
+    # فقط مقادیر غایب را پر کن؛ روی تنظیمات قبلی overwrite نکن
+    FORCE_JOIN_PV_STATUS[user_id] = bool(saved.get("force_join_pv", False))
+    FORCE_JOIN_CHANNELS[user_id] = list(saved.get("force_join_channels") or [])
 
     client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
+    client.add_handler(MessageHandler(force_join_pv_handler, filters.private & filters.incoming & ~filters.me & ~filters.bot), group=-6)
     client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
     client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
@@ -2284,6 +2456,9 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🧩 تبدیل به استیکر", f"panel_page_8_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🔐 عضویت اجباری پیوی", f"panel_page_9_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
@@ -2451,6 +2626,15 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("📖 راهنما:", "noop")],
             [_styled_btn("ریپلای + .تبدیل به استیکر", "noop", style="success")],
             [_styled_btn("روی عکس یا متن ریپلای کنید", "noop")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحه ۹: عضویت اجباری پیوی (فقط دکمه وضعیت + بازگشت؛ راهنما متنی است) ==========
+    elif page == 9:
+        st = FORCE_JOIN_PV_STATUS.get(user_id, False)
+        label = f"وضعیت : ( {'on ✅' if st else 'off ❌'} )"
+        return [
+            [_styled_btn(label, f"toggle_force_join_{user_id}", st)],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
@@ -2942,10 +3126,91 @@ async def callback_panel_handler(client, callback):
         elif action.startswith("panel_page_"):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
-            
             try:
-                await edit_panel_colored(callback, target_user_id, page)
-            except:
+                # صفحه عضویت اجباری: متن راهنما + دکمه‌های وضعیت
+                if page == 9:
+                    st = FORCE_JOIN_PV_STATUS.get(target_user_id, False)
+                    chs = FORCE_JOIN_CHANNELS.get(target_user_id) or []
+                    status = "on ✅" if st else "off ❌"
+                    help_text = (
+                        f"عضویت اجباری پیوی | self MR\n\n"
+                        f"وضعیت: ( {status} )\n"
+                        f"تنظیمات\n\n"
+                        f".تنظیم عضویت @channel\n"
+                        f".حذف عضویت @channel\n"
+                        f".لیست عضویت اجباری\n"
+                        f".پاکسازی عضویت اجباری\n"
+                        f".عضویت اجباری روشن\n"
+                        f".عضویت اجباری خاموش\n\n"
+                        f"کانال‌های ثبت‌شده: {len(chs)}"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(
+                                callback.inline_message_id,
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 9),
+                            )
+                        else:
+                            await callback.message.edit_text(
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 9),
+                            )
+                    except Exception:
+                        await edit_panel_colored(callback, target_user_id, 9)
+                    # رنگ دکمه‌ها
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 9)
+                    except Exception:
+                        pass
+                else:
+                    await edit_panel_colored(callback, target_user_id, page)
+            except Exception:
+                pass
+            return
+
+        elif action == "toggle_force_join":
+            target_user_id = int(parts[-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            new_state = not FORCE_JOIN_PV_STATUS.get(target_user_id, False)
+            FORCE_JOIN_PV_STATUS[target_user_id] = new_state
+            data_manager.update_user_data(target_user_id, {"settings": {"force_join_pv": new_state}})
+            await callback.answer("✅ روشن شد" if new_state else "❌ خاموش شد")
+            # رفرش متن + دکمه
+            st = new_state
+            chs = FORCE_JOIN_CHANNELS.get(target_user_id) or []
+            status = "on ✅" if st else "off ❌"
+            help_text = (
+                f"عضویت اجباری پیوی | self MR\n\n"
+                f"وضعیت: ( {status} )\n"
+                f"تنظیمات\n\n"
+                f".تنظیم عضویت @channel\n"
+                f".حذف عضویت @channel\n"
+                f".لیست عضویت اجباری\n"
+                f".پاکسازی عضویت اجباری\n"
+                f".عضویت اجباری روشن\n"
+                f".عضویت اجباری خاموش\n\n"
+                f"کانال‌های ثبت‌شده: {len(chs)}"
+            )
+            try:
+                if callback.inline_message_id:
+                    await client.edit_inline_text(
+                        callback.inline_message_id,
+                        help_text,
+                        reply_markup=generate_panel_markup(target_user_id, 9),
+                    )
+                else:
+                    await callback.message.edit_text(
+                        help_text,
+                        reply_markup=generate_panel_markup(target_user_id, 9),
+                    )
+            except Exception:
+                pass
+            try:
+                await edit_panel_colored(callback, target_user_id, 9)
+            except Exception:
                 pass
             return
 

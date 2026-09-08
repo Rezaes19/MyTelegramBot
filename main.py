@@ -785,7 +785,9 @@ class DataManager:
                 "translate": None,
                 "action": None,
                 "force_join_pv": False,
-                "force_join_channels": []
+                "force_join_channels": [],
+                "edit_alert": False,
+                "delete_alert": False
             },
             "enemies": [],
             "muted": [],
@@ -934,6 +936,8 @@ def load_all_states():
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
         FORCE_JOIN_PV_STATUS[user_id] = settings.get("force_join_pv", False)
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
+        EDIT_ALERT_STATUS[user_id] = settings.get("edit_alert", False)
+        DELETE_ALERT_STATUS[user_id] = settings.get("delete_alert", False)
 
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
@@ -964,6 +968,11 @@ PLAYING_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
 FORCE_JOIN_PV_STATUS = {}
 FORCE_JOIN_CHANNELS = {}
+EDIT_ALERT_STATUS = {}
+DELETE_ALERT_STATUS = {}
+# کش پیام‌های پیوی برای هشدار حذف/ویرایش
+PV_MSG_CACHE = {}  # owner_id -> {msg_id: {...}}
+
 # اکشن فعلی کاربر: None یا یکی از کلیدهای ACTION_MAP
 ACTION_STATUS = {}
 
@@ -1480,6 +1489,137 @@ async def god_mode_handler(client, message):
 
 
 
+
+def cache_pv_message(owner_id: int, message):
+    """ذخیره پیام پیوی برای هشدار حذف/ویرایش"""
+    if not message or not message.id:
+        return
+    if not EDIT_ALERT_STATUS.get(owner_id) and not DELETE_ALERT_STATUS.get(owner_id):
+        return
+    try:
+        if not message.chat or message.chat.type != ChatType.PRIVATE:
+            return
+    except Exception:
+        return
+    if not message.from_user or message.from_user.is_self:
+        return
+
+    if owner_id not in PV_MSG_CACHE:
+        PV_MSG_CACHE[owner_id] = {}
+    cache = PV_MSG_CACHE[owner_id]
+
+    text = message.text or message.caption or ""
+    media_type = None
+    if message.photo:
+        media_type = "عکس"
+    elif message.video:
+        media_type = "ویدیو"
+    elif message.voice:
+        media_type = "ویس"
+    elif message.video_note:
+        media_type = "ویدیو مسیج"
+    elif message.sticker:
+        media_type = "استیکر"
+    elif message.document:
+        media_type = "فایل"
+    elif message.audio:
+        media_type = "آهنگ"
+    elif message.animation:
+        media_type = "گیف"
+
+    u = message.from_user
+    cache[message.id] = {
+        "text": text,
+        "media_type": media_type,
+        "user_id": u.id,
+        "name": f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id),
+        "username": u.username or "",
+        "chat_id": message.chat.id,
+        "date": getattr(message, "date", None),
+    }
+    # محدود کردن کش
+    if len(cache) > 800:
+        keys = sorted(cache.keys())
+        for k in keys[:200]:
+            cache.pop(k, None)
+
+
+async def edit_alert_handler(client, message):
+    """هشدار ویرایش پیام در پیوی → ارسال به پیام‌های ذخیره شده"""
+    try:
+        owner_id = client.me.id
+        if not EDIT_ALERT_STATUS.get(owner_id, False):
+            # همچنان کش را آپدیت کن اگر حذف فعال است
+            if DELETE_ALERT_STATUS.get(owner_id, False):
+                cache_pv_message(owner_id, message)
+            return
+        if not message.chat or message.chat.type != ChatType.PRIVATE:
+            return
+        if not message.from_user or message.from_user.is_self:
+            return
+
+        old = (PV_MSG_CACHE.get(owner_id) or {}).get(message.id)
+        new_text = message.text or message.caption or ""
+        u = message.from_user
+        name = f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id)
+        uname = f"@{u.username}" if u.username else "ندارد"
+        old_text = (old or {}).get("text") or "—"
+        media = (old or {}).get("media_type") or ""
+
+        report = (
+            f"✏️ هشدار ویرایش پیام | self MR\n\n"
+            f"👤 {name}\n"
+            f"🆔 `{u.id}`\n"
+            f"📱 {uname}\n\n"
+            f"📝 قبل از ویرایش:\n{old_text}\n\n"
+            f"📝 بعد از ویرایش:\n{new_text or '—'}"
+        )
+        if media:
+            report += f"\n\n📎 رسانه: {media}"
+        try:
+            await client.send_message("me", report)
+        except Exception as e:
+            logging.error(f"edit alert send: {e}")
+
+        # آپدیت کش با متن جدید
+        cache_pv_message(owner_id, message)
+    except Exception as e:
+        logging.error(f"edit_alert_handler: {e}")
+
+
+async def delete_alert_handler(client, messages):
+    """هشدار حذف پیام در پیوی → ارسال به پیام‌های ذخیره شده"""
+    try:
+        owner_id = client.me.id
+        if not DELETE_ALERT_STATUS.get(owner_id, False):
+            return
+        cache = PV_MSG_CACHE.get(owner_id) or {}
+        for mid in messages:
+            # messages can be list of ids or Message objects depending on version
+            msg_id = mid.id if hasattr(mid, "id") else mid
+            old = cache.pop(msg_id, None)
+            if not old:
+                continue
+            uname = f"@{old['username']}" if old.get("username") else "ندارد"
+            body = old.get("text") or "—"
+            media = old.get("media_type") or ""
+            report = (
+                f"🗑 هشدار حذف پیام | self MR\n\n"
+                f"👤 {old.get('name', '?')}\n"
+                f"🆔 `{old.get('user_id', '?')}`\n"
+                f"📱 {uname}\n\n"
+                f"📝 متن حذف‌شده:\n{body}"
+            )
+            if media:
+                report += f"\n\n📎 رسانه: {media}"
+            try:
+                await client.send_message("me", report)
+            except Exception as e:
+                logging.error(f"delete alert send: {e}")
+    except Exception as e:
+        logging.error(f"delete_alert_handler: {e}")
+
+
 async def is_member_of_channel(client, channel: str, user_id: int) -> bool:
     """بررسی عضویت کاربر در کانال/گروه"""
     try:
@@ -1505,6 +1645,14 @@ async def is_member_of_channel(client, channel: str, user_id: int) -> bool:
         logging.warning(f"membership check {channel}/{user_id}: {e}")
         return False
 
+
+
+async def pv_cache_handler(client, message):
+    try:
+        if client.me:
+            cache_pv_message(client.me.id, message)
+    except Exception:
+        pass
 
 async def force_join_pv_handler(client, message):
     """اگر عضویت اجباری پیوی فعال باشد، پیام غیرعضو حذف می‌شود"""
@@ -2183,6 +2331,28 @@ async def reply_based_controller(client, message):
             await client.send_message(message.chat.id, info)
         return
 
+    # ========== هشدار ویرایش / حذف ==========
+    if cmd in (".هشدار ویرایش روشن", "هشدار ویرایش روشن"):
+        EDIT_ALERT_STATUS[user_id] = True
+        data_manager.update_user_data(user_id, {"settings": {"edit_alert": True}})
+        await message.edit_text("✅ هشدار ویرایش پیام روشن شد | self MR\nپیام قبل از ویرایش به Saved Messages می‌رود.")
+        return
+    if cmd in (".هشدار ویرایش خاموش", "هشدار ویرایش خاموش"):
+        EDIT_ALERT_STATUS[user_id] = False
+        data_manager.update_user_data(user_id, {"settings": {"edit_alert": False}})
+        await message.edit_text("❌ هشدار ویرایش پیام خاموش شد | self MR")
+        return
+    if cmd in (".هشدار حذف روشن", "هشدار حذف روشن"):
+        DELETE_ALERT_STATUS[user_id] = True
+        data_manager.update_user_data(user_id, {"settings": {"delete_alert": True}})
+        await message.edit_text("✅ هشدار حذف پیام روشن شد | self MR\nمتن پیام حذف‌شده به Saved Messages می‌رود.")
+        return
+    if cmd in (".هشدار حذف خاموش", "هشدار حذف خاموش"):
+        DELETE_ALERT_STATUS[user_id] = False
+        data_manager.update_user_data(user_id, {"settings": {"delete_alert": False}})
+        await message.edit_text("❌ هشدار حذف پیام خاموش شد | self MR")
+        return
+
     # ========== عضویت اجباری پیوی ==========
     if cmd in (".وضعیت عضویت اجباری", "وضعیت عضویت اجباری"):
         st = FORCE_JOIN_PV_STATUS.get(user_id, False)
@@ -2490,7 +2660,14 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 
     client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
     client.add_handler(MessageHandler(force_join_pv_handler, filters.private & filters.incoming & ~filters.me & ~filters.bot), group=-6)
+    client.add_handler(MessageHandler(pv_cache_handler, filters.private & filters.incoming & ~filters.me & ~filters.bot), group=-7)
     client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
+    try:
+        from pyrogram.handlers import EditedMessageHandler, DeletedMessagesHandler
+        client.add_handler(EditedMessageHandler(edit_alert_handler, filters.private & ~filters.me), group=-2)
+        client.add_handler(DeletedMessagesHandler(delete_alert_handler), group=-2)
+    except Exception as e:
+        logging.warning(f"edit/delete handlers: {e}")
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
     client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
     client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me & ~filters.reply), group=-1)
@@ -2627,6 +2804,12 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
             ],
             [
+                _styled_btn("✏️ هشدار ویرایش پیام", f"panel_page_11_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🗑 هشدار حذف پیام", f"panel_page_12_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
             ],
         ]
@@ -2753,6 +2936,22 @@ def build_panel_keyboard(user_id, page=1):
     elif page == 10:
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحه ۱۱: هشدار ویرایش ==========
+    elif page == 11:
+        st = EDIT_ALERT_STATUS.get(user_id, False)
+        return [
+            [_styled_btn(f"وضعیت: {'on ✅' if st else 'off ❌'}", f"toggle_edit_alert_{user_id}", st)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_3_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحه ۱۲: هشدار حذف ==========
+    elif page == 12:
+        st = DELETE_ALERT_STATUS.get(user_id, False)
+        return [
+            [_styled_btn(f"وضعیت: {'on ✅' if st else 'off ❌'}", f"toggle_delete_alert_{user_id}", st)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_3_{user_id}", style="danger")],
         ]
 
     # پیش‌فرض
@@ -3244,6 +3443,50 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 11:
+                    st = EDIT_ALERT_STATUS.get(target_user_id, False)
+                    help_text = (
+                        "هشدار ویرایش پیام | self MR\n\n"
+                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n\n"
+                        "برای استفاده:\n"
+                        ".هشدار ویرایش روشن\n"
+                        ".هشدار ویرایش خاموش\n\n"
+                        "وقتی کسی در پیوی پیامش را ویرایش کند، متن قبل از ویرایش به پیام‌های ذخیره‌شده ارسال می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 11)
+                    except Exception:
+                        pass
+                    return
+                if page == 12:
+                    st = DELETE_ALERT_STATUS.get(target_user_id, False)
+                    help_text = (
+                        "هشدار حذف پیام | self MR\n\n"
+                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n\n"
+                        "برای استفاده:\n"
+                        ".هشدار حذف روشن\n"
+                        ".هشدار حذف خاموش\n\n"
+                        "وقتی کسی در پیوی پیامش را حذف کند، متن حذف‌شده به پیام‌های ذخیره‌شده ارسال می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 12)
+                    except Exception:
+                        pass
+                    return
                 if page == 10:
                     help_text = (
                         "ساخت ویدیو گرد | self MR\n\n"
@@ -3308,6 +3551,60 @@ async def callback_panel_handler(client, callback):
                         pass
                 else:
                     await edit_panel_colored(callback, target_user_id, page)
+            except Exception:
+                pass
+            return
+
+        elif action == "toggle_edit_alert":
+            target_user_id = int(parts[-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            ns = not EDIT_ALERT_STATUS.get(target_user_id, False)
+            EDIT_ALERT_STATUS[target_user_id] = ns
+            data_manager.update_user_data(target_user_id, {"settings": {"edit_alert": ns}})
+            await callback.answer("✅ روشن" if ns else "❌ خاموش")
+            try:
+                help_text = (
+                    "هشدار ویرایش پیام | self MR\n\n"
+                    f"وضعیت: {'on ✅' if ns else 'off ❌'}\n\n"
+                    "برای استفاده:\n.هشدار ویرایش روشن\n.هشدار ویرایش خاموش"
+                )
+                if callback.inline_message_id:
+                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                else:
+                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+            except Exception:
+                pass
+            try:
+                await edit_panel_colored(callback, target_user_id, 11)
+            except Exception:
+                pass
+            return
+
+        elif action == "toggle_delete_alert":
+            target_user_id = int(parts[-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            ns = not DELETE_ALERT_STATUS.get(target_user_id, False)
+            DELETE_ALERT_STATUS[target_user_id] = ns
+            data_manager.update_user_data(target_user_id, {"settings": {"delete_alert": ns}})
+            await callback.answer("✅ روشن" if ns else "❌ خاموش")
+            try:
+                help_text = (
+                    "هشدار حذف پیام | self MR\n\n"
+                    f"وضعیت: {'on ✅' if ns else 'off ❌'}\n\n"
+                    "برای استفاده:\n.هشدار حذف روشن\n.هشدار حذف خاموش"
+                )
+                if callback.inline_message_id:
+                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                else:
+                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+            except Exception:
+                pass
+            try:
+                await edit_panel_colored(callback, target_user_id, 12)
             except Exception:
                 pass
             return

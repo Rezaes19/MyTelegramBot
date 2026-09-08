@@ -657,24 +657,24 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 def apply_telegram_style(text: str, style: str) -> str:
     if not text:
         return text
-    
+    import html as _html
+    t = _html.escape(str(text))
     if style == "bold":
-        return f"**{text}**"
-    elif style == "italic":
-        return f"__{text}__"
-    elif style == "quote":
-        return f"> {text}"
-    elif style == "strikethrough":
-        return f"~~{text}~~"
-    elif style == "underline":
-        return f"<u>{text}</u>"
-    elif style == "spoiler":
-        return f"||{text}||"
-    elif style == "mono":
-        return f"`{text}`"
-    elif style == "codeblock":
-        return f"```\n{text}\n```"
-    
+        return f"<b>{t}</b>"
+    if style == "italic":
+        return f"<i>{t}</i>"
+    if style == "underline":
+        return f"<u>{t}</u>"
+    if style == "strikethrough":
+        return f"<s>{t}</s>"
+    if style == "spoiler":
+        return f"<spoiler>{t}</spoiler>"
+    if style == "mono":
+        return f"<code>{t}</code>"
+    if style == "codeblock":
+        return f"<pre>{t}</pre>"
+    if style == "quote":
+        return f"<blockquote>{t}</blockquote>"
     return text
 
 
@@ -1228,46 +1228,86 @@ async def status_action_task(client: Client, user_id: int):
 
 
 async def outgoing_message_modifier(client, message):
-    user_id = client.me.id
-    if not message.text or re.match(COMMAND_REGEX, message.text.strip(), re.IGNORECASE):
-        return
-    if message.text.strip().startswith("."):
-        return
-
-    original_text = message.text
-    modified_text = original_text
-
-    # ===== ترجمه خودکار =====
-    target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-    if target_lang:
+    """اعمال فونت متن انتخاب‌شده از پنل روی پیام‌های خود کاربر"""
+    try:
+        if not message or not message.text:
+            return
         try:
-            translated = await translate_text(modified_text, target_lang)
-            if translated and translated != modified_text:
-                modified_text = translated
-        except Exception as e:
-            logging.error(f"❌ Translation failed: {e}")
+            user_id = client.me.id if client.me else (await client.get_me()).id
+        except Exception:
+            return
 
-    # ===== فونت متن =====
-    text_font = TEXT_FONT_STATUS.get(user_id, "none")
-    use_html = False
-    if text_font != "none" and text_font in FONT_KEYS_ORDER:
-        modified_text = apply_telegram_style(modified_text, text_font)
-        if text_font == "underline":
-            use_html = True
-
-    if modified_text != original_text:
+        text = message.text
+        stripped = text.strip()
+        if not stripped:
+            return
+        if stripped.startswith(".") or stripped.startswith("/"):
+            return
         try:
-            if use_html:
-                await message.edit_text(modified_text, parse_mode=ParseMode.HTML)
-            else:
-                # مثل کد قدیمی + parse_mode برای کار کردن واقعی
-                await message.edit_text(modified_text, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            logging.error(f"❌ Failed to edit message: {e}")
+            if re.match(COMMAND_REGEX, stripped, re.IGNORECASE):
+                return
+        except Exception:
+            pass
+        if stripped in ("پنل", "panel", "راهنما", "تاس", "بولینگ", "آیدی"):
+            return
+
+        text_font = TEXT_FONT_STATUS.get(user_id, "none")
+        if isinstance(text_font, str):
+            text_font = text_font.strip()
+        else:
+            text_font = "none"
+
+        # ترجمه
+        modified = text
+        target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
+        if target_lang:
             try:
-                await message.edit_text(modified_text)
-            except Exception:
-                pass
+                tr = await translate_text(modified, target_lang)
+                if tr:
+                    modified = tr
+            except Exception as e:
+                logging.error(f"translate: {e}")
+
+        if text_font == "none" or text_font not in FONT_KEYS_ORDER:
+            if modified != text:
+                try:
+                    await asyncio.sleep(0.2)
+                    await message.edit_text(modified)
+                except Exception:
+                    pass
+            return
+
+        styled = apply_telegram_style(modified, text_font)
+        await asyncio.sleep(0.3)
+        try:
+            await message.edit_text(styled, parse_mode=ParseMode.HTML)
+            logging.info(f"✅ FONT applied uid={user_id} font={text_font}")
+        except Exception as e:
+            logging.error(f"❌ FONT edit failed uid={user_id} font={text_font}: {e}")
+            # fallback entities
+            try:
+                from pyrogram.enums import MessageEntityType
+                from pyrogram.types import MessageEntity
+                ent_map = {
+                    "bold": MessageEntityType.BOLD,
+                    "italic": MessageEntityType.ITALIC,
+                    "underline": MessageEntityType.UNDERLINE,
+                    "strikethrough": MessageEntityType.STRIKETHROUGH,
+                    "spoiler": MessageEntityType.SPOILER,
+                    "mono": MessageEntityType.CODE,
+                    "codeblock": MessageEntityType.PRE,
+                    "quote": MessageEntityType.BLOCKQUOTE,
+                }
+                et = ent_map.get(text_font)
+                if et:
+                    ln = len(modified.encode("utf-16-le")) // 2
+                    ent = MessageEntity(type=et, offset=0, length=ln)
+                    await message.edit_text(modified, entities=[ent])
+                    logging.info(f"✅ FONT entities ok uid={user_id}")
+            except Exception as e2:
+                logging.error(f"❌ FONT entities failed: {e2}")
+    except Exception as e:
+        logging.error(f"outgoing_message_modifier: {e}")
 
 
 
@@ -2973,7 +3013,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         logging.warning(f"edit/delete handlers: {e}")
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
     client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
-    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me & ~filters.reply), group=-1)
+    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & (filters.me | filters.outgoing)), group=-1)
     client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
     client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
     client.add_handler(MessageHandler(reply_based_controller, filters.me))
@@ -3643,10 +3683,14 @@ async def callback_panel_handler(client, callback):
                 pass
             return
 
-        elif action.startswith("set_text_font_") or "set_text_font_" in data:
+        elif action.startswith("set_text_font_") or (isinstance(data, str) and "set_text_font_" in data):
             parts = data.split("_")
-            font_name = parts[3]
-            target_user_id = int(parts[-1])
+            try:
+                target_user_id = int(parts[-1])
+            except Exception:
+                await callback.answer("خطا", show_alert=True)
+                return
+            font_name = parts[3] if len(parts) > 3 else "none"
 
             if callback.from_user.id != target_user_id:
                 await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
@@ -3656,19 +3700,23 @@ async def callback_panel_handler(client, callback):
                 TEXT_FONT_STATUS[target_user_id] = "none"
             elif font_name in FONT_KEYS_ORDER:
                 TEXT_FONT_STATUS[target_user_id] = font_name
+            else:
+                await callback.answer("❌ فونت نامعتبر", show_alert=True)
+                return
 
-            data_manager.update_user_data(target_user_id, {"settings": {"text_font": TEXT_FONT_STATUS.get(target_user_id, "none")}})
+            logging.info(f"TEXT_FONT_STATUS[{target_user_id}] = {TEXT_FONT_STATUS[target_user_id]}")
             try:
+                data_manager.update_user_data(target_user_id, {"settings": {"text_font": TEXT_FONT_STATUS[target_user_id]}})
                 persist_all_user_settings(target_user_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"save text_font: {e}")
 
             try:
                 await edit_panel_colored(callback, target_user_id, 2)
             except Exception:
                 pass
 
-            await callback.answer(f"✅ فونت به {FONT_PERSIAN_NAMES.get(font_name, font_name)} تغییر کرد!")
+            await callback.answer(f"✅ {FONT_PERSIAN_NAMES.get(font_name, font_name)}")
             return
 
         elif action == "toggle_sec":

@@ -5189,6 +5189,80 @@ async def finalize(message, user_c, phone):
 # تابع اصلی با مدیریت Flood
 # =============================================
 
+
+async def restart_all_selfs():
+    """خاموش کردن همه سلف‌های فعال و استارت مجدد از دیتابیس"""
+    stopped = 0
+    started = 0
+    # توقف فعلی‌ها
+    for uid in list(ACTIVE_BOTS.keys()):
+        try:
+            client, tasks = ACTIVE_BOTS.pop(uid)
+            for t in tasks:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            try:
+                await client.stop()
+            except Exception:
+                pass
+            stopped += 1
+        except Exception as e:
+            logging.error(f"restart stop {uid}: {e}")
+
+    await asyncio.sleep(2)
+
+    # استارت از sessions.db + bot_data
+    try:
+        sessions = get_all_sessions_from_db()
+    except Exception as e:
+        logging.error(f"restart get sessions: {e}")
+        sessions = []
+
+    seen = set()
+    for item in sessions:
+        try:
+            if len(item) >= 3:
+                phone, session_string, user_id = item[0], item[1], item[2]
+            else:
+                continue
+            uid = int(user_id)
+            if uid in seen:
+                continue
+            seen.add(uid)
+            if not session_string:
+                continue
+            asyncio.create_task(start_bot_instance(session_string, phone, uid, 'bold'))
+            started += 1
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            logging.error(f"restart start: {e}")
+
+    # همچنین از bot_data.json
+    try:
+        for uid_str, u_data in (data_manager.get_all_users() or {}).items():
+            try:
+                uid = int(uid_str)
+                if uid in seen:
+                    continue
+                s_str = u_data.get("session_string")
+                phone = u_data.get("phone") or str(uid)
+                if s_str:
+                    seen.add(uid)
+                    asyncio.create_task(start_bot_instance(s_str, phone, uid, 'bold'))
+                    started += 1
+                    await asyncio.sleep(1.5)
+            except Exception:
+                pass
+    except Exception as e:
+        logging.error(f"restart from json: {e}")
+
+    msg = f"stopped={stopped}, started={started}"
+    logging.info(f"restart_all_selfs: {msg}")
+    return msg
+
+
 async def hourly_diamond_deduction_task():
     """هر ساعت از کاربران فعال سلف، الماس کم می‌کند و در صورت کمبود سلف را خاموش می‌کند"""
     await asyncio.sleep(20)

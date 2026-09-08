@@ -812,7 +812,10 @@ class DataManager:
                 "force_join_pv": False,
                 "force_join_channels": [],
                 "edit_alert": False,
-                "delete_alert": False
+                "delete_alert": False,
+                "rotating_names": [],
+                "rotating_interval": 10,
+                "rotating_name": False
             },
             "enemies": [],
             "muted": [],
@@ -968,6 +971,10 @@ def load_all_states():
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
         EDIT_ALERT_STATUS[user_id] = settings.get("edit_alert", False)
         DELETE_ALERT_STATUS[user_id] = settings.get("delete_alert", False)
+        ROTATING_NAMES[user_id] = list(settings.get("rotating_names") or [])
+        ROTATING_NAME_INTERVAL[user_id] = int(settings.get("rotating_interval") or 10)
+        ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
+        ROTATING_NAME_INDEX[user_id] = 0
 
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
@@ -1002,6 +1009,11 @@ def apply_user_settings_from_db(user_id: int):
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
         EDIT_ALERT_STATUS[user_id] = bool(settings.get("edit_alert", False))
         DELETE_ALERT_STATUS[user_id] = bool(settings.get("delete_alert", False))
+        ROTATING_NAMES[user_id] = list(settings.get("rotating_names") or [])
+        ROTATING_NAME_INTERVAL[user_id] = int(settings.get("rotating_interval") or 10)
+        ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
+        if user_id not in ROTATING_NAME_INDEX:
+            ROTATING_NAME_INDEX[user_id] = 0
         if "TTS_VOICE_STATUS" in globals():
             TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
@@ -1042,6 +1054,9 @@ def persist_all_user_settings(user_id: int):
             "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
             "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
             "delete_alert": DELETE_ALERT_STATUS.get(user_id, False),
+            "rotating_names": list(ROTATING_NAMES.get(user_id) or []),
+            "rotating_interval": int(ROTATING_NAME_INTERVAL.get(user_id) or 10),
+            "rotating_name": bool(ROTATING_NAME_STATUS.get(user_id, False)),
             "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن") if "TTS_VOICE_STATUS" in globals() else "زن",
         }
         data_manager.update_user_data(user_id, {"settings": settings})
@@ -1063,6 +1078,11 @@ USERS_REPLIED_IN_SECRETARY = {}
 MUTED_USERS = {}
 USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
+ROTATING_NAMES = {}  # user_id -> [names]
+ROTATING_NAME_INTERVAL = {}  # user_id -> seconds
+ROTATING_NAME_STATUS = {}  # user_id -> bool
+ROTATING_NAME_INDEX = {}  # user_id -> current index
+
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 AUTO_SEEN_STATUS = {}
@@ -1312,6 +1332,50 @@ async def translate_text(text: str, target_lang: str) -> str:
     except Exception as e:
         logging.error(f"❌ Translation error: {e}")
         return text
+
+
+async def rotate_profile_name_task(client: Client, user_id: int):
+    """چرخش خودکار اسم پروفایل"""
+    await asyncio.sleep(3)
+    while True:
+        try:
+            if not ROTATING_NAME_STATUS.get(user_id, False):
+                await asyncio.sleep(2)
+                continue
+            names = ROTATING_NAMES.get(user_id) or []
+            if len(names) < 1:
+                await asyncio.sleep(3)
+                continue
+            interval = max(3, int(ROTATING_NAME_INTERVAL.get(user_id) or 10))
+            idx = ROTATING_NAME_INDEX.get(user_id, 0) % len(names)
+            name = str(names[idx])[:64]
+            try:
+                # اگر ساعت فعال است، فقط پایه را عوض کن و بگذار ساعت آپدیت کند
+                if CLOCK_STATUS.get(user_id, False):
+                    me = await client.get_me()
+                    clean = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', me.first_name or '').strip()
+                    # جایگزینی پایه با اسم چرخشی + ساعت فعلی
+                    from datetime import datetime
+                    now = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
+                    font = USER_FONT_CHOICES.get(user_id, "bold")
+                    styled = stylize_time(now, font) if "stylize_time" in dir() else now
+                    try:
+                        styled = stylize_time(now, font)
+                    except Exception:
+                        styled = now
+                    await client.update_profile(first_name=f"{name} {styled}".strip()[:64])
+                else:
+                    await client.update_profile(first_name=name)
+            except Exception as e:
+                logging.warning(f"rotate name update {user_id}: {e}")
+            ROTATING_NAME_INDEX[user_id] = (idx + 1) % len(names)
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"rotate_profile_name_task: {e}")
+            await asyncio.sleep(5)
+
 
 async def update_profile_clock(client: Client, user_id: int):
     while user_id in ACTIVE_BOTS:
@@ -2667,6 +2731,80 @@ async def reply_based_controller(client, message):
             await client.send_message(message.chat.id, info)
         return
 
+    # ========== اسم چرخشی ==========
+    if cmd.startswith(".افزودن اسم ") or cmd.startswith("افزودن اسم "):
+        name = cmd.split(" ", 2)[-1].strip() if cmd.count(" ") >= 2 else ""
+        # .افزودن اسم علی
+        parts = cmd.lstrip(".").split(None, 2)
+        if len(parts) < 3:
+            await message.edit_text("❌ مثال:\\n`.افزودن اسم علی`")
+            return
+        name = parts[2].strip()[:64]
+        if not name:
+            await message.edit_text("❌ اسم خالی است.")
+            return
+        lst = ROTATING_NAMES.get(user_id) or []
+        lst.append(name)
+        ROTATING_NAMES[user_id] = lst
+        persist_all_user_settings(user_id)
+        await message.edit_text(f"✅ اسم اضافه شد: `{name}`\\nتعداد لیست: {len(lst)}")
+        return
+
+    if cmd.startswith(".تنظیم تایم اسم ") or cmd.startswith("تنظیم تایم اسم "):
+        parts = cmd.lstrip(".").split()
+        try:
+            sec = int(parts[-1])
+        except Exception:
+            await message.edit_text("❌ مثال:\\n`.تنظیم تایم اسم 5`")
+            return
+        if sec < 3:
+            await message.edit_text("❌ حداقل ۳ ثانیه.")
+            return
+        if sec > 3600:
+            await message.edit_text("❌ حداکثر ۳۶۰۰ ثانیه.")
+            return
+        ROTATING_NAME_INTERVAL[user_id] = sec
+        persist_all_user_settings(user_id)
+        await message.edit_text(f"✅ تایم اسم چرخشی: هر {sec} ثانیه")
+        return
+
+    if cmd in (".پاکسازی لیست اسم چرخشی", "پاکسازی لیست اسم چرخشی", ".پاکسازی لیست اسم", "پاکسازی لیست اسم"):
+        ROTATING_NAMES[user_id] = []
+        ROTATING_NAME_INDEX[user_id] = 0
+        persist_all_user_settings(user_id)
+        await message.edit_text("✅ لیست اسامی چرخشی پاک شد.")
+        return
+
+    if cmd in (".لیست اسامی چرخشی", "لیست اسامی چرخشی", ".لیست اسامی", "لیست اسامی"):
+        lst = ROTATING_NAMES.get(user_id) or []
+        if not lst:
+            await message.edit_text("لیست اسامی خالی است.")
+            return
+        body = "\\n".join(f"{i}. {n}" for i, n in enumerate(lst, 1))
+        interval = ROTATING_NAME_INTERVAL.get(user_id, 10)
+        st = "on ✅" if ROTATING_NAME_STATUS.get(user_id) else "off ❌"
+        await message.edit_text(
+            f"لیست اسامی چرخشی | self MR\\n\\n{body}\\n\\n"
+            f"⏱ تایم: {interval} ثانیه\\nوضعیت: {st}"
+        )
+        return
+
+    if cmd in (".اسم چرخشی روشن", "اسم چرخشی روشن"):
+        lst = ROTATING_NAMES.get(user_id) or []
+        if len(lst) < 1:
+            await message.edit_text("❌ اول با `.افزودن اسم ...` اسم اضافه کنید.")
+            return
+        ROTATING_NAME_STATUS[user_id] = True
+        persist_all_user_settings(user_id)
+        await message.edit_text("✅ اسم چرخشی روشن شد | self MR")
+        return
+
+    if cmd in (".اسم چرخشی خاموش", "اسم چرخشی خاموش"):
+        ROTATING_NAME_STATUS[user_id] = False
+        persist_all_user_settings(user_id)
+        await message.edit_text("❌ اسم چرخشی خاموش شد | self MR")
+        return
+
     # ========== انیمیشن ایموجی ==========
     anim_key = None
     if cmd.startswith("."):
@@ -3089,6 +3227,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 
     tasks = [
         asyncio.create_task(update_profile_clock(client, user_id)),
+        asyncio.create_task(rotate_profile_name_task(client, user_id)),
         asyncio.create_task(anti_login_task(client, user_id)),
         asyncio.create_task(status_action_task(client, user_id))
     ]
@@ -3167,6 +3306,9 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
@@ -3375,7 +3517,7 @@ def build_panel_keyboard(user_id, page=1):
         ]
 
     # ========== صفحات راهنما: ذخیره / پروفایل ==========
-    elif page in (13, 14, 15, 16, 17):
+    elif page in (13, 14, 15, 16, 17, 18):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -3869,12 +4011,40 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 18:
+                    lst = ROTATING_NAMES.get(target_user_id) or []
+                    interval = ROTATING_NAME_INTERVAL.get(target_user_id, 10)
+                    st = "on ✅" if ROTATING_NAME_STATUS.get(target_user_id) else "off ❌"
+                    names_txt = "\n".join(f"• {n}" for n in lst) if lst else "—"
+                    help_text = (
+                        f"اسم چرخشی | self MR\n\n"
+                        f"وضعیت: {st}\n"
+                        f"تایم: {interval} ثانیه\n\n"
+                        f"لیست اسامی:\n{names_txt}\n\n"
+                        f"دستورات:\n"
+                        f".افزودن اسم علی\n"
+                        f".تنظیم تایم اسم 5\n"
+                        f".لیست اسامی چرخشی\n"
+                        f".پاکسازی لیست اسم چرخشی\n"
+                        f".اسم چرخشی روشن\n"
+                        f".اسم چرخشی خاموش"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 18))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 18))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 18)
+                    except Exception:
+                        pass
+                    return
                 if page == 17:
                     lines = ["انیمیشن | self MR", "", "انیمیشن‌ها:"]
                     for i, name in enumerate(EMOJI_ANIMATIONS.keys(), 1):
                         lines.append(f"{i}- .{name}")
-                    lines.append("")
-                    lines.append("هر ۲ ثانیه پیام ویرایش می‌شود.")
                     help_text = "\n".join(lines)
                     try:
                         if callback.inline_message_id:

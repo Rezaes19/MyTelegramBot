@@ -3012,8 +3012,30 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     for attempt in range(max_retries):
         try:
             client = Client(f"bot_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string)
+            # ثبت هندلرها قبل از start تا پیام‌های خروجی از دست نروند
+            client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
+            client.add_handler(MessageHandler(pv_cache_handler, filters.private & ~filters.me & ~filters.bot), group=-8)
+            client.add_handler(MessageHandler(force_join_pv_handler, filters.private & ~filters.me & ~filters.bot), group=-6)
+            client.add_handler(MessageHandler(lambda c, m: m.delete() if (c.me and PV_LOCK_STATUS.get(c.me.id)) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
+            try:
+                from pyrogram.handlers import EditedMessageHandler, DeletedMessagesHandler, RawUpdateHandler
+                client.add_handler(EditedMessageHandler(edit_alert_handler, filters.private & ~filters.me), group=-2)
+                client.add_handler(DeletedMessagesHandler(delete_alert_handler), group=-2)
+                client.add_handler(RawUpdateHandler(raw_delete_update_handler), group=-1)
+            except Exception as e:
+                logging.warning(f"edit/delete handlers: {e}")
+            client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if (c.me and AUTO_SEEN_STATUS.get(c.me.id)) else None, filters.private & ~filters.me), group=-4)
+            client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
+            # فونت متن — با اولویت بالا
+            client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.outgoing), group=-20)
+            client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me), group=-19)
+            client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
+            client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
+            client.add_handler(MessageHandler(reply_based_controller, filters.me))
+
             await client.start()
             user_id = (await client.get_me()).id
+            logging.info(f"✅ Handlers ready for user {user_id} | text_font={TEXT_FONT_STATUS.get(user_id, 'none')}")
             break
         except Exception as e:
             if "FLOOD_WAIT" in str(e):
@@ -3038,24 +3060,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         USER_FONT_CHOICES[user_id] = font_style
     if user_id not in CLOCK_STATUS:
         CLOCK_STATUS[user_id] = not disable_clock
-
-    client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
-    client.add_handler(MessageHandler(pv_cache_handler, filters.private & ~filters.me & ~filters.bot), group=-8)
-    client.add_handler(MessageHandler(force_join_pv_handler, filters.private & ~filters.me & ~filters.bot), group=-6)
-    client.add_handler(MessageHandler(lambda c, m: m.delete() if (c.me and PV_LOCK_STATUS.get(c.me.id)) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
-    try:
-        from pyrogram.handlers import EditedMessageHandler, DeletedMessagesHandler, RawUpdateHandler
-        client.add_handler(EditedMessageHandler(edit_alert_handler, filters.private & ~filters.me), group=-2)
-        client.add_handler(DeletedMessagesHandler(delete_alert_handler), group=-2)
-        client.add_handler(RawUpdateHandler(raw_delete_update_handler), group=-1)
-    except Exception as e:
-        logging.warning(f"edit/delete handlers: {e}")
-    client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
-    client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
-    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text), group=-1)
-    client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
-    client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
-    client.add_handler(MessageHandler(reply_based_controller, filters.me))
+    logging.info(f"📝 text_font after load uid={user_id} -> {TEXT_FONT_STATUS.get(user_id, 'none')}")
 
     enemy_filter = filters.create(lambda _, c, m: bool(m.from_user and ((m.from_user.id, m.chat.id) in ACTIVE_ENEMIES.get(c.me.id, set()) or GLOBAL_ENEMY_STATUS.get(c.me.id))))
     client.add_handler(MessageHandler(enemy_handler, enemy_filter & ~filters.me), group=1)

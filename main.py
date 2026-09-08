@@ -655,900 +655,109 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 # تابع اعمال استایل‌های تلگرامی روی متن
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
-    """اعمال استایل تلگرامی با HTML (پایدارتر از Markdown)"""
+    """اعمال استایل متن با تگ HTML تلگرام"""
     if not text:
         return text
     import html as _html
-    t = _html.escape(text)
-    if style == "bold":
-        return f"<b>{t}</b>"
-    if style == "italic":
-        return f"<i>{t}</i>"
-    if style == "underline":
-        return f"<u>{t}</u>"
-    if style == "strikethrough":
-        return f"<s>{t}</s>"
-    if style == "spoiler":
-        return f"<spoiler>{t}</spoiler>"
-    if style == "mono":
-        return f"<code>{t}</code>"
-    if style == "codeblock":
-        return f"<pre>{t}</pre>"
-    if style == "quote":
-        return f"<blockquote>{t}</blockquote>"
-    return text
-
-SECRETARY_REPLY_MESSAGE = "سلام! در حال حاضر آفلاین هستم. در اولین فرصت پاسخ خواهم داد."
-
-HELP_TEXT = """
-╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
-    🛠 راهنمای ربات VIP MR
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
-
-⚠️ تنظیمات اصلی از طریق `پنل`
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-📌 مدیریت پیام و چت
-
-✦ حذف [تعداد]
-✦ ذخیره (ریپلای روی پیام)
-✦ تکرار [تعداد] (ریپلای)
-✦ تنظیم منشی [متن]
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-🛡 دفاعی و امنیتی
-
-✦ دشمن روشن | خاموش
-✦ لیست دشمن
-✦ بلاک روشن | بلاک خاموش
-✦ سکوت روشن | سکوت خاموش
-✦ ریاکشن [شکلک] | خاموش
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-📥 دانلودر
-
-✦ دانلود [لینک] - دانلود ویدیو
-✦ صوت [لینک] - استخراج صوت (MP3)
-
-پشتیبانی از: یوتیوب | تیک‌تاک | اینستاگرام 
-توییتر | آپارات | و ۱۰۰۰+ سایت دیگر
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-👤 اطلاعات کاربر
-
-✦ آیدی / .آیدی - اطلاعات کامل کاربر\n✦ دانلود [لینک] | صوت [لینک]\n✦ .دلار | .یورو | .طلا | ...\n✦ .تبدیل متن به ویس [متن]\n✦ .صدا زن | .صدا مرد | ...
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-🎲 سرگرمی
-
-✦ تاس | تاس [عدد]
-✦ بولینگ
-
-✧━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✧
-"""
-
-COMMAND_REGEX = r"^(راهنما|ذخیره|تکرار \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*|آیدی|\.آیدی|\.دلار|\.یورو|\.صدا .*|\.تبدیل متن به ویس.*|\..+)$"
-
-class DataManager:
-    def __init__(self, file_path):
-        self.file_path = file_path
-        self.data = self.load_data()
-
-    def load_data(self):
-        if os.path.exists(self.file_path):
-            try:
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # همیشه self.data هم به‌روز شود
-                    if not isinstance(data, dict):
-                        data = self.get_default_data()
-                    if "users" not in data:
-                        data["users"] = {}
-                    if "sessions" not in data:
-                        data["sessions"] = {}
-                    self.data = data
-                    logging.info(f"✅ Data loaded from {self.file_path} users={len(data.get('users', {}))}")
-                    return data
-            except Exception as e:
-                logging.error(f"Error loading data: {e}")
-                self.data = self.get_default_data()
-                return self.data
-        else:
-            logging.info(f"⚠️ No data file found, creating new one")
-            self.data = self.get_default_data()
-            return self.data
-
-    def reload(self):
-        """لود مجدد اجباری از دیسک"""
-        return self.load_data()
-
-    def get_default_data(self):
-        return {"users": {}, "sessions": {}}
-
-    def save_data(self):
-        try:
-            folder = os.path.dirname(os.path.abspath(self.file_path)) or "."
-            os.makedirs(folder, exist_ok=True)
-            tmp_path = self.file_path + ".tmp"
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.file_path)
-            logging.info(f"💾 Data saved to {self.file_path}")
-            return True
-        except Exception as e:
-            logging.error(f"Error saving data: {e}")
-            try:
-                if os.path.exists(self.file_path + ".tmp"):
-                    os.remove(self.file_path + ".tmp")
-            except Exception:
-                pass
-            return False
-
-    def get_user_data(self, user_id):
-        user_id_str = str(user_id)
-        default_user_structure = {
-            "user_id": user_id,
-            "phone": "",
-            "first_name": "",
-            "username": "",
-            "session_string": "",
-            "settings": {
-                "font": "bold",
-                "clock": True,
-                "bold": False,
-                "text_font": "none",
-                "secretary": False,
-                "secretary_msg": "",
-                "auto_seen": False,
-                "pv_lock": False,
-                "anti_login": False,
-                "typing": False,
-                "playing": False,
-                "global_enemy": False,
-                "copy_mode": False,
-                "translate": None,
-                "action": None,
-                "force_join_pv": False,
-                "force_join_channels": [],
-                "edit_alert": False,
-                "delete_alert": False,
-                "rotating_names": [],
-                "rotating_interval": 10,
-                "rotating_name": False
-            },
-            "enemies": [],
-            "muted": [],
-            "reactions": {},
-            "replied_users": [],
-            "enemy_queue": []
-        }
-
-        if user_id_str not in self.data["users"]:
-            self.data["users"][user_id_str] = default_user_structure
-            self.save_data()
-            return self.data["users"][user_id_str]
-
-        user_data = self.data["users"][user_id_str]
-
-        changed = False
-        for key, value in default_user_structure.items():
-            if key not in user_data:
-                user_data[key] = value
-                changed = True
-            elif key == "settings" and isinstance(value, dict):
-                if "settings" not in user_data or not isinstance(user_data.get("settings"), dict):
-                    user_data["settings"] = {}
-                    changed = True
-                for setting_key, setting_value in value.items():
-                    if setting_key not in user_data["settings"]:
-                        user_data["settings"][setting_key] = setting_value
-                        changed = True
-
-        if changed:
-            self.save_data()
-        return user_data
-
-    def update_user_data(self, user_id, updates):
-        user_data = self.get_user_data(user_id)
-
-        for key, value in updates.items():
-            if key == "settings" and isinstance(value, dict):
-                if "settings" not in user_data:
-                    user_data["settings"] = {}
-                for setting_key, setting_value in value.items():
-                    user_data["settings"][setting_key] = setting_value
-            else:
-                user_data[key] = value
-
-        self.save_data()
-        return user_data
-
-    def save_session(self, phone, session_string, user_id, first_name="", username=""):
-        self.data["sessions"][phone] = {
-            "string": session_string,
-            "user_id": user_id
-        }
-
-        user_data = self.get_user_data(user_id)
-        user_data["phone"] = phone
-        user_data["session_string"] = session_string
-        user_data["first_name"] = first_name
-        user_data["username"] = username
-
-        self.save_data()
-
-    def get_all_sessions(self):
-        return self.data["sessions"].items()
-
-    def get_all_users(self):
-        return self.data["users"]
-
-    def save_enemies(self, user_id, enemies_set):
-        user_data = self.get_user_data(user_id)
-        user_data["enemies"] = [list(item) for item in enemies_set]
-        self.save_data()
-
-    def get_enemies(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return set(tuple(item) for item in user_data.get("enemies", []))
-
-    def save_muted(self, user_id, muted_set):
-        user_data = self.get_user_data(user_id)
-        user_data["muted"] = [list(item) for item in muted_set]
-        self.save_data()
-
-    def get_muted(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return set(tuple(item) for item in user_data.get("muted", []))
-
-    def save_reactions(self, user_id, reactions_dict):
-        user_data = self.get_user_data(user_id)
-        user_data["reactions"] = reactions_dict
-        self.save_data()
-
-    def get_reactions(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return user_data.get("reactions", {})
-
-    def save_replied_users(self, user_id, replied_set):
-        user_data = self.get_user_data(user_id)
-        user_data["replied_users"] = list(replied_set)
-        self.save_data()
-
-    def get_replied_users(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return set(user_data.get("replied_users", []))
-
-    def save_enemy_queue(self, user_id, queue_list):
-        user_data = self.get_user_data(user_id)
-        user_data["enemy_queue"] = queue_list
-        self.save_data()
-
-    def get_enemy_queue(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return user_data.get("enemy_queue", [])
-
-    def save_original_profile(self, user_id, profile_data):
-        user_data = self.get_user_data(user_id)
-        user_data["original_profile"] = profile_data
-        self.save_data()
-
-    def get_original_profile(self, user_id):
-        user_data = self.get_user_data(user_id)
-        return user_data.get("original_profile", {})
-
-data_manager = DataManager(DATA_FILE)
-
-def load_all_states():
-    users_data = data_manager.get_all_users()
-
-    for user_id_str, user_data in users_data.items():
-        user_id = int(user_id_str)
-        settings = user_data.get("settings", {})
-
-        USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
-        CLOCK_STATUS[user_id] = settings.get("clock", True)
-        BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
-        TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
-        SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
-        SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
-        AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
-        PV_LOCK_STATUS[user_id] = settings.get("pv_lock", False)
-        ANTI_LOGIN_STATUS[user_id] = settings.get("anti_login", False)
-        TYPING_MODE_STATUS[user_id] = settings.get("typing", False)
-        PLAYING_MODE_STATUS[user_id] = settings.get("playing", False)
-        ACTION_STATUS[user_id] = settings.get("action")
-        if not ACTION_STATUS[user_id]:
-            if settings.get("typing"):
-                ACTION_STATUS[user_id] = "type"
-            elif settings.get("playing"):
-                ACTION_STATUS[user_id] = "game"
-        GLOBAL_ENEMY_STATUS[user_id] = settings.get("global_enemy", False)
-        COPY_MODE_STATUS[user_id] = settings.get("copy_mode", False)
-        AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
-        FORCE_JOIN_PV_STATUS[user_id] = settings.get("force_join_pv", False)
-        FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
-        EDIT_ALERT_STATUS[user_id] = settings.get("edit_alert", False)
-        DELETE_ALERT_STATUS[user_id] = settings.get("delete_alert", False)
-        ROTATING_NAMES[user_id] = list(settings.get("rotating_names") or [])
-        ROTATING_NAME_INTERVAL[user_id] = int(settings.get("rotating_interval") or 10)
-        ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
-        ROTATING_NAME_INDEX[user_id] = 0
-
-        ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
-        MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
-        AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {})
-        USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
-        ENEMY_REPLY_QUEUES[user_id] = user_data.get("enemy_queue", [])
-        ORIGINAL_PROFILE_DATA[user_id] = user_data.get("original_profile", {})
-        TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
-
-
-def apply_user_settings_from_db(user_id: int):
-    """بارگذاری کامل تنظیمات یک کاربر از دیتابیس به حافظه"""
-    try:
-        user_data = data_manager.get_user_data(user_id)
-        settings = user_data.get("settings") or {}
-        USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
-        CLOCK_STATUS[user_id] = bool(settings.get("clock", True)) if "clock" in settings else True
-        BOLD_MODE_STATUS[user_id] = bool(settings.get("bold", False))
-        TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
-        SECRETARY_MODE_STATUS[user_id] = bool(settings.get("secretary", False))
-        SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "") or ""
-        AUTO_SEEN_STATUS[user_id] = bool(settings.get("auto_seen", False))
-        PV_LOCK_STATUS[user_id] = bool(settings.get("pv_lock", False))
-        ANTI_LOGIN_STATUS[user_id] = bool(settings.get("anti_login", False))
-        TYPING_MODE_STATUS[user_id] = bool(settings.get("typing", False))
-        PLAYING_MODE_STATUS[user_id] = bool(settings.get("playing", False))
-        ACTION_STATUS[user_id] = settings.get("action")
-        GLOBAL_ENEMY_STATUS[user_id] = bool(settings.get("global_enemy", False))
-        COPY_MODE_STATUS[user_id] = bool(settings.get("copy_mode", False))
-        AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
-        FORCE_JOIN_PV_STATUS[user_id] = bool(settings.get("force_join_pv", False))
-        FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
-        EDIT_ALERT_STATUS[user_id] = bool(settings.get("edit_alert", False))
-        DELETE_ALERT_STATUS[user_id] = bool(settings.get("delete_alert", False))
-        ROTATING_NAMES[user_id] = list(settings.get("rotating_names") or [])
-        ROTATING_NAME_INTERVAL[user_id] = int(settings.get("rotating_interval") or 10)
-        ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
-        if user_id not in ROTATING_NAME_INDEX:
-            ROTATING_NAME_INDEX[user_id] = 0
-        if "TTS_VOICE_STATUS" in globals():
-            TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
-        ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
-        MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
-        AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
-        USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
-        ENEMY_REPLY_QUEUES[user_id] = user_data.get("enemy_queue", []) or []
-        ORIGINAL_PROFILE_DATA[user_id] = user_data.get("original_profile", {}) or {}
-        logging.info(
-            f"settings loaded uid={user_id} clock={CLOCK_STATUS.get(user_id)} "
-            f"force_join={FORCE_JOIN_PV_STATUS.get(user_id)} channels={len(FORCE_JOIN_CHANNELS.get(user_id) or [])} "
-            f"edit={EDIT_ALERT_STATUS.get(user_id)} delete={DELETE_ALERT_STATUS.get(user_id)}"
-        )
-    except Exception as e:
-        logging.error(f"apply_user_settings_from_db({user_id}): {e}")
-
-
-def persist_all_user_settings(user_id: int):
-    """ذخیره کامل همه تنظیمات حافظه روی دیسک"""
-    try:
-        settings = {
-            "font": USER_FONT_CHOICES.get(user_id, "bold"),
-            "clock": CLOCK_STATUS.get(user_id, True),
-            "bold": BOLD_MODE_STATUS.get(user_id, False),
-            "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
-            "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
-            "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
-            "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
-            "pv_lock": PV_LOCK_STATUS.get(user_id, False),
-            "anti_login": ANTI_LOGIN_STATUS.get(user_id, False),
-            "typing": TYPING_MODE_STATUS.get(user_id, False),
-            "playing": PLAYING_MODE_STATUS.get(user_id, False),
-            "action": ACTION_STATUS.get(user_id),
-            "global_enemy": GLOBAL_ENEMY_STATUS.get(user_id, False),
-            "copy_mode": COPY_MODE_STATUS.get(user_id, False),
-            "translate": AUTO_TRANSLATE_TARGET.get(user_id),
-            "force_join_pv": FORCE_JOIN_PV_STATUS.get(user_id, False),
-            "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
-            "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
-            "delete_alert": DELETE_ALERT_STATUS.get(user_id, False),
-            "rotating_names": list(ROTATING_NAMES.get(user_id) or []),
-            "rotating_interval": int(ROTATING_NAME_INTERVAL.get(user_id) or 10),
-            "rotating_name": bool(ROTATING_NAME_STATUS.get(user_id, False)),
-            "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن") if "TTS_VOICE_STATUS" in globals() else "زن",
-        }
-        data_manager.update_user_data(user_id, {"settings": settings})
-        # دشمنان و ... هم ذخیره شوند
-        if user_id in ACTIVE_ENEMIES:
-            data_manager.save_enemies(user_id, ACTIVE_ENEMIES[user_id])
-        if user_id in MUTED_USERS:
-            data_manager.save_muted(user_id, MUTED_USERS[user_id])
-        logging.info(f"settings persisted uid={user_id}")
-    except Exception as e:
-        logging.error(f"persist_all_user_settings({user_id}): {e}")
-
-
-ACTIVE_ENEMIES = {}
-ENEMY_REPLY_QUEUES = {}
-SECRETARY_MODE_STATUS = {}
-SECRETARY_CUSTOM_MESSAGES = {}
-USERS_REPLIED_IN_SECRETARY = {}
-MUTED_USERS = {}
-USER_FONT_CHOICES = {}
-CLOCK_STATUS = {}
-ROTATING_NAMES = {}  # user_id -> [names]
-ROTATING_NAME_INTERVAL = {}  # user_id -> seconds
-ROTATING_NAME_STATUS = {}  # user_id -> bool
-ROTATING_NAME_INDEX = {}  # user_id -> current index
-
-BOLD_MODE_STATUS = {}
-TEXT_FONT_STATUS = {}
-AUTO_SEEN_STATUS = {}
-AUTO_REACTION_TARGETS = {}
-AUTO_TRANSLATE_TARGET = {}
-ANTI_LOGIN_STATUS = {}
-COPY_MODE_STATUS = {}
-ORIGINAL_PROFILE_DATA = {}
-GLOBAL_ENEMY_STATUS = {}
-TYPING_MODE_STATUS = {}
-PLAYING_MODE_STATUS = {}
-PV_LOCK_STATUS = {}
-FORCE_JOIN_PV_STATUS = {}
-FORCE_JOIN_CHANNELS = {}
-EDIT_ALERT_STATUS = {}
-DELETE_ALERT_STATUS = {}
-# کش پیام‌های پیوی برای هشدار حذف/ویرایش
-PV_MSG_CACHE = {}  # owner_id -> {msg_id: {...}}
-
-# اکشن فعلی کاربر: None یا یکی از کلیدهای ACTION_MAP
-ACTION_STATUS = {}
-
-def _get_chat_action(name, fallback="TYPING"):
-    return getattr(ChatAction, name, getattr(ChatAction, fallback, ChatAction.TYPING))
-
-ACTION_MAP = {
-    "type": _get_chat_action("TYPING"),
-    "voice": _get_chat_action("RECORD_AUDIO", "RECORD_VOICE") if hasattr(ChatAction, "RECORD_AUDIO") or hasattr(ChatAction, "RECORD_VOICE") else _get_chat_action("TYPING"),
-    "round": _get_chat_action("RECORD_VIDEO_NOTE", "UPLOAD_VIDEO_NOTE"),
-    "photo": _get_chat_action("UPLOAD_PHOTO"),
-    "video": _get_chat_action("UPLOAD_VIDEO"),
-    "doc": _get_chat_action("UPLOAD_DOCUMENT"),
-    "sticker": _get_chat_action("CHOOSE_STICKER", "TYPING"),
-    "game": _get_chat_action("PLAYING"),
-    "online": _get_chat_action("TYPING"),
-}
-# اصلاح voice
-if hasattr(ChatAction, "RECORD_AUDIO"):
-    ACTION_MAP["voice"] = ChatAction.RECORD_AUDIO
-elif hasattr(ChatAction, "RECORD_VOICE"):
-    ACTION_MAP["voice"] = ChatAction.RECORD_VOICE
-
-ACTION_LABELS = {
-    "type": "تایپ",
-    "voice": "ویس",
-    "round": "ویدیو گرد",
-    "photo": "عکس",
-    "video": "ویدیو",
-    "doc": "سند",
-    "sticker": "استیکر",
-    "game": "بازی",
-    "online": "همیشه آنلاین",
-}
-
-ACTIVE_BOTS = {}
-
-# =============================================
-# سیستم نبرد الماس
-# =============================================
-active_games = {}
-
-load_all_states()
-
-def backup_sessions():
-    try:
-        sessions = get_all_sessions_from_db()
-        if sessions:
-            logging.info(f"💾 Backed up {len(sessions)} sessions")
-    except Exception as e:
-        logging.error(f"Backup failed: {e}")
-
-# =============================================
-# تابع ری‌استارت همه سشن‌ها (نسخه بهبود یافته)
-# =============================================
-async def restart_all_selfs():
-    sessions = get_all_sessions_from_db()
-    if not sessions:
-        return "❌ هیچ سشن فعالی یافت نشد!"
-    
-    success_count = 0
-    fail_count = 0
-    
-    # اول همه سشن‌های فعال رو تمیز خاموش کن
-    for uid in list(ACTIVE_BOTS.keys()):
-        try:
-            client, tasks = ACTIVE_BOTS[uid]
-            for task in tasks:
-                task.cancel()
-            try:
-                await client.stop()
-            except:
-                pass
-            del ACTIVE_BOTS[uid]
-            logging.info(f"🛑 Stopped old session for user {uid}")
-        except Exception as e:
-            logging.error(f"Error stopping session {uid}: {e}")
-    
-    await asyncio.sleep(1.5)
-    
-    for phone, session_string, user_id, first_name, username in sessions:
-        try:
-            # اگر هنوز چیزی مونده بود دوباره پاک کن
-            if user_id in ACTIVE_BOTS:
-                try:
-                    client, tasks = ACTIVE_BOTS[user_id]
-                    for task in tasks:
-                        task.cancel()
-                    await client.stop()
-                    del ACTIVE_BOTS[user_id]
-                except:
-                    pass
-            
-            asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
-            success_count += 1
-            await asyncio.sleep(1.8)  # فاصله بیشتر برای جلوگیری از Flood
-            
-        except Exception as e:
-            logging.error(f"Failed to restart session for {phone}: {e}")
-            fail_count += 1
-    
-    return f"✅ موفق: {success_count}\n❌ ناموفق: {fail_count}"
-
-# =============================================
-# تابع کمکی برای گرفتن نام کاربر
-# =============================================
-async def get_user_name(user_id):
-    try:
-        user = await manager_bot.get_users(user_id)
-        if user.username:
-            return f"@{user.username}"
-        else:
-            name = user.first_name or "کاربر"
-            return name[:18] + "..." if len(name) > 20 else name
-    except:
-        return f"کاربر {user_id}"
-
-# =============================================
-# توابع چک عضویت اجباری
-# =============================================
-async def is_user_subscribed(user_id, channel):
-    try:
-        await manager_bot.get_chat_member(channel, user_id)
-        return True
-    except Exception as e:
-        if "USER_NOT_PARTICIPANT" in str(e) or "Chat not found" in str(e):
-            return False
-        return False
-
-async def check_all_channels(user_id):
-    not_subscribed = []
-    for channel in FORCE_CHANNELS:
-        if not await is_user_subscribed(user_id, channel):
-            not_subscribed.append(channel)
-    return not_subscribed
-
-async def force_subscribe_check(client, message):
-    user_id = message.from_user.id
-    not_subscribed = await check_all_channels(user_id)
-
-    if not_subscribed:
-        buttons = []
-        for channel in not_subscribed:
-            channel_name = channel.replace("@", "")
-            buttons.append([InlineKeyboardButton(
-                f"✅ عضویت در {channel}",
-                url=f"https://t.me/{channel_name}"
-            )])
-        buttons.append([InlineKeyboardButton(
-            "🔄 بررسی مجدد عضویت",
-            callback_data="check_subscription"
-        )])
-
-        await message.reply_text(
-            "❌ **برای استفاده از ربات ابتدا در کانال‌های زیر عضو شوید:**\n\n"
-            "پس از عضویت، روی دکمه **بررسی مجدد** کلیک کنید.",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-        return False
-    return True
-
-def stylize_time(time_str: str, style: str) -> str:
-    font_map = CLOCK_FONT_STYLES.get(style) or FONT_STYLES.get(style) or CLOCK_FONT_STYLES["bold"]
-    return ''.join(font_map.get(char, char) for char in time_str)
-
-async def perform_clock_update_now(client, user_id):
-    try:
-        if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
-            current_font_style = USER_FONT_CHOICES.get(user_id, 'bold')
-            me = await client.get_me()
-            current_name = me.first_name
-            base_name = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', current_name).strip()
-
-            tehran_time = datetime.now(TEHRAN_TIMEZONE)
-            current_time_str = tehran_time.strftime("%H:%M")
-            stylized_time = stylize_time(current_time_str, current_font_style)
-            new_name = f"{base_name} {stylized_time}"
-
-            if new_name != current_name:
-                await client.update_profile(first_name=new_name)
-    except Exception as e:
-        logging.error(f"Immediate clock update failed: {e}")
-
-# =============================================
-# تابع ترجمه با deep-translator
-# =============================================
-async def translate_text(text: str, target_lang: str) -> str:
-    if not text or not target_lang:
-        return text
-    
-    lang_map = {
-        "en": "english",
-        "ru": "russian", 
-        "zh-CN": "chinese (simplified)"
+    t = _html.escape(str(text))
+    styles = {
+        "bold": f"<b>{t}</b>",
+        "italic": f"<i>{t}</i>",
+        "underline": f"<u>{t}</u>",
+        "strikethrough": f"<s>{t}</s>",
+        "spoiler": f"<spoiler>{t}</spoiler>",
+        "mono": f"<code>{t}</code>",
+        "codeblock": f"<pre>{t}</pre>",
+        "quote": f"<blockquote>{t}</blockquote>",
     }
-    
-    actual_lang = lang_map.get(target_lang, "english")
-    
-    try:
-        from deep_translator import GoogleTranslator
-        translated = await asyncio.to_thread(
-            GoogleTranslator(source='auto', target=actual_lang).translate,
-            text
-        )
-        if translated:
-            logging.info(f"🌐 Translated: {text[:30]}... -> {translated[:30]}...")
-            return translated
-        return text
-    except ImportError:
-        logging.warning("⚠️ deep-translator not installed, trying fallback...")
-        try:
-            encoded_text = quote(text)
-            url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data and data[0]:
-                            translated = ''.join(part[0] for part in data[0] if part[0])
-                            if translated:
-                                logging.info(f"🌐 Translated (fallback): {text[:30]}... -> {translated[:30]}...")
-                                return translated
-            return text
-        except Exception as e:
-            logging.error(f"❌ Fallback translation error: {e}")
-            return text
-    except Exception as e:
-        logging.error(f"❌ Translation error: {e}")
-        return text
+    return styles.get(style, text)
 
 
-async def rotate_profile_name_task(client: Client, user_id: int):
-    """چرخش خودکار اسم پروفایل"""
-    await asyncio.sleep(3)
-    while True:
-        try:
-            if not ROTATING_NAME_STATUS.get(user_id, False):
-                await asyncio.sleep(2)
-                continue
-            names = ROTATING_NAMES.get(user_id) or []
-            if len(names) < 1:
-                await asyncio.sleep(3)
-                continue
-            interval = max(3, int(ROTATING_NAME_INTERVAL.get(user_id) or 10))
-            idx = ROTATING_NAME_INDEX.get(user_id, 0) % len(names)
-            name = str(names[idx])[:64]
-            try:
-                # اگر ساعت فعال است، فقط پایه را عوض کن و بگذار ساعت آپدیت کند
-                if CLOCK_STATUS.get(user_id, False):
-                    me = await client.get_me()
-                    clean = re.sub(r'(?:\s*' + CLOCK_CHARS_REGEX_CLASS + r'+)+$', '', me.first_name or '').strip()
-                    # جایگزینی پایه با اسم چرخشی + ساعت فعلی
-                    from datetime import datetime
-                    now = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
-                    font = USER_FONT_CHOICES.get(user_id, "bold")
-                    styled = stylize_time(now, font) if "stylize_time" in dir() else now
-                    try:
-                        styled = stylize_time(now, font)
-                    except Exception:
-                        styled = now
-                    await client.update_profile(first_name=f"{name} {styled}".strip()[:64])
-                else:
-                    await client.update_profile(first_name=name)
-            except Exception as e:
-                logging.warning(f"rotate name update {user_id}: {e}")
-            ROTATING_NAME_INDEX[user_id] = (idx + 1) % len(names)
-            await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logging.error(f"rotate_profile_name_task: {e}")
-            await asyncio.sleep(5)
-
-
-async def update_profile_clock(client: Client, user_id: int):
-    while user_id in ACTIVE_BOTS:
-        try:
-            if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
-                await perform_clock_update_now(client, user_id)
-            await asyncio.sleep(60 - datetime.now(TEHRAN_TIMEZONE).second + 0.1)
-        except Exception:
-            await asyncio.sleep(60)
-
-async def anti_login_task(client: Client, user_id: int):
-    while user_id in ACTIVE_BOTS:
-        try:
-            if ANTI_LOGIN_STATUS.get(user_id, False):
-                auths = await client.invoke(functions.account.GetAuthorizations())
-                current_hash = next((a.hash for a in auths.authorizations if a.current), None)
-                if current_hash:
-                    for auth in auths.authorizations:
-                        if auth.hash != current_hash:
-                            await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
-                            await client.send_message("me", f"🚨 نشست غیرمجاز حذف شد: {auth.device_model}")
-            await asyncio.sleep(60)
-        except Exception:
-            await asyncio.sleep(120)
-
-async def status_action_task(client: Client, user_id: int):
-    chat_ids = []
-    last_fetch = 0
-    while user_id in ACTIVE_BOTS:
-        try:
-            action_key = ACTION_STATUS.get(user_id)
-            # سازگاری با سیستم قبلی
-            if not action_key:
-                if TYPING_MODE_STATUS.get(user_id, False):
-                    action_key = "type"
-                elif PLAYING_MODE_STATUS.get(user_id, False):
-                    action_key = "game"
-
-            if not action_key or action_key not in ACTION_MAP:
-                await asyncio.sleep(2)
-                continue
-
-            action = ACTION_MAP[action_key]
-            now = time.time()
-            if not chat_ids or (now - last_fetch > 300):
-                new_chats = []
-                async for dialog in client.get_dialogs(limit=30):
-                    if dialog.chat.type in [ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP]:
-                        new_chats.append(dialog.chat.id)
-                chat_ids = new_chats
-                last_fetch = now
-            for chat_id in chat_ids:
-                try:
-                    await client.send_chat_action(chat_id, action)
-                except:
-                    pass
-            await asyncio.sleep(4)
-        except Exception:
-            await asyncio.sleep(60)
-
-# =============================================
-# ⏰ سیستم کسر ساعتی الماس (self MR)
-# =============================================
-async def hourly_diamond_deduction_task():
-    """هر ساعت ۲ الماس از کاربران دارای سلف فعال کم می‌کند. اگر موجودی تمام شود سلف را خاموش می‌کند."""
-    while True:
-        try:
-            await asyncio.sleep(3600)  # هر ۱ ساعت
-            
-            active_user_ids = list(ACTIVE_BOTS.keys())
-            for user_id in active_user_ids:
-                try:
-                    balance = get_balance(user_id)
-                    
-                    if balance < HOURLY_COST:
-                        # موجودی کافی نیست → سلف را خاموش کن
-                        logging.warning(f"💸 User {user_id} out of diamonds. Stopping self MR...")
-                        
-                        if user_id in ACTIVE_BOTS:
-                            client, tasks = ACTIVE_BOTS.pop(user_id)
-                            for t in tasks:
-                                t.cancel()
-                            try:
-                                await client.stop()
-                            except:
-                                pass
-                        
-                        # حذف از دیتابیس سشن
-                        delete_session_by_user_id(user_id)
-                        set_self_start_time(user_id, 0)
-                        
-                        try:
-                            await manager_bot.send_message(
-                                user_id,
-                                f"⛔ **self MR خاموش شد**\n\n"
-                                f"موجودی الماس شما تمام شده است.\n"
-                                f"💎 برای فعال‌سازی مجدد حداقل `{SELF_PRICE}` الماس نیاز دارید."
-                            )
-                        except:
-                            pass
-                    else:
-                        # کسر ساعتی
-                        deduct_balance(user_id, HOURLY_COST)
-                        new_balance = get_balance(user_id)
-                        logging.info(f"💎 Deducted {HOURLY_COST} from user {user_id} | Remaining: {new_balance}")
-                        
-                        # اگر موجودی خیلی کم شد هشدار بده
-                        if new_balance <= HOURLY_COST * 3:
-                            try:
-                                await manager_bot.send_message(
-                                    user_id,
-                                    f"⚠️ **هشدار کمبود الماس**\n\n"
-                                    f"موجودی فعلی شما: `{new_balance}` الماس\n"
-                                    f"سلف شما به زودی خاموش خواهد شد."
-                                )
-                            except:
-                                pass
-                except Exception as e:
-                    logging.error(f"Error in hourly deduction for {user_id}: {e}")
-                    
-        except Exception as e:
-            logging.error(f"Hourly deduction task error: {e}")
-            await asyncio.sleep(60)
-
-# =============================================
-# 🔥 تابع اصلی اصلاح پیام‌ها (با ترجمه و فونت)
-# =============================================
 async def outgoing_message_modifier(client, message):
+    """اعمال فونت متن + ترجمه روی پیام‌های خروجی سلف"""
     try:
-        user_id = client.me.id if client.me else (await client.get_me()).id
-    except Exception:
-        return
-    if not message.text:
-        return
-    # دستورات را دست نزن
-    if re.match(COMMAND_REGEX, message.text.strip(), re.IGNORECASE):
-        return
-    # دستورات نقطه‌ای
-    if message.text.strip().startswith("."):
-        return
-
-    original_text = message.text
-    modified_text = original_text
-    used_style = False
-
-    # ===== ترجمه خودکار =====
-    target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-    if target_lang:
         try:
-            translated = await translate_text(modified_text, target_lang)
-            if translated and translated != modified_text:
-                modified_text = translated
-        except Exception as e:
-            logging.error(f"❌ Translation failed: {e}")
+            user_id = client.me.id if client.me else (await client.get_me()).id
+        except Exception:
+            return
 
-    # ===== فونت متن =====
-    text_font = TEXT_FONT_STATUS.get(user_id, "none")
-    if text_font and text_font != "none" and text_font in FONT_KEYS_ORDER:
-        modified_text = apply_telegram_style(modified_text, text_font)
-        used_style = True
+        if not message or not message.text:
+            return
+        if getattr(message, "service", None):
+            return
 
-    if used_style or modified_text != original_text:
+        text = message.text.strip()
+        if not text:
+            return
+
+        # دستورات را تغییر نده
+        if text.startswith(".") or text.startswith("/"):
+            return
         try:
-            await message.edit_text(modified_text, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logging.error(f"❌ Failed to edit styled message: {e}")
-            # تلاش بدون parse_mode
+            if re.match(COMMAND_REGEX, text, re.IGNORECASE):
+                return
+        except Exception:
+            pass
+
+        # دستورات فارسی بدون نقطه
+        if text in ("پنل", "panel", "راهنما", "تاس", "بولینگ", "آیدی") or text.startswith(("دانلود ", "صوت ", "ذخیره", "تکرار ")):
+            return
+
+        original_text = message.text
+        modified_text = original_text
+        used_html = False
+
+        # ترجمه
+        target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
+        if target_lang:
             try:
-                if modified_text != original_text and not used_style:
+                translated = await translate_text(modified_text, target_lang)
+                if translated and translated != modified_text:
+                    modified_text = translated
+            except Exception as e:
+                logging.error(f"translate error: {e}")
+
+        # فونت متن
+        text_font = TEXT_FONT_STATUS.get(user_id) or TEXT_FONT_STATUS.get(str(user_id)) or "none"
+        logging.info(f"font-check uid={user_id} font={text_font!r} text={original_text[:40]!r}")
+        if text_font and text_font != "none" and text_font in FONT_KEYS_ORDER:
+            modified_text = apply_telegram_style(modified_text, text_font)
+            used_html = True
+
+        if not used_html and modified_text == original_text:
+            return
+
+        # کمی صبر تا پیام روی سرور ثبت شود
+        await asyncio.sleep(0.25)
+
+        try:
+            if used_html:
+                await client.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=message.id,
+                    text=modified_text,
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await client.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=message.id,
+                    text=modified_text,
+                )
+            logging.info(f"font-applied uid={user_id} font={text_font}")
+        except Exception as e:
+            logging.error(f"font edit failed uid={user_id}: {e}")
+            # fallback: message.edit_text
+            try:
+                if used_html:
+                    await message.edit_text(modified_text, parse_mode=ParseMode.HTML)
+                else:
                     await message.edit_text(modified_text)
-            except Exception:
-                pass
+            except Exception as e2:
+                logging.error(f"font edit fallback failed: {e2}")
+    except Exception as e:
+        logging.error(f"outgoing_message_modifier error: {e}")
+
 
 async def enemy_handler(client, message):
     user_id = client.me.id
@@ -2815,6 +2024,33 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ اسم چرخشی خاموش شد | self MR")
         return
 
+    # ========== فونت متن با دستور ==========
+    if cmd.startswith(".فونت ") or cmd.startswith("فونت "):
+        name = cmd.split(None, 1)[-1].strip() if " " in cmd else ""
+        # map persian names
+        rev = {v: k for k, v in FONT_PERSIAN_NAMES.items()}
+        rev.update({
+            "بولد": "bold", "bold": "bold",
+            "ایتالیک": "italic", "italic": "italic",
+            "زیرخط": "underline", "underline": "underline",
+            "خط‌خورده": "strikethrough", "خط خورده": "strikethrough", "strikethrough": "strikethrough",
+            "اسپویلر": "spoiler", "spoiler": "spoiler",
+            "مونو": "mono", "mono": "mono",
+            "کد": "codeblock", "کدبلاک": "codeblock", "codeblock": "codeblock",
+            "نقل قول": "quote", "quote": "quote",
+            "خاموش": "none", "off": "none", "none": "none",
+        })
+        key = rev.get(name)
+        if not key:
+            opts = " | ".join(FONT_PERSIAN_NAMES.values())
+            await message.edit_text(f"❌ فونت نامعتبر.\\nمثال: `.فونت بولد`\\n\\nگزینه‌ها: {opts} | خاموش")
+            return
+        TEXT_FONT_STATUS[user_id] = key
+        persist_all_user_settings(user_id)
+        label = FONT_PERSIAN_NAMES.get(key, key)
+        await message.edit_text(f"✅ فونت متن: {label}" if key != "none" else "❌ فونت متن خاموش شد")
+        return
+
     # ========== انیمیشن ایموجی ==========
     anim_key = None
     if cmd.startswith("."):
@@ -3225,7 +2461,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         logging.warning(f"edit/delete handlers: {e}")
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
     client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
-    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me), group=-1)
+    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.outgoing), group=-1)
     client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
     client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
     client.add_handler(MessageHandler(reply_based_controller, filters.me))
@@ -3895,35 +3131,41 @@ async def callback_panel_handler(client, callback):
                 pass
             return
 
-        elif action.startswith("set_text_font_"):
+        elif "set_text_font_" in data:
             # data: set_text_font_bold_USERID | set_text_font_none_USERID
             parts = data.split("_")
-            target_user_id = int(parts[-1])
-            font_name = "_".join(parts[3:-1]) if len(parts) > 4 else parts[3]
-            
+            try:
+                target_user_id = int(parts[-1])
+            except Exception:
+                await callback.answer("خطا", show_alert=True)
+                return
+            font_name = "_".join(parts[3:-1]) if len(parts) > 4 else (parts[3] if len(parts) > 3 else "none")
+
             if callback.from_user.id != target_user_id:
                 await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
                 return
-            
+
             if font_name == "none":
                 TEXT_FONT_STATUS[target_user_id] = "none"
             elif font_name in FONT_KEYS_ORDER:
                 TEXT_FONT_STATUS[target_user_id] = font_name
             else:
+                logging.warning(f"invalid text font: {font_name} data={data}")
                 await callback.answer("❌ فونت نامعتبر", show_alert=True)
                 return
-            
+
+            logging.info(f"TEXT_FONT set uid={target_user_id} -> {TEXT_FONT_STATUS[target_user_id]}")
             data_manager.update_user_data(target_user_id, {"settings": {"text_font": TEXT_FONT_STATUS[target_user_id]}})
             try:
                 persist_all_user_settings(target_user_id)
             except Exception:
                 pass
-            
+
             try:
                 await edit_panel_colored(callback, target_user_id, 2)
             except Exception:
                 pass
-            
+
             label = FONT_PERSIAN_NAMES.get(font_name, font_name)
             await callback.answer(f"✅ فونت متن: {label}")
             return

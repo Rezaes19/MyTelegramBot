@@ -5188,6 +5188,72 @@ async def finalize(message, user_c, phone):
 # =============================================
 # تابع اصلی با مدیریت Flood
 # =============================================
+
+async def hourly_diamond_deduction_task():
+    """هر ساعت از کاربران فعال سلف، الماس کم می‌کند و در صورت کمبود سلف را خاموش می‌کند"""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            # لیست کپی از کلیدها تا هنگام تغییر دیکشنری خطا ندهد
+            active_ids = list(ACTIVE_BOTS.keys())
+            for user_id in active_ids:
+                try:
+                    # اگر کاربر بن شده
+                    if is_banned(user_id):
+                        continue
+                    start_ts = get_self_start_time(user_id) or 0
+                    if start_ts <= 0:
+                        # اگر زمان شروع ثبت نشده، الان ثبت کن و این دور را رد کن
+                        set_self_start_time(user_id)
+                        continue
+                    elapsed = int(time.time()) - int(start_ts)
+                    # هر ۳۶۰۰ ثانیه یک‌بار
+                    hours = elapsed // 3600
+                    if hours < 1:
+                        continue
+                    # برای جلوگیری از کسر چندباره: start_time را جلو بکش
+                    # فقط یک ساعت در هر دور
+                    if not deduct_balance(user_id, HOURLY_COST):
+                        # موجودی کافی نیست → خاموش کردن سلف
+                        try:
+                            if user_id in ACTIVE_BOTS:
+                                client, tasks = ACTIVE_BOTS.pop(user_id)
+                                for t in tasks:
+                                    try:
+                                        t.cancel()
+                                    except Exception:
+                                        pass
+                                try:
+                                    await client.stop()
+                                except Exception:
+                                    pass
+                            try:
+                                await manager_bot.send_message(
+                                    user_id,
+                                    f"⛔ سلف خاموش شد | self MR\n\n"
+                                    f"الماس کافی برای کسر ساعتی ({HOURLY_COST}) نداشتید.\n"
+                                    f"💎 موجودی: {get_balance(user_id):,}"
+                                )
+                            except Exception:
+                                pass
+                            set_self_start_time(user_id, 0)
+                            logging.info(f"Self stopped for {user_id} due to low balance")
+                        except Exception as e:
+                            logging.error(f"stop self on low balance {user_id}: {e}")
+                    else:
+                        # یک ساعت جلو
+                        set_self_start_time(user_id, int(start_ts) + 3600)
+                        logging.info(f"Hourly -{HOURLY_COST} diamond from {user_id}, bal={get_balance(user_id)}")
+                except Exception as e:
+                    logging.error(f"hourly deduct user {user_id}: {e}")
+            await asyncio.sleep(60)  # هر دقیقه چک
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"hourly_diamond_deduction_task: {e}")
+            await asyncio.sleep(60)
+
+
 async def main():
     try:
         init_session_db()

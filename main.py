@@ -1228,10 +1228,16 @@ async def status_action_task(client: Client, user_id: int):
 
 
 async def outgoing_message_modifier(client, message):
-    """اعمال فونت متن انتخاب‌شده از پنل روی پیام‌های خود کاربر"""
+    """اعمال فونت متن پنل روی پیام‌های خروجی کاربر"""
     try:
-        if not message or not message.text:
+        # فقط پیام‌های خودمان
+        is_out = bool(getattr(message, "outgoing", False))
+        is_self = bool(message.from_user and getattr(message.from_user, "is_self", False))
+        if not is_out and not is_self:
             return
+        if not message.text:
+            return
+
         try:
             user_id = client.me.id if client.me else (await client.get_me()).id
         except Exception:
@@ -1241,71 +1247,104 @@ async def outgoing_message_modifier(client, message):
         stripped = text.strip()
         if not stripped:
             return
+
+        # رد کردن دستورات
         if stripped.startswith(".") or stripped.startswith("/"):
+            return
+        if stripped in ("پنل", "panel", "راهنما", "تاس", "بولینگ", "آیدی"):
+            return
+        if stripped.startswith(("دانلود ", "صوت ", "ذخیره", "تکرار ", "حذف ")):
             return
         try:
             if re.match(COMMAND_REGEX, stripped, re.IGNORECASE):
                 return
         except Exception:
             pass
-        if stripped in ("پنل", "panel", "راهنما", "تاس", "بولینگ", "آیدی"):
-            return
 
         text_font = TEXT_FONT_STATUS.get(user_id, "none")
-        if isinstance(text_font, str):
-            text_font = text_font.strip()
-        else:
-            text_font = "none"
+        logging.info(f"FONT-HANDLER uid={user_id} font={text_font!r} chat={message.chat.id} mid={message.id} text={stripped[:40]!r}")
 
-        # ترجمه
-        modified = text
+        if not text_font or text_font == "none" or text_font not in FONT_KEYS_ORDER:
+            # ترجمه alone
+            target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
+            if target_lang:
+                try:
+                    tr = await translate_text(text, target_lang)
+                    if tr and tr != text:
+                        await asyncio.sleep(0.25)
+                        await message.edit_text(tr)
+                except Exception as e:
+                    logging.error(f"translate edit: {e}")
+            return
+
+        body = text
         target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
         if target_lang:
             try:
-                tr = await translate_text(modified, target_lang)
+                tr = await translate_text(body, target_lang)
                 if tr:
-                    modified = tr
-            except Exception as e:
-                logging.error(f"translate: {e}")
+                    body = tr
+            except Exception:
+                pass
 
-        if text_font == "none" or text_font not in FONT_KEYS_ORDER:
-            if modified != text:
-                try:
-                    await asyncio.sleep(0.2)
-                    await message.edit_text(modified)
-                except Exception:
-                    pass
-            return
+        await asyncio.sleep(0.4)
 
-        styled = apply_telegram_style(modified, text_font)
-        await asyncio.sleep(0.3)
+        # --- روش ۱: entities (پایدارترین) ---
         try:
-            await message.edit_text(styled, parse_mode=ParseMode.HTML)
-            logging.info(f"✅ FONT applied uid={user_id} font={text_font}")
+            from pyrogram.enums import MessageEntityType
+            from pyrogram.types import MessageEntity
+            ent_map = {
+                "bold": MessageEntityType.BOLD,
+                "italic": MessageEntityType.ITALIC,
+                "underline": MessageEntityType.UNDERLINE,
+                "strikethrough": MessageEntityType.STRIKETHROUGH,
+                "spoiler": MessageEntityType.SPOILER,
+                "mono": MessageEntityType.CODE,
+                "codeblock": MessageEntityType.PRE,
+                "quote": MessageEntityType.BLOCKQUOTE,
+            }
+            et = ent_map.get(text_font)
+            if et:
+                ln = len(body.encode("utf-16-le")) // 2
+                try:
+                    if text_font == "codeblock":
+                        entities = [MessageEntity(type=et, offset=0, length=ln, language="")]
+                    else:
+                        entities = [MessageEntity(type=et, offset=0, length=ln)]
+                except TypeError:
+                    entities = [MessageEntity(type=et, offset=0, length=ln)]
+                await client.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=message.id,
+                    text=body,
+                    entities=entities,
+                )
+                logging.info(f"✅ FONT entities OK uid={user_id} font={text_font}")
+                return
         except Exception as e:
-            logging.error(f"❌ FONT edit failed uid={user_id} font={text_font}: {e}")
-            # fallback entities
-            try:
-                from pyrogram.enums import MessageEntityType
-                from pyrogram.types import MessageEntity
-                ent_map = {
-                    "bold": MessageEntityType.BOLD,
-                    "italic": MessageEntityType.ITALIC,
-                    "underline": MessageEntityType.UNDERLINE,
-                    "strikethrough": MessageEntityType.STRIKETHROUGH,
-                    "spoiler": MessageEntityType.SPOILER,
-                    "mono": MessageEntityType.CODE,
-                    "codeblock": MessageEntityType.PRE,
-                    "quote": MessageEntityType.BLOCKQUOTE,
-                }
-                et = ent_map.get(text_font)
-                if et:
-                    ln = len(modified.encode("utf-16-le")) // 2
-                    ent = MessageEntity(type=et, offset=0, length=ln)
-                    await message.edit_text(modified, entities=[ent])
-                    logging.info(f"✅ FONT entities ok uid={user_id}")
-            except Exception as e2:
-                logging.error(f"❌ FONT entities failed: {e2}")
+            logging.error(f"FONT entities fail: {e}")
+
+        # --- روش ۲: HTML ---
+        try:
+            styled = apply_telegram_style(body, text_font)
+            await client.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.id,
+                text=styled,
+                parse_mode=ParseMode.HTML,
+            )
+            logging.info(f"✅ FONT html OK uid={user_id} font={text_font}")
+            return
+        except Exception as e:
+            logging.error(f"FONT html fail: {e}")
+
+        # --- روش ۳: message.edit_text ---
+        try:
+            styled = apply_telegram_style(body, text_font)
+            await message.edit_text(styled, parse_mode=ParseMode.HTML)
+            logging.info(f"✅ FONT message.edit OK uid={user_id}")
+        except Exception as e:
+            logging.error(f"FONT message.edit fail: {e}")
     except Exception as e:
         logging.error(f"outgoing_message_modifier: {e}")
 
@@ -3013,7 +3052,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         logging.warning(f"edit/delete handlers: {e}")
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
     client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
-    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & (filters.me | filters.outgoing)), group=-1)
+    client.add_handler(MessageHandler(outgoing_message_modifier, filters.text), group=-1)
     client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
     client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
     client.add_handler(MessageHandler(reply_based_controller, filters.me))

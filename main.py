@@ -1708,6 +1708,99 @@ async def force_join_pv_handler(client, message):
 
 
 
+
+async def save_message_powerful(client, reply):
+    """ذخیره قوی: متن، رسانه، و عکس/ویدیو نابودشونده (TTL)"""
+    if not reply:
+        return False, "❌ روی پیام ریپلای کنید."
+
+    # ۱) تلاش فوروارد معمولی
+    try:
+        await reply.forward("me")
+        return True, None
+    except Exception as e1:
+        logging.info(f"forward save failed: {e1}")
+
+    # ۲) کپی محتوا
+    try:
+        await reply.copy("me")
+        return True, None
+    except Exception as e2:
+        logging.info(f"copy save failed: {e2}")
+
+    # ۳) دانلود و آپلود مجدد (برای TTL / view-once / محدودیت فوروارد)
+    caption = reply.caption or ""
+    text = reply.text or ""
+    try:
+        # متن خالی بدون رسانه
+        if text and not reply.media:
+            await client.send_message("me", f"💾 ذخیره شد | self MR\n\n{text}")
+            return True, None
+
+        if not reply.media and not text:
+            await client.send_message("me", "💾 پیام بدون محتوای قابل ذخیره.")
+            return True, None
+
+        path = None
+        try:
+            path = await client.download_media(reply)
+        except Exception as e3:
+            # بعضی مدیاهای تایم‌دار فقط یک‌بار قابل خواندن‌اند
+            if text or caption:
+                await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
+                return True, None
+            return False, f"❌ دانلود ممکن نشد (احتمالاً منقضی شده): {e3}"
+
+        if not path or not os.path.exists(path):
+            if text or caption:
+                await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
+                return True, None
+            return False, "❌ فایل دانلود نشد."
+
+        cap = f"💾 ذخیره | self MR"
+        if caption:
+            cap += f"\n\n{caption}"
+        # TTL info
+        ttl = getattr(reply, "ttl_seconds", None) or getattr(getattr(reply, "media", None), "ttl_seconds", None)
+        if ttl:
+            cap += f"\n⏱ رسانه تایم‌دار بود ({ttl}s)"
+
+        try:
+            if reply.photo or (path.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))):
+                await client.send_photo("me", path, caption=cap)
+            elif reply.video or path.lower().endswith((".mp4", ".mov", ".mkv")):
+                await client.send_video("me", path, caption=cap)
+            elif reply.voice or path.lower().endswith(".ogg"):
+                await client.send_voice("me", path, caption=cap)
+            elif reply.video_note:
+                try:
+                    await client.send_video_note("me", path)
+                    if caption or ttl:
+                        await client.send_message("me", cap)
+                except Exception:
+                    await client.send_video("me", path, caption=cap)
+            elif reply.audio or path.lower().endswith((".mp3", ".m4a")):
+                await client.send_audio("me", path, caption=cap)
+            elif reply.animation or path.lower().endswith(".gif"):
+                await client.send_animation("me", path, caption=cap)
+            elif reply.sticker:
+                try:
+                    await client.send_sticker("me", path)
+                except Exception:
+                    await client.send_document("me", path, caption=cap)
+            else:
+                await client.send_document("me", path, caption=cap)
+        finally:
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+        return True, None
+    except Exception as e:
+        return False, f"❌ ذخیره ناموفق: {e}"
+
+
 async def convert_video_to_note(client, message):
     """ریپلای روی ویدیو → ویدیو مسیج (گرد)"""
     reply = message.reply_to_message
@@ -2509,14 +2602,73 @@ async def reply_based_controller(client, message):
             pass
         return
 
+    # ========== تغییر پروفایل ==========
+    if cmd.startswith(".اسم ") or cmd.startswith("اسم "):
+        new_name = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if not new_name:
+            await message.edit_text("❌ مثال:\\n`.اسم نام جدید`")
+            return
+        if len(new_name) > 64:
+            await message.edit_text("❌ اسم حداکثر ۶۴ کاراکتر.")
+            return
+        try:
+            await client.update_profile(first_name=new_name)
+            await message.edit_text(f"✅ اسم تغییر کرد:\\n`{new_name}`")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا در تغییر اسم: {e}")
+        return
+
+    if cmd.startswith(".بیو ") or cmd.startswith("بیو ") or cmd.startswith(".بیوگرافی ") or cmd.startswith("بیوگرافی "):
+        new_bio = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if new_bio is None:
+            new_bio = ""
+        if len(new_bio) > 70:
+            await message.edit_text("❌ بیو حداکثر ۷۰ کاراکتر است.")
+            return
+        try:
+            await client.update_profile(bio=new_bio)
+            await message.edit_text(f"✅ بیوگرافی تغییر کرد:\\n`{new_bio or 'خالی'}`")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا در تغییر بیو: {e}")
+        return
+
+    if cmd.startswith(".یوزرنیم ") or cmd.startswith("یوزرنیم ") or cmd.startswith(".username "):
+        uname = cmd.split(" ", 1)[1].strip().lstrip("@") if " " in cmd else ""
+        if not uname:
+            await message.edit_text("❌ مثال:\\n`.یوزرنیم myname`")
+            return
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_]{4,31}$", uname):
+            await message.edit_text("❌ یوزرنیم نامعتبر (۵ تا ۳۲ کاراکتر، حرف اول انگلیسی).")
+            return
+        try:
+            await client.set_username(uname)
+            await message.edit_text(f"✅ یوزرنیم تغییر کرد:\\n@{uname}")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا در تغییر یوزرنیم: {e}")
+        return
+
+
     if not message.reply_to_message:
         return
 
     target_id = message.reply_to_message.from_user.id if message.reply_to_message.from_user else None
 
-    if cmd == "ذخیره":
-        await message.reply_to_message.forward("me")
-        await message.edit_text("💾 ذخیره شد.")
+    if cmd in ("ذخیره", ".ذخیره"):
+        try:
+            await message.edit_text("⏳ در حال ذخیره...")
+        except Exception:
+            pass
+        ok, err = await save_message_powerful(client, message.reply_to_message)
+        if ok:
+            try:
+                await message.edit_text("💾 ذخیره شد | self MR")
+            except Exception:
+                pass
+        else:
+            try:
+                await message.edit_text(err or "❌ ذخیره ناموفق")
+            except Exception:
+                await client.send_message(message.chat.id, err or "❌ ذخیره ناموفق")
         return
 
     if cmd.startswith("تکرار "):
@@ -2749,6 +2901,16 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🎥 ساخت ویدیو گرد", f"panel_page_10_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("💾 ذخیره", f"panel_page_13_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("✏️ تغییر اسم", f"panel_page_14_{user_id}", style="primary"),
+                _styled_btn("📝 تغییر بیوگرافی", f"panel_page_15_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🔖 تغییر یوزرنیم", f"panel_page_16_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -2952,6 +3114,12 @@ def build_panel_keyboard(user_id, page=1):
         return [
             [_styled_btn(f"وضعیت: {'on ✅' if st else 'off ❌'}", f"toggle_delete_alert_{user_id}", st)],
             [_styled_btn("⬅️ بازگشت", f"panel_page_3_{user_id}", style="danger")],
+        ]
+
+    # ========== صفحات راهنما: ذخیره / پروفایل ==========
+    elif page in (13, 14, 15, 16):
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
     # پیش‌فرض
@@ -3443,6 +3611,90 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 13:
+                    help_text = (
+                        "ذخیره | self MR\n\n"
+                        "برای استفاده:\n"
+                        "ریپلای + .ذخیره\n\n"
+                        "پشتیبانی از:\n"
+                        "• متن، عکس، ویدیو، ویس، فایل\n"
+                        "• عکس/ویدیو نابودشونده (تایم‌دار)\n"
+                        "خروجی در Saved Messages ذخیره می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 13))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 13))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 13)
+                    except Exception:
+                        pass
+                    return
+                if page == 14:
+                    help_text = (
+                        "تغییر اسم | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".اسم نام جدید\n\n"
+                        "مثال:\n"
+                        ".اسم محمدرضا"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 14))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 14))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 14)
+                    except Exception:
+                        pass
+                    return
+                if page == 15:
+                    help_text = (
+                        "تغییر بیوگرافی | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".بیو متن بیوگرافی\n\n"
+                        "مثال:\n"
+                        ".بیو زندگی ادامه دارد\n\n"
+                        "حداکثر ۷۰ کاراکتر"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 15))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 15))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 15)
+                    except Exception:
+                        pass
+                    return
+                if page == 16:
+                    help_text = (
+                        "تغییر یوزرنیم | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".یوزرنیم myname\n\n"
+                        "مثال:\n"
+                        ".یوزرنیم self_mr\n\n"
+                        "۵ تا ۳۲ کاراکتر | حرف اول انگلیسی"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 16))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 16))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 16)
+                    except Exception:
+                        pass
+                    return
                 if page == 11:
                     st = EDIT_ALERT_STATUS.get(target_user_id, False)
                     help_text = (

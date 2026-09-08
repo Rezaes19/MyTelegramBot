@@ -14,7 +14,7 @@ from pyrogram.enums import ChatType, ChatAction, ParseMode
 from pyrogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    InlineQueryResultArticle, InputTextMessageContent
+    InlineQueryResultArticle, InputTextMessageContent, MessageEntity
 )
 from pyrogram.raw import functions
 from pyrogram.errors import SessionPasswordNeeded, ChatSendInlineForbidden
@@ -655,22 +655,29 @@ CLOCK_CHARS_REGEX_CLASS = f"[{re.escape(ALL_CLOCK_CHARS)}]"
 # تابع اعمال استایل‌های تلگرامی روی متن
 # =============================================
 def apply_telegram_style(text: str, style: str) -> str:
-    """اعمال استایل متن با تگ HTML تلگرام"""
     if not text:
         return text
-    import html as _html
-    t = _html.escape(str(text))
-    styles = {
-        "bold": f"<b>{t}</b>",
-        "italic": f"<i>{t}</i>",
-        "underline": f"<u>{t}</u>",
-        "strikethrough": f"<s>{t}</s>",
-        "spoiler": f"<spoiler>{t}</spoiler>",
-        "mono": f"<code>{t}</code>",
-        "codeblock": f"<pre>{t}</pre>",
-        "quote": f"<blockquote>{t}</blockquote>",
-    }
-    return styles.get(style, text)
+    if style == "bold":
+        return f"**{text}**"
+    elif style == "italic":
+        return f"__{text}__"
+    elif style == "quote":
+        return f"> {text}"
+    elif style == "strikethrough":
+        return f"~~{text}~~"
+    elif style == "underline":
+        return f"<u>{text}</u>"
+    elif style == "spoiler":
+        return f"||{text}||"
+    elif style == "mono":
+        return f"`{text}`"
+    elif style == "codeblock":
+        return f"```\n{text}\n```"
+    return text
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
 
 
 HELP_TEXT = """
@@ -1219,90 +1226,96 @@ async def status_action_task(client: Client, user_id: int):
 
 
 async def outgoing_message_modifier(client, message):
-    """اعمال فونت متن پنل روی پیام‌های خروجی"""
+    """اعمال استایل فونت متن از پنل (entities)"""
     try:
-        if not message or not getattr(message, "text", None):
+        if not message or not message.text:
             return
-        try:
-            user_id = client.me.id if client.me else (await client.get_me()).id
-        except Exception:
-            return
+        user_id = client.me.id if client.me else None
+        if not user_id:
+            try:
+                user_id = (await client.get_me()).id
+            except Exception:
+                return
 
-        raw = message.text
-        text = raw.strip()
-        if not text:
+        text = message.text
+        stripped = text.strip()
+        if not stripped:
             return
-        # دستورات را تغییر نده
-        if text.startswith(".") or text.startswith("/"):
-            return
-        if text in ("پنل", "panel", "راهنما", "تاس", "بولینگ", "آیدی"):
-            return
-        if text.startswith(("دانلود ", "صوت ", "ذخیره", "تکرار ", "تنظیم ", "افزودن ")):
+        if stripped.startswith(".") or stripped.startswith("/"):
             return
         try:
-            if re.match(COMMAND_REGEX, text, re.IGNORECASE):
+            if re.match(COMMAND_REGEX, stripped, re.IGNORECASE):
                 return
         except Exception:
             pass
-
-        text_font = TEXT_FONT_STATUS.get(user_id, "none")
-        if not text_font or text_font == "none" or text_font not in FONT_KEYS_ORDER:
-            # فقط ترجمه؟
-            target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
-            if not target_lang:
-                return
-            try:
-                translated = await translate_text(raw, target_lang)
-                if translated and translated != raw:
-                    await asyncio.sleep(0.2)
-                    await message.edit_text(translated)
-            except Exception as e:
-                logging.error(f"translate-only edit: {e}")
+        if stripped in ("پنل", "panel", "راهنما"):
             return
 
-        body = raw
+        # ترجمه
+        modified = text
         target_lang = AUTO_TRANSLATE_TARGET.get(user_id)
         if target_lang:
             try:
-                tr = await translate_text(body, target_lang)
+                tr = await translate_text(modified, target_lang)
                 if tr:
-                    body = tr
+                    modified = tr
             except Exception:
                 pass
 
-        styled = apply_telegram_style(body, text_font)
-        await asyncio.sleep(0.35)
-        try:
-            await message.edit_text(styled, parse_mode=ParseMode.HTML)
-            logging.info(f"✅ text font applied uid={user_id} font={text_font}")
-        except Exception as e1:
-            logging.error(f"font edit HTML failed: {e1}")
-            try:
-                await client.edit_message_text(
-                    message.chat.id, message.id, styled, parse_mode=ParseMode.HTML
-                )
-            except Exception as e2:
-                logging.error(f"font edit HTML2 failed: {e2}")
-                # آخرین تلاش: markdown ساده برای bold/italic
+        text_font = TEXT_FONT_STATUS.get(user_id, "none")
+        if not text_font or text_font == "none" or text_font not in FONT_KEYS_ORDER:
+            if modified != text:
                 try:
-                    md = body
-                    if text_font == "bold":
-                        md = f"**{body}**"
-                    elif text_font == "italic":
-                        md = f"__{body}__"
-                    elif text_font == "mono":
-                        md = f"`{body}`"
-                    elif text_font == "spoiler":
-                        md = f"||{body}||"
-                    elif text_font == "strikethrough":
-                        md = f"~~{body}~~"
-                    else:
-                        return
-                    await message.edit_text(md, parse_mode=ParseMode.MARKDOWN)
-                except Exception as e3:
-                    logging.error(f"font edit MD failed: {e3}")
+                    await asyncio.sleep(0.2)
+                    await message.edit_text(modified)
+                except Exception:
+                    pass
+            return
+
+        from pyrogram.enums import MessageEntityType
+        ent_map = {
+            "bold": MessageEntityType.BOLD,
+            "italic": MessageEntityType.ITALIC,
+            "underline": MessageEntityType.UNDERLINE,
+            "strikethrough": MessageEntityType.STRIKETHROUGH,
+            "spoiler": MessageEntityType.SPOILER,
+            "mono": MessageEntityType.CODE,
+            "codeblock": MessageEntityType.PRE,
+            "quote": MessageEntityType.BLOCKQUOTE,
+        }
+        ent_type = ent_map.get(text_font)
+        if not ent_type:
+            return
+
+        length = _utf16_len(modified)
+        if length <= 0:
+            return
+        try:
+            if text_font == "codeblock":
+                entities = [MessageEntity(type=ent_type, offset=0, length=length, language="")]
+            else:
+                entities = [MessageEntity(type=ent_type, offset=0, length=length)]
+        except TypeError:
+            entities = [MessageEntity(type=ent_type, offset=0, length=length)]
+
+        await asyncio.sleep(0.25)
+        try:
+            await message.edit_text(modified, entities=entities)
+            logging.info(f"text-font ok uid={user_id} font={text_font}")
+        except Exception as e:
+            logging.error(f"text-font entity edit fail: {e}")
+            # fallback markdown/html
+            try:
+                styled = apply_telegram_style(modified, text_font)
+                if text_font == "underline":
+                    await message.edit_text(styled, parse_mode=ParseMode.HTML)
+                else:
+                    await message.edit_text(styled, parse_mode=ParseMode.MARKDOWN)
+            except Exception as e2:
+                logging.error(f"text-font fallback fail: {e2}")
     except Exception as e:
-        logging.error(f"outgoing_message_modifier error: {e}")
+        logging.error(f"outgoing_message_modifier: {e}")
+
 
 
 async def enemy_handler(client, message):

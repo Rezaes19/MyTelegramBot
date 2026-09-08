@@ -738,26 +738,51 @@ class DataManager:
             try:
                 with open(self.file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    logging.info(f"✅ Data loaded from {self.file_path}")
+                    # همیشه self.data هم به‌روز شود
+                    if not isinstance(data, dict):
+                        data = self.get_default_data()
+                    if "users" not in data:
+                        data["users"] = {}
+                    if "sessions" not in data:
+                        data["sessions"] = {}
+                    self.data = data
+                    logging.info(f"✅ Data loaded from {self.file_path} users={len(data.get('users', {}))}")
                     return data
             except Exception as e:
                 logging.error(f"Error loading data: {e}")
-                return self.get_default_data()
+                self.data = self.get_default_data()
+                return self.data
         else:
             logging.info(f"⚠️ No data file found, creating new one")
-            return self.get_default_data()
+            self.data = self.get_default_data()
+            return self.data
+
+    def reload(self):
+        """لود مجدد اجباری از دیسک"""
+        return self.load_data()
 
     def get_default_data(self):
         return {"users": {}, "sessions": {}}
 
     def save_data(self):
         try:
-            with open(self.file_path, 'w', encoding='utf-8') as f:
+            folder = os.path.dirname(os.path.abspath(self.file_path)) or "."
+            os.makedirs(folder, exist_ok=True)
+            tmp_path = self.file_path + ".tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.file_path)
             logging.info(f"💾 Data saved to {self.file_path}")
             return True
         except Exception as e:
             logging.error(f"Error saving data: {e}")
+            try:
+                if os.path.exists(self.file_path + ".tmp"):
+                    os.remove(self.file_path + ".tmp")
+            except Exception:
+                pass
             return False
 
     def get_user_data(self, user_id):
@@ -803,17 +828,22 @@ class DataManager:
 
         user_data = self.data["users"][user_id_str]
 
+        changed = False
         for key, value in default_user_structure.items():
             if key not in user_data:
                 user_data[key] = value
+                changed = True
             elif key == "settings" and isinstance(value, dict):
-                if "settings" not in user_data:
+                if "settings" not in user_data or not isinstance(user_data.get("settings"), dict):
                     user_data["settings"] = {}
+                    changed = True
                 for setting_key, setting_value in value.items():
                     if setting_key not in user_data["settings"]:
                         user_data["settings"][setting_key] = setting_value
+                        changed = True
 
-        self.save_data()
+        if changed:
+            self.save_data()
         return user_data
 
     def update_user_data(self, user_id, updates):
@@ -945,6 +975,85 @@ def load_all_states():
         USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
         ENEMY_REPLY_QUEUES[user_id] = user_data.get("enemy_queue", [])
         ORIGINAL_PROFILE_DATA[user_id] = user_data.get("original_profile", {})
+        TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
+
+
+def apply_user_settings_from_db(user_id: int):
+    """بارگذاری کامل تنظیمات یک کاربر از دیتابیس به حافظه"""
+    try:
+        user_data = data_manager.get_user_data(user_id)
+        settings = user_data.get("settings") or {}
+        USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
+        CLOCK_STATUS[user_id] = bool(settings.get("clock", True)) if "clock" in settings else True
+        BOLD_MODE_STATUS[user_id] = bool(settings.get("bold", False))
+        TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
+        SECRETARY_MODE_STATUS[user_id] = bool(settings.get("secretary", False))
+        SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "") or ""
+        AUTO_SEEN_STATUS[user_id] = bool(settings.get("auto_seen", False))
+        PV_LOCK_STATUS[user_id] = bool(settings.get("pv_lock", False))
+        ANTI_LOGIN_STATUS[user_id] = bool(settings.get("anti_login", False))
+        TYPING_MODE_STATUS[user_id] = bool(settings.get("typing", False))
+        PLAYING_MODE_STATUS[user_id] = bool(settings.get("playing", False))
+        ACTION_STATUS[user_id] = settings.get("action")
+        GLOBAL_ENEMY_STATUS[user_id] = bool(settings.get("global_enemy", False))
+        COPY_MODE_STATUS[user_id] = bool(settings.get("copy_mode", False))
+        AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
+        FORCE_JOIN_PV_STATUS[user_id] = bool(settings.get("force_join_pv", False))
+        FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
+        EDIT_ALERT_STATUS[user_id] = bool(settings.get("edit_alert", False))
+        DELETE_ALERT_STATUS[user_id] = bool(settings.get("delete_alert", False))
+        if "TTS_VOICE_STATUS" in globals():
+            TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
+        ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
+        MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
+        AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
+        USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
+        ENEMY_REPLY_QUEUES[user_id] = user_data.get("enemy_queue", []) or []
+        ORIGINAL_PROFILE_DATA[user_id] = user_data.get("original_profile", {}) or {}
+        logging.info(
+            f"settings loaded uid={user_id} clock={CLOCK_STATUS.get(user_id)} "
+            f"force_join={FORCE_JOIN_PV_STATUS.get(user_id)} channels={len(FORCE_JOIN_CHANNELS.get(user_id) or [])} "
+            f"edit={EDIT_ALERT_STATUS.get(user_id)} delete={DELETE_ALERT_STATUS.get(user_id)}"
+        )
+    except Exception as e:
+        logging.error(f"apply_user_settings_from_db({user_id}): {e}")
+
+
+def persist_all_user_settings(user_id: int):
+    """ذخیره کامل همه تنظیمات حافظه روی دیسک"""
+    try:
+        settings = {
+            "font": USER_FONT_CHOICES.get(user_id, "bold"),
+            "clock": CLOCK_STATUS.get(user_id, True),
+            "bold": BOLD_MODE_STATUS.get(user_id, False),
+            "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
+            "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
+            "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
+            "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
+            "pv_lock": PV_LOCK_STATUS.get(user_id, False),
+            "anti_login": ANTI_LOGIN_STATUS.get(user_id, False),
+            "typing": TYPING_MODE_STATUS.get(user_id, False),
+            "playing": PLAYING_MODE_STATUS.get(user_id, False),
+            "action": ACTION_STATUS.get(user_id),
+            "global_enemy": GLOBAL_ENEMY_STATUS.get(user_id, False),
+            "copy_mode": COPY_MODE_STATUS.get(user_id, False),
+            "translate": AUTO_TRANSLATE_TARGET.get(user_id),
+            "force_join_pv": FORCE_JOIN_PV_STATUS.get(user_id, False),
+            "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
+            "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
+            "delete_alert": DELETE_ALERT_STATUS.get(user_id, False),
+            "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن") if "TTS_VOICE_STATUS" in globals() else "زن",
+        }
+        data_manager.update_user_data(user_id, {"settings": settings})
+        # دشمنان و ... هم ذخیره شوند
+        if user_id in ACTIVE_ENEMIES:
+            data_manager.save_enemies(user_id, ACTIVE_ENEMIES[user_id])
+        if user_id in MUTED_USERS:
+            data_manager.save_muted(user_id, MUTED_USERS[user_id])
+        logging.info(f"settings persisted uid={user_id}")
+    except Exception as e:
+        logging.error(f"persist_all_user_settings({user_id}): {e}")
+
 
 ACTIVE_ENEMIES = {}
 ENEMY_REPLY_QUEUES = {}
@@ -1492,64 +1601,84 @@ async def god_mode_handler(client, message):
 
 def cache_pv_message(owner_id: int, message):
     """ذخیره پیام پیوی برای هشدار حذف/ویرایش"""
-    if not message or not message.id:
-        return
-    if not EDIT_ALERT_STATUS.get(owner_id) and not DELETE_ALERT_STATUS.get(owner_id):
-        return
     try:
-        if not message.chat or message.chat.type != ChatType.PRIVATE:
+        if not message or not getattr(message, "id", None):
             return
+        if not EDIT_ALERT_STATUS.get(owner_id) and not DELETE_ALERT_STATUS.get(owner_id):
+            return
+        try:
+            if not message.chat or str(getattr(message.chat, "type", "")).lower().find("private") < 0:
+                # ChatType.PRIVATE
+                if message.chat and message.chat.type != ChatType.PRIVATE:
+                    return
+        except Exception:
+            pass
+        if message.from_user and getattr(message.from_user, "is_self", False):
+            return
+        if not message.from_user:
+            return
+
+        if owner_id not in PV_MSG_CACHE:
+            PV_MSG_CACHE[owner_id] = {}
+        cache = PV_MSG_CACHE[owner_id]
+
+        text = message.text or message.caption or ""
+        media_type = None
+        if message.photo:
+            media_type = "عکس"
+        elif message.video:
+            media_type = "ویدیو"
+        elif message.voice:
+            media_type = "ویس"
+        elif message.video_note:
+            media_type = "ویدیو مسیج"
+        elif message.sticker:
+            media_type = "استیکر"
+        elif message.document:
+            media_type = "فایل"
+        elif message.audio:
+            media_type = "آهنگ"
+        elif message.animation:
+            media_type = "گیف"
+
+        u = message.from_user
+        cache[int(message.id)] = {
+            "text": text,
+            "media_type": media_type,
+            "user_id": u.id,
+            "name": f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id),
+            "username": u.username or "",
+            "chat_id": message.chat.id if message.chat else None,
+            "date": getattr(message, "date", None),
+        }
+        if len(cache) > 1000:
+            for k in sorted(cache.keys())[:300]:
+                cache.pop(k, None)
+        logging.info(f"PV cache store owner={owner_id} msg={message.id} keys={len(cache)}")
+    except Exception as e:
+        logging.error(f"cache_pv_message: {e}")
+
+
+async def _owner_id(client):
+    try:
+        if client.me and client.me.id:
+            return client.me.id
     except Exception:
-        return
-    if not message.from_user or message.from_user.is_self:
-        return
-
-    if owner_id not in PV_MSG_CACHE:
-        PV_MSG_CACHE[owner_id] = {}
-    cache = PV_MSG_CACHE[owner_id]
-
-    text = message.text or message.caption or ""
-    media_type = None
-    if message.photo:
-        media_type = "عکس"
-    elif message.video:
-        media_type = "ویدیو"
-    elif message.voice:
-        media_type = "ویس"
-    elif message.video_note:
-        media_type = "ویدیو مسیج"
-    elif message.sticker:
-        media_type = "استیکر"
-    elif message.document:
-        media_type = "فایل"
-    elif message.audio:
-        media_type = "آهنگ"
-    elif message.animation:
-        media_type = "گیف"
-
-    u = message.from_user
-    cache[message.id] = {
-        "text": text,
-        "media_type": media_type,
-        "user_id": u.id,
-        "name": f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id),
-        "username": u.username or "",
-        "chat_id": message.chat.id,
-        "date": getattr(message, "date", None),
-    }
-    # محدود کردن کش
-    if len(cache) > 800:
-        keys = sorted(cache.keys())
-        for k in keys[:200]:
-            cache.pop(k, None)
+        pass
+    try:
+        me = await client.get_me()
+        return me.id
+    except Exception:
+        return None
 
 
 async def edit_alert_handler(client, message):
-    """هشدار ویرایش پیام در پیوی → ارسال به پیام‌های ذخیره شده"""
+    """هشدار ویرایش پیام در پیوی"""
     try:
-        owner_id = client.me.id
+        owner_id = await _owner_id(client)
+        if not owner_id:
+            return
         if not EDIT_ALERT_STATUS.get(owner_id, False):
-            # همچنان کش را آپدیت کن اگر حذف فعال است
             if DELETE_ALERT_STATUS.get(owner_id, False):
                 cache_pv_message(owner_id, message)
             return
@@ -1558,7 +1687,7 @@ async def edit_alert_handler(client, message):
         if not message.from_user or message.from_user.is_self:
             return
 
-        old = (PV_MSG_CACHE.get(owner_id) or {}).get(message.id)
+        old = (PV_MSG_CACHE.get(owner_id) or {}).get(int(message.id))
         new_text = message.text or message.caption or ""
         u = message.from_user
         name = f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id)
@@ -1580,25 +1709,31 @@ async def edit_alert_handler(client, message):
             await client.send_message("me", report)
         except Exception as e:
             logging.error(f"edit alert send: {e}")
-
-        # آپدیت کش با متن جدید
         cache_pv_message(owner_id, message)
     except Exception as e:
         logging.error(f"edit_alert_handler: {e}")
 
 
 async def delete_alert_handler(client, messages):
-    """هشدار حذف پیام در پیوی → ارسال به پیام‌های ذخیره شده"""
+    """هشدار حذف پیام در پیوی"""
     try:
-        owner_id = client.me.id
+        owner_id = await _owner_id(client)
+        if not owner_id:
+            return
         if not DELETE_ALERT_STATUS.get(owner_id, False):
             return
         cache = PV_MSG_CACHE.get(owner_id) or {}
+        if not messages:
+            return
+        logging.info(f"delete_alert: owner={owner_id} count={len(messages)} cache={len(cache)}")
         for mid in messages:
-            # messages can be list of ids or Message objects depending on version
-            msg_id = mid.id if hasattr(mid, "id") else mid
+            try:
+                msg_id = int(mid.id if hasattr(mid, "id") else mid)
+            except Exception:
+                continue
             old = cache.pop(msg_id, None)
             if not old:
+                logging.info(f"delete_alert: msg {msg_id} not in cache")
                 continue
             uname = f"@{old['username']}" if old.get("username") else "ندارد"
             body = old.get("text") or "—"
@@ -1614,10 +1749,29 @@ async def delete_alert_handler(client, messages):
                 report += f"\n\n📎 رسانه: {media}"
             try:
                 await client.send_message("me", report)
+                logging.info(f"delete_alert: sent report for {msg_id}")
             except Exception as e:
                 logging.error(f"delete alert send: {e}")
     except Exception as e:
         logging.error(f"delete_alert_handler: {e}")
+
+
+async def raw_delete_update_handler(client, update, users, chats):
+    """بکاپ برای تشخیص حذف پیام از آپدیت خام"""
+    try:
+        from pyrogram.raw.types import UpdateDeleteMessages, UpdateDeleteChannelMessages
+        owner_id = await _owner_id(client)
+        if not owner_id or not DELETE_ALERT_STATUS.get(owner_id, False):
+            return
+        if isinstance(update, UpdateDeleteMessages):
+            msgs = list(getattr(update, "messages", []) or [])
+            if msgs:
+                await delete_alert_handler(client, msgs)
+        elif isinstance(update, UpdateDeleteChannelMessages):
+            # فقط پیوی مدنظر است
+            return
+    except Exception as e:
+        logging.debug(f"raw_delete_update: {e}")
 
 
 async def is_member_of_channel(client, channel: str, user_id: int) -> bool:
@@ -2212,6 +2366,95 @@ async def convert_message_to_sticker(client, message):
         return None, f"❌ تبدیل استیکر: {e}"
 
 
+
+# ===================== انیمیشن‌های ایموجی =====================
+EMOJI_ANIMATIONS = {
+    "قلب": {
+        "frames": [
+            "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💖",
+            "💗", "💘", "💝",
+        ],
+        "finale": "❤️🧡💛\\n💚💙💜\\n💖💗💘",
+        "interval": 2,
+    },
+    "برف": {
+        "frames": [
+            "❄️", "🌨️", "⛄", "🏔️", "🌬️", "☁️", "🧊", "🎄", "🦌", "🎿",
+        ],
+        "finale": "✨❄️ finish ❄️✨",
+        "interval": 2,
+    },
+    "زندگی انسان": {
+        "frames": [
+            "💑",
+            "🤰",
+            "👨‍👩‍👧",
+            "👶",
+            "🧒",
+            "🚲",
+            "💼",
+            "👴",
+            "🪦",
+        ],
+        "finale": "🪦 RIP",
+        "interval": 2,
+    },
+    "آتش": {
+        "frames": ["🕯️", "🔥", "💥", "🔥", "🌋", "🔥", "💫", "🔥"],
+        "finale": "🔥🔥🔥",
+        "interval": 2,
+    },
+    "ماه": {
+        "frames": ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘", "🌑"],
+        "finale": "🌕✨",
+        "interval": 2,
+    },
+    "ساعت": {
+        "frames": ["🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚", "🕛"],
+        "finale": "⏰ finish",
+        "interval": 2,
+    },
+    "هواپیما": {
+        "frames": ["✈️", "🛫", "✈️", "🛬", "🌍", "✈️", "🌌"],
+        "finale": "✈️🏁",
+        "interval": 2,
+    },
+    "گربه": {
+        "frames": ["😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"],
+        "finale": "🐱💕",
+        "interval": 2,
+    },
+}
+
+
+async def run_emoji_animation(client, message, key: str):
+    anim = EMOJI_ANIMATIONS.get(key)
+    if not anim:
+        return
+    frames = anim["frames"]
+    interval = anim.get("interval", 2)
+    finale = anim.get("finale", "finish")
+    try:
+        await message.edit_text(frames[0])
+    except Exception:
+        try:
+            message = await client.send_message(message.chat.id, frames[0])
+        except Exception as e:
+            logging.error(f"anim start: {e}")
+            return
+    for frame in frames[1:]:
+        await asyncio.sleep(interval)
+        try:
+            await message.edit_text(frame)
+        except Exception:
+            break
+    await asyncio.sleep(interval)
+    try:
+        await message.edit_text(finale)
+    except Exception:
+        pass
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
@@ -2424,25 +2667,39 @@ async def reply_based_controller(client, message):
             await client.send_message(message.chat.id, info)
         return
 
+    # ========== انیمیشن ایموجی ==========
+    anim_key = None
+    if cmd.startswith("."):
+        maybe = cmd[1:].strip()
+        if maybe in EMOJI_ANIMATIONS:
+            anim_key = maybe
+    if anim_key:
+        asyncio.create_task(run_emoji_animation(client, message, anim_key))
+        return
+
     # ========== هشدار ویرایش / حذف ==========
     if cmd in (".هشدار ویرایش روشن", "هشدار ویرایش روشن"):
         EDIT_ALERT_STATUS[user_id] = True
         data_manager.update_user_data(user_id, {"settings": {"edit_alert": True}})
+        persist_all_user_settings(user_id)
         await message.edit_text("✅ هشدار ویرایش پیام روشن شد | self MR\nپیام قبل از ویرایش به Saved Messages می‌رود.")
         return
     if cmd in (".هشدار ویرایش خاموش", "هشدار ویرایش خاموش"):
         EDIT_ALERT_STATUS[user_id] = False
         data_manager.update_user_data(user_id, {"settings": {"edit_alert": False}})
+        persist_all_user_settings(user_id)
         await message.edit_text("❌ هشدار ویرایش پیام خاموش شد | self MR")
         return
     if cmd in (".هشدار حذف روشن", "هشدار حذف روشن"):
         DELETE_ALERT_STATUS[user_id] = True
         data_manager.update_user_data(user_id, {"settings": {"delete_alert": True}})
+        persist_all_user_settings(user_id)
         await message.edit_text("✅ هشدار حذف پیام روشن شد | self MR\nمتن پیام حذف‌شده به Saved Messages می‌رود.")
         return
     if cmd in (".هشدار حذف خاموش", "هشدار حذف خاموش"):
         DELETE_ALERT_STATUS[user_id] = False
         data_manager.update_user_data(user_id, {"settings": {"delete_alert": False}})
+        persist_all_user_settings(user_id)
         await message.edit_text("❌ هشدار حذف پیام خاموش شد | self MR")
         return
 
@@ -2476,6 +2733,7 @@ async def reply_based_controller(client, message):
         lst.append(ch)
         FORCE_JOIN_CHANNELS[user_id] = lst
         data_manager.update_user_data(user_id, {"settings": {"force_join_channels": lst}})
+        persist_all_user_settings(user_id)
         await message.edit_text(f"✅ کانال {ch} اضافه شد.\nتعداد کل: {len(lst)}")
         return
 
@@ -2494,6 +2752,7 @@ async def reply_based_controller(client, message):
         lst = [x for x in lst if x != ch]
         FORCE_JOIN_CHANNELS[user_id] = lst
         data_manager.update_user_data(user_id, {"settings": {"force_join_channels": lst}})
+        persist_all_user_settings(user_id)
         await message.edit_text(f"✅ {ch} حذف شد.\nباقی‌مانده: {len(lst)}")
         return
 
@@ -2509,18 +2768,21 @@ async def reply_based_controller(client, message):
     if cmd in (".پاکسازی عضویت اجباری", "پاکسازی عضویت اجباری"):
         FORCE_JOIN_CHANNELS[user_id] = []
         data_manager.update_user_data(user_id, {"settings": {"force_join_channels": []}})
+        persist_all_user_settings(user_id)
         await message.edit_text("✅ همه کانال‌های عضویت اجباری پاک شدند.")
         return
 
     if cmd in (".عضویت اجباری روشن", "عضویت اجباری روشن"):
         FORCE_JOIN_PV_STATUS[user_id] = True
         data_manager.update_user_data(user_id, {"settings": {"force_join_pv": True}})
+        persist_all_user_settings(user_id)
         await message.edit_text("✅ عضویت اجباری پیوی روشن شد | self MR")
         return
 
     if cmd in (".عضویت اجباری خاموش", "عضویت اجباری خاموش"):
         FORCE_JOIN_PV_STATUS[user_id] = False
         data_manager.update_user_data(user_id, {"settings": {"force_join_pv": False}})
+        persist_all_user_settings(user_id)
         await message.edit_text("❌ عضویت اجباری پیوی خاموش شد | self MR")
         return
 
@@ -2794,30 +3056,23 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         for t in ACTIVE_BOTS[user_id][1]:
             t.cancel()
 
-    # تنظیمات ذخیره‌شده را حفظ کن — ریستارت نباید ساعت را دوباره روشن کند
-    saved = data_manager.get_user_data(user_id).get("settings", {})
-    if "font" in saved and saved.get("font"):
-        USER_FONT_CHOICES[user_id] = saved.get("font")
-    else:
+    # بارگذاری کامل تنظیمات ذخیره‌شده — هیچ چیز ریست نشود
+    apply_user_settings_from_db(user_id)
+    # اگر هنوز فونت/ساعت در دیتابیس نبود
+    if user_id not in USER_FONT_CHOICES or not USER_FONT_CHOICES.get(user_id):
         USER_FONT_CHOICES[user_id] = font_style
-
-    if "clock" in saved:
-        CLOCK_STATUS[user_id] = bool(saved.get("clock"))
-    else:
+    if user_id not in CLOCK_STATUS:
         CLOCK_STATUS[user_id] = not disable_clock
 
-    # فقط مقادیر غایب را پر کن؛ روی تنظیمات قبلی overwrite نکن
-    FORCE_JOIN_PV_STATUS[user_id] = bool(saved.get("force_join_pv", False))
-    FORCE_JOIN_CHANNELS[user_id] = list(saved.get("force_join_channels") or [])
-
     client.add_handler(MessageHandler(god_mode_handler, filters.incoming & ~filters.me), group=-10)
-    client.add_handler(MessageHandler(force_join_pv_handler, filters.private & filters.incoming & ~filters.me & ~filters.bot), group=-6)
-    client.add_handler(MessageHandler(pv_cache_handler, filters.private & filters.incoming & ~filters.me & ~filters.bot), group=-7)
-    client.add_handler(MessageHandler(lambda c, m: m.delete() if PV_LOCK_STATUS.get(c.me.id) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
+    client.add_handler(MessageHandler(pv_cache_handler, filters.private & ~filters.me & ~filters.bot), group=-8)
+    client.add_handler(MessageHandler(force_join_pv_handler, filters.private & ~filters.me & ~filters.bot), group=-6)
+    client.add_handler(MessageHandler(lambda c, m: m.delete() if (c.me and PV_LOCK_STATUS.get(c.me.id)) else None, filters.private & ~filters.me & ~filters.bot), group=-5)
     try:
-        from pyrogram.handlers import EditedMessageHandler, DeletedMessagesHandler
+        from pyrogram.handlers import EditedMessageHandler, DeletedMessagesHandler, RawUpdateHandler
         client.add_handler(EditedMessageHandler(edit_alert_handler, filters.private & ~filters.me), group=-2)
         client.add_handler(DeletedMessagesHandler(delete_alert_handler), group=-2)
+        client.add_handler(RawUpdateHandler(raw_delete_update_handler), group=-1)
     except Exception as e:
         logging.warning(f"edit/delete handlers: {e}")
     client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if AUTO_SEEN_STATUS.get(c.me.id) else None, filters.private & ~filters.me), group=-4)
@@ -2909,6 +3164,9 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🔖 تغییر یوزرنیم", f"panel_page_16_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
@@ -3117,7 +3375,7 @@ def build_panel_keyboard(user_id, page=1):
         ]
 
     # ========== صفحات راهنما: ذخیره / پروفایل ==========
-    elif page in (13, 14, 15, 16):
+    elif page in (13, 14, 15, 16, 17):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -3611,6 +3869,25 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 17:
+                    lines = ["انیمیشن | self MR", "", "انیمیشن‌ها:"]
+                    for i, name in enumerate(EMOJI_ANIMATIONS.keys(), 1):
+                        lines.append(f"{i}- .{name}")
+                    lines.append("")
+                    lines.append("هر ۲ ثانیه پیام ویرایش می‌شود.")
+                    help_text = "\n".join(lines)
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 17))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 17))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 17)
+                    except Exception:
+                        pass
+                    return
                 if page == 13:
                     help_text = (
                         "ذخیره | self MR\n\n"
@@ -3815,6 +4092,7 @@ async def callback_panel_handler(client, callback):
             ns = not EDIT_ALERT_STATUS.get(target_user_id, False)
             EDIT_ALERT_STATUS[target_user_id] = ns
             data_manager.update_user_data(target_user_id, {"settings": {"edit_alert": ns}})
+            persist_all_user_settings(target_user_id)
             await callback.answer("✅ روشن" if ns else "❌ خاموش")
             try:
                 help_text = (
@@ -3842,6 +4120,7 @@ async def callback_panel_handler(client, callback):
             ns = not DELETE_ALERT_STATUS.get(target_user_id, False)
             DELETE_ALERT_STATUS[target_user_id] = ns
             data_manager.update_user_data(target_user_id, {"settings": {"delete_alert": ns}})
+            persist_all_user_settings(target_user_id)
             await callback.answer("✅ روشن" if ns else "❌ خاموش")
             try:
                 help_text = (
@@ -3869,6 +4148,7 @@ async def callback_panel_handler(client, callback):
             new_state = not FORCE_JOIN_PV_STATUS.get(target_user_id, False)
             FORCE_JOIN_PV_STATUS[target_user_id] = new_state
             data_manager.update_user_data(target_user_id, {"settings": {"force_join_pv": new_state}})
+            persist_all_user_settings(target_user_id)
             await callback.answer("✅ روشن شد" if new_state else "❌ خاموش شد")
             # رفرش متن + دکمه
             st = new_state
@@ -3918,6 +4198,11 @@ async def callback_panel_handler(client, callback):
 
         if settings_update:
             data_manager.update_user_data(target_user_id, {"settings": settings_update})
+            # ذخیره کامل برای جلوگیری از پریدن تنظیمات
+            try:
+                persist_all_user_settings(target_user_id)
+            except Exception:
+                pass
 
         # بعد از تغییر، همان بخش پنل را نگه دار
         stay_page = 1
@@ -4094,8 +4379,17 @@ async def upload_database_handler(client, message):
         await message.reply_text("🔄 در حال لود مجدد و بررسی محتویات...")
         
         # ====== لود مجدد دیتابیس ======
-        data_manager.load_data()
+        data_manager.reload()
         load_all_states()
+        # اعمال تنظیمات برای همه کاربران
+        try:
+            for uid_str in list(data_manager.get_all_users().keys()):
+                try:
+                    apply_user_settings_from_db(int(uid_str))
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.error(f"reapply settings after upload: {e}")
         
         # ====== تشخیص کامل محتویات JSON ======
         all_users = data_manager.get_all_users()

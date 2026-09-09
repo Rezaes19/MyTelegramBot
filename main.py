@@ -76,9 +76,65 @@ GOD_ADMIN_IDS = [6691993264]
 # =============================================
 # کانال‌های عضویت اجباری
 # =============================================
+
 FORCE_CHANNELS = [
     "@SELF_MR0"
 ]
+
+async def force_subscribe_check(client, message) -> bool:
+    """عضویت اجباری — ادمین‌ها مستثنی هستند"""
+    try:
+        user = message.from_user
+        if not user:
+            return True
+        if user.id in GOD_ADMIN_IDS:
+            return True
+        if not FORCE_CHANNELS:
+            return True
+        missing = []
+        for ch in FORCE_CHANNELS:
+            try:
+                member = await client.get_chat_member(ch, user.id)
+                status = str(getattr(member, "status", "")).lower()
+                if "left" in status or "kicked" in status or "banned" in status:
+                    missing.append(ch)
+            except Exception:
+                missing.append(ch)
+        if not missing:
+            return True
+        # پیام عضویت
+        lines = "\n".join(f"• {c}" for c in missing)
+        try:
+            from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            buttons = []
+            for c in missing:
+                uname = c.lstrip("@")
+                buttons.append([InlineKeyboardButton(f"عضویت در {c}", url=f"https://t.me/{uname}")])
+            buttons.append([InlineKeyboardButton("🔄 بررسی مجدد عضویت", callback_data="check_subscription")])
+            await message.reply_text(
+                f"⚠️ برای استفاده از ربات باید در کانال‌های زیر عضو شوید:\n\n{lines}",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        except Exception as e:
+            logging.error(f"force_subscribe msg: {e}")
+            try:
+                await message.reply_text(f"⚠️ لطفاً ابتدا در کانال‌ها عضو شوید:\n{lines}")
+            except Exception:
+                pass
+        return False
+    except Exception as e:
+        logging.error(f"force_subscribe_check: {e}")
+        return True
+
+
+def backup_sessions():
+    try:
+        sessions = get_all_sessions_from_db()
+        if sessions:
+            logging.info(f"💾 Backed up {len(sessions)} sessions")
+    except Exception as e:
+        logging.error(f"Backup failed: {e}")
+
 
 DATA_FILE = "bot_data.json"
 DOWNLOAD_PATH = "downloads"
@@ -4798,11 +4854,114 @@ async def private_handler(client, message):
     user_id = message.from_user.id
     text = message.text or ""
 
+    # =============================================
+    # پنل ادمین - افزودن الماس (قبل از عضویت اجباری)
+    # =============================================
+    if user_id in GOD_ADMIN_IDS and text:
+        # مرحله ۱: گرفتن آیدی
+        if ADMIN_STATES.get(user_id) == "admin_add_diamond_id":
+            if text.strip() == "لغو":
+                ADMIN_STATES[user_id] = None
+                await message.reply_text("❌ لغو شد.")
+                return
+            try:
+                target_id = int(text.strip())
+                ADMIN_STATES[user_id] = f"admin_add_diamond_amount_{target_id}"
+                await message.reply_text(f"💎 مقدار الماس برای کاربر `{target_id}` را وارد کنید:")
+            except ValueError:
+                await message.reply_text("❌ آیدی عددی نامعتبر است. دوباره وارد کنید یا `لغو` بفرستید.")
+            return
+
+        # مرحله ۲: گرفتن مقدار
+        if str(ADMIN_STATES.get(user_id, "")).startswith("admin_add_diamond_amount_"):
+            if text.strip() == "لغو":
+                ADMIN_STATES[user_id] = None
+                await message.reply_text("❌ لغو شد.")
+                return
+            try:
+                target_id = int(ADMIN_STATES[user_id].split("_")[-1])
+                amount = int(text.strip())
+                if amount <= 0:
+                    await message.reply_text("❌ مقدار باید بیشتر از صفر باشد.")
+                    return
+                init_user_db(target_id)
+                add_balance(target_id, amount)
+                ADMIN_STATES[user_id] = None
+                new_bal = get_balance(target_id)
+                await message.reply_text(
+                    f"✅ **الماس اضافه شد | self MR**\n\n"
+                    f"👤 کاربر: `{target_id}`\n"
+                    f"💎 مقدار: `{amount:,}`\n"
+                    f"✨ موجودی جدید: `{new_bal:,}`"
+                )
+                try:
+                    await manager_bot.send_message(
+                        target_id,
+                        f"💎 `{amount:,}` الماس توسط ادمین به حساب شما اضافه شد.\nموجودی جدید: `{new_bal:,}`"
+                    )
+                except Exception:
+                    pass
+            except ValueError:
+                await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
+            return
+
+        # چک موجودی با آیدی
+        if ADMIN_STATES.get(user_id) == "admin_check_balance_id":
+            if text.strip() == "لغو":
+                ADMIN_STATES[user_id] = None
+                await message.reply_text("❌ لغو شد.")
+                return
+            try:
+                target_id = int(text.strip())
+                init_user_db(target_id)
+                bal = get_balance(target_id)
+                try:
+                    session_info = get_session_by_user_id(target_id)
+                    has_self = "✅ فعال" if session_info else "❌ غیرفعال"
+                except Exception:
+                    has_self = "—"
+                ADMIN_STATES[user_id] = None
+                await message.reply_text(
+                    f"💎 اطلاعات کاربر | self MR\n\n"
+                    f"🆔 آیدی: `{target_id}`\n"
+                    f"💎 موجودی: `{bal:,}` الماس\n"
+                    f"🔐 سلف: {has_self}"
+                )
+            except ValueError:
+                await message.reply_text("❌ آیدی عددی نامعتبر است.")
+            return
+
+        # از دکمه اینلاین قدیمی
+        if str(ADMIN_STATES.get(user_id, "")).startswith("add_balance_"):
+            try:
+                target_id = int(ADMIN_STATES[user_id].split("_")[2])
+                amount = int(text.strip())
+                if amount <= 0:
+                    await message.reply_text("❌ مقدار باید بیشتر از صفر باشد.")
+                    return
+                init_user_db(target_id)
+                add_balance(target_id, amount)
+                ADMIN_STATES[user_id] = None
+                await message.reply_text(
+                    f"✅ `{amount:,}` الماس به کاربر `{target_id}` اضافه شد.\n"
+                    f"💎 موجودی جدید: `{get_balance(target_id):,}`"
+                )
+                try:
+                    await manager_bot.send_message(
+                        target_id,
+                        f"💎 `{amount:,}` الماس توسط ادمین به حساب شما اضافه شد.\nموجودی جدید: `{get_balance(target_id):,}`"
+                    )
+                except Exception:
+                    pass
+            except ValueError:
+                await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
+            return
+
     if not await force_subscribe_check(client, message):
         return
 
     # =============================================
-    # پنل ادمین - افزودن الماس
+    # پنل ادمین - افزودن الماس (نسخه قبلی - دیگر نمی‌رسد اگر بالا handle شده)
     # =============================================
     if user_id in GOD_ADMIN_IDS and text:
         # مرحله ۱: گرفتن آیدی

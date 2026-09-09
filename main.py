@@ -66,7 +66,14 @@ patch_peer_id_validation()
 API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN not found in environment variables!")
@@ -2418,111 +2425,86 @@ async def run_emoji_animation(client, message, key: str):
 
 
 async def ai_expand_text(seed: str) -> str:
-    """گسترش داستانی همان متن کاربر + ایموجی مرتبط (نه متن رسمی الکی)"""
+    """گسترش متن با DeepSeek — داستانی، مرتبط، با ایموجی"""
     seed = (seed or "").strip()
     if not seed:
         return "❌ متنی برای گسترش وارد نشده."
 
-    system_prompt = (
-        "تو یک نویسنده‌ی داستانی فارسی هستی.\n"
-        "فقط و فقط همان متن کاربر را گسترش بده و ادامه بده.\n"
-        "قوانین سخت:\n"
-        "1) اسامی، مکان‌ها و موضوع متن کاربر را حفظ کن.\n"
-        "2) لحن خودمانی و داستانی باشد؛ اصلاً رسمی، سازمانی، لینکدینی یا انگلیسی‌بازی نکن.\n"
-        "3) کلمات انگلیسی مثل synergy و networking ممنوع.\n"
-        "4) ۸ تا ۱۴ خط بنویس: همان متن را باز کن و داستانش را ادامه بده.\n"
-        "5) بین خطوط چند ایموجی کاملاً مرتبط با موضوع بگذار.\n"
-        "6) هیچ توضیح اضافه، عنوان یا پیش‌گفتار ننویس؛ فقط متن نهایی."
-    )
-    user_prompt = (
-        f"این متن را گسترش بده و داستانی ادامه بده (خودمانی + ایموجی مرتبط):\n"
-        f"«{seed}»"
-    )
-
-    async def _post_pollinations(model: str):
-        timeout = aiohttp.ClientTimeout(total=50)
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.85,
-        }
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post("https://text.pollinations.ai/", json=payload) as resp:
-                if resp.status != 200:
-                    return None
-                raw = (await resp.text()).strip()
-                if not raw:
-                    return None
-                # JSON openai-like
-                if raw.startswith("{"):
-                    try:
-                        data = json.loads(raw)
-                        choices = data.get("choices") or []
-                        if choices:
-                            c = choices[0].get("message", {}).get("content") or choices[0].get("text")
-                            if c:
-                                return str(c).strip()
-                        if data.get("content"):
-                            return str(data["content"]).strip()
-                    except Exception:
-                        pass
-                return raw[:3500] if len(raw) > 40 else None
-
-    def _looks_bad(text: str) -> bool:
-        if not text or len(text) < 40:
-            return True
-        bad_marks = [
-            "synergy", "networking", "organizational", "professional",
-            "به‌روزرسانی شگفت", "مسیر حرفه‌ای", "هم‌افزایی", "رشد سازمانی",
-            "شبکه‌سازی", "محیط‌های حرفه‌ای", "افق‌های تازه از موفقیت",
-        ]
-        low = text.lower()
-        hits = sum(1 for b in bad_marks if b.lower() in low or b in text)
-        return hits >= 2
-
-    for model in ("openai", "openai-fast", "mistral", "gemini"):
-        try:
-            out = await _post_pollinations(model)
-            if out and not _looks_bad(out):
-                return out[:3500]
-            # اگر بد بود ولی خالی نبود، یک بار دیگر با پرامپت ساده‌تر
-            if out and not _looks_bad(out[:200]):
-                return out[:3500]
-        except Exception as e:
-            logging.warning(f"ai_expand model={model}: {e}")
-
-    # GET با پرامپت خیلی صریح
-    try:
-        short_prompt = (
-            "ادامه داستانی و خودمانی همین متن فارسی را بنویس، ایموجی مرتبط بگذار، "
-            "رسمی و انگلیسی‌بازی نکن. فقط خروجی متن:\n" + seed
+    if not DEEPSEEK_API_KEY:
+        return (
+            "❌ کلید DeepSeek تنظیم نشده.\n\n"
+            "در سرور این متغیر را بگذار:\n"
+            "`DEEPSEEK_API_KEY=sk-...`"
         )
-        url = "https://text.pollinations.ai/" + quote(short_prompt[:1200])
-        timeout = aiohttp.ClientTimeout(total=40)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    out = (await resp.text()).strip()
-                    if out and len(out) > 40 and not _looks_bad(out):
-                        return out[:3500]
-    except Exception as e:
-        logging.warning(f"ai_expand GET: {e}")
 
-    # fallback داستانی مرتبط با همان جمله‌ها
-    emojis = ["✨", "🌟", "☀️", "🤝", "💬", "🏠", "🔥", "❤️", "😎", "🎉"]
-    pick = " ".join(emojis[:4])
-    return (
-        f"{pick}\n\n"
-        f"{seed}\n\n"
-        f"داستان از همین‌جا ادامه پیدا کرد؛ حرف‌ها گرم‌تر شد، "
-        f"اسم‌ها همان اسم‌ها ماندند و فضا همان فضایی که گفته شد. "
-        f"هر جمله، تکه‌ای از همان ماجرا بود و قدم‌به‌قدم روایت گسترده‌تر شد، "
-        f"بدون اینکه از اصل موضوع جدا شود.\n\n"
-        f"{pick}"
+    system_prompt = (
+        "تو نویسنده خلاق فارسی هستی.\n"
+        "وظیفه: متن کوتاه کاربر را گسترش بده و داستانی ادامه بده.\n"
+        "قوانین:\n"
+        "- حتماً همان اسامی، مکان‌ها و موضوع کاربر حفظ شود.\n"
+        "- لحن خودمانی و روان باشد؛ رسمی و سازمانی ممنوع.\n"
+        "- انگلیسی‌بازی و کلماتی مثل synergy ممنوع.\n"
+        "- ۸ تا ۱۴ خط بنویس.\n"
+        "- چند ایموجی مرتبط با موضوع داخل متن بگذار.\n"
+        "- فقط متن نهایی را برگردان؛ عنوان و توضیح اضافه ننویس."
     )
+    user_prompt = f"این متن را گسترش بده و ادامه بده:\n{seed}"
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.9,
+        "max_tokens": 1200,
+        "stream": False,
+    }
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                "https://api.deepseek.com/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as resp:
+                raw = await resp.text()
+                if resp.status != 200:
+                    logging.error(f"DeepSeek status={resp.status} body={raw[:300]}")
+                    low = (raw or "").lower()
+                    if resp.status in (401, 403):
+                        return "❌ کلید DeepSeek نامعتبر است. DEEPSEEK_API_KEY را در سرور چک کن."
+                    if resp.status == 402 or "insufficient" in low or "balance" in low:
+                        return (
+                            "❌ موجودی حساب DeepSeek کافی نیست.\n"
+                            "برو به platform.deepseek.com و حساب را شارژ کن."
+                        )
+                    if resp.status == 429:
+                        return "❌ محدودیت درخواست DeepSeek. کمی بعد دوباره تلاش کن."
+                    return f"❌ خطا از DeepSeek ({resp.status})."
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    return "❌ پاسخ نامعتبر از DeepSeek."
+                choices = data.get("choices") or []
+                if not choices:
+                    return "❌ پاسخی از DeepSeek نیامد."
+                text = (
+                    (choices[0].get("message") or {}).get("content")
+                    or choices[0].get("text")
+                    or ""
+                ).strip()
+                if not text:
+                    return "❌ متن خالی از DeepSeek."
+                return text[:3900]
+    except Exception as e:
+        logging.error(f"DeepSeek error: {e}")
+        return f"❌ خطا در اتصال به DeepSeek:\n{e}"
 
 
 def _clean_track_name(name: str) -> str:
@@ -2683,12 +2665,270 @@ async def fetch_song_lyrics(title: str, artist: str = "") -> str:
     )
 
 
+
+async def capture_chat_to_saved(client, chat_id: int, limit: int = 20):
+    """ارسال محتوای اخیر چت به Saved Messages (برای چت‌های محافظت‌شده هم تلاش می‌کند)"""
+    sent = 0
+    errors = 0
+    header = f"📸 اسکرین | self MR\\nچت: `{chat_id}`\\nتعداد تلاش: {limit}"
+    try:
+        await client.send_message("me", header)
+    except Exception:
+        pass
+
+    messages = []
+    async for m in client.get_chat_history(chat_id, limit=limit):
+        messages.append(m)
+    messages.reverse()  # قدیمی → جدید
+
+    for m in messages:
+        try:
+            # اول فوروارد
+            try:
+                await m.forward("me")
+                sent += 1
+                await asyncio.sleep(0.25)
+                continue
+            except Exception:
+                pass
+
+            # اگر فوروارد نشد (محافظت‌شده): کپی دستی
+            caption = m.caption or ""
+            text = m.text or ""
+            if text:
+                await client.send_message("me", text)
+                sent += 1
+            elif m.photo:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_photo("me", path, caption=caption or None)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            elif m.video:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_video("me", path, caption=caption or None)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            elif m.document:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_document("me", path, caption=caption or None)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            elif m.voice:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_voice("me", path)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            elif m.audio:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_audio("me", path, caption=caption or None)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            elif m.sticker:
+                try:
+                    await client.send_sticker("me", m.sticker.file_id)
+                    sent += 1
+                except Exception:
+                    path = await client.download_media(m)
+                    if path:
+                        await client.send_document("me", path)
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                        sent += 1
+            elif m.animation:
+                path = await client.download_media(m)
+                if path:
+                    await client.send_animation("me", path, caption=caption or None)
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                    sent += 1
+            else:
+                errors += 1
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            logging.warning(f"screen copy msg: {e}")
+            errors += 1
+    return sent, errors
+
+
+async def search_web_images(query: str, limit: int = 5):
+    """جستجوی عکس از Bing و برگرداندن لیست URL"""
+    query = (query or "").strip()
+    if not query:
+        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
+    }
+    urls = []
+    try:
+        from bs4 import BeautifulSoup
+        search_url = f"https://www.bing.com/images/search?q={quote(query)}&form=HDRSC2&first=1"
+        timeout = aiohttp.ClientTimeout(total=25)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(search_url) as resp:
+                if resp.status != 200:
+                    return []
+                html = await resp.text()
+            soup = BeautifulSoup(html, "lxml")
+            # murl در attribute
+            for a in soup.select("a.iusc"):
+                m = a.get("m")
+                if not m:
+                    continue
+                try:
+                    data = json.loads(m)
+                    u = data.get("murl") or data.get("turl")
+                    if u and u.startswith("http") and u not in urls:
+                        urls.append(u)
+                except Exception:
+                    continue
+                if len(urls) >= limit:
+                    break
+            if len(urls) < limit:
+                for img in soup.select("img.mimg"):
+                    u = img.get("src") or img.get("data-src")
+                    if u and u.startswith("http") and u not in urls:
+                        urls.append(u)
+                    if len(urls) >= limit:
+                        break
+    except Exception as e:
+        logging.error(f"search_web_images: {e}")
+    return urls[:limit]
+
+
+async def download_image_bytes(url: str):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.read()
+                if len(data) < 1000:
+                    return None
+                ext = "jpg"
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if "png" in ctype:
+                    ext = "png"
+                elif "webp" in ctype:
+                    ext = "webp"
+                path = f"{DOWNLOAD_PATH}/search_{int(time.time())}_{random.randint(100,999)}.{ext}"
+                with open(path, "wb") as f:
+                    f.write(data)
+                return path
+    except Exception as e:
+        logging.warning(f"download_image: {e}")
+        return None
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
     if not cmd:
         return
 
+
+
+    # ========== اسکرین ==========
+    if cmd in (".اسکرین", "اسکرین"):
+        try:
+            await message.edit_text("⏳ در حال گرفتن اسکرین و ارسال به Saved Messages...")
+        except Exception:
+            pass
+        try:
+            sent, errors = await capture_chat_to_saved(client, message.chat.id, limit=20)
+            await message.edit_text(
+                f"✅ اسکرین انجام شد | self MR\\n\\n"
+                f"📤 ارسال‌شده: {sent}\\n"
+                f"⚠️ ناموفق: {errors}\\n"
+                f"📂 داخل پیام‌های ذخیره‌شده ببین."
+            )
+        except Exception as e:
+            logging.error(f"screen cmd: {e}")
+            try:
+                await message.edit_text(f"❌ خطا در اسکرین: {e}")
+            except Exception:
+                pass
+        return
+
+    # ========== سرچ عکس ==========
+    if cmd.startswith(".سرچ") or cmd.startswith("سرچ"):
+        q = ""
+        if "+" in cmd:
+            q = cmd.split("+", 1)[1].strip()
+        else:
+            parts = cmd.split(None, 1)
+            if len(parts) > 1:
+                q = parts[1].strip()
+                if q.startswith("+"):
+                    q = q[1:].strip()
+        if not q:
+            await message.edit_text("❌ مثال:\\n`.سرچ + گاو`")
+            return
+        await message.edit_text(f"🔍 در حال جستجوی تصویر برای:\\n`{q}`")
+        try:
+            urls = await search_web_images(q, limit=5)
+            if not urls:
+                await message.edit_text("❌ تصویری پیدا نشد.")
+                return
+            sent = 0
+            for u in urls:
+                path = await download_image_bytes(u)
+                if not path:
+                    continue
+                try:
+                    await client.send_photo(
+                        message.chat.id,
+                        path,
+                        caption=f"🔍 {q} | self MR" if sent == 0 else None,
+                    )
+                    sent += 1
+                except Exception as e:
+                    logging.warning(f"send search photo: {e}")
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.35)
+            if sent:
+                try:
+                    await message.delete()
+                except Exception:
+                    try:
+                        await message.edit_text(f"✅ {sent} تصویر ارسال شد.")
+                    except Exception:
+                        pass
+            else:
+                await message.edit_text("❌ دانلود تصاویر ناموفق بود.")
+        except Exception as e:
+            logging.error(f"search cmd: {e}")
+            await message.edit_text(f"❌ خطا در سرچ: {e}")
+        return
 
     # ========== هوش متن گسترده ==========
     if cmd.startswith(".هوش متن گسترده") or cmd.startswith("هوش متن گسترده"):
@@ -2704,10 +2944,14 @@ async def reply_based_controller(client, message):
         if not seed:
             await message.edit_text("❌ مثال:\n`.هوش متن گسترده + علی در روز آفتابی بیرون رفت`")
             return
-        await message.edit_text("⏳ در حال گسترش متن با هوش مصنوعی...")
+        await message.edit_text("⏳ DeepSeek در حال گسترش متن...")
         try:
             expanded = await ai_expand_text(seed)
-            await message.edit_text(f"🧠 هوش متن گسترده | self MR\n\n{expanded}")
+            # ویرایش همان پیام کاربر با متن گسترش‌یافته
+            if expanded.startswith("❌"):
+                await message.edit_text(expanded)
+            else:
+                await message.edit_text(expanded)
         except Exception as e:
             await message.edit_text(f"❌ خطا: {e}")
         return
@@ -3648,6 +3892,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🗑 هشدار حذف پیام", f"panel_page_12_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
             ],
         ]
@@ -3796,9 +4043,10 @@ def build_panel_keyboard(user_id, page=1):
     elif page == 19:
         return [
             [_styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary")],
+            [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -4339,114 +4587,109 @@ async def callback_panel_handler(client, callback):
         elif action.startswith("panel_page_"):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
-            
             try:
-                # ===== اصلاح: صفحه اصلی =====
-                if page == 1:
-                    main_text = f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}"
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, main_text, reply_markup=generate_panel_markup(target_user_id, 1))
-                    else:
-                        await callback.message.edit_text(main_text, reply_markup=generate_panel_markup(target_user_id, 1))
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 1)
-                    except Exception:
-                        pass
-                    return
-                
-                # ===== صفحات راهنما =====
-                if page == 13:
+                if page == 22:
                     help_text = (
-                        "ذخیره | self MR\n\n"
-                        "برای استفاده:\n"
-                        "ریپلای + .ذخیره\n\n"
-                        "پشتیبانی از:\n"
-                        "• متن، عکس، ویدیو، ویس، فایل\n"
-                        "• عکس/ویدیو نابودشونده (تایم‌دار)\n"
-                        "خروجی در Saved Messages ذخیره می‌شود."
+                        "اسکرین | self MR\n\n"
+                        "دستورات:\n"
+                        ".اسکرین\n\n"
+                        "در هر چت/پیوی بزن تا محتوای اخیر همان صفحه\n"
+                        "به پیام‌های ذخیره‌شده ارسال شود.\n"
+                        "(برای چت‌های ضد اسکرین‌شات هم تلاش می‌کند)"
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 13))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 13))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 13)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 22))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 22))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 22)
                     except Exception:
                         pass
                     return
-                    
-                if page == 14:
+                if page == 23:
                     help_text = (
-                        "تغییر اسم | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".اسم نام جدید\n\n"
+                        "سرچ | self MR\n\n"
+                        "دستورات:\n"
+                        ".سرچ + چیزی که می‌خوای\n\n"
                         "مثال:\n"
-                        ".اسم محمدرضا"
+                        ".سرچ + گاو\n\n"
+                        "ربات از وب جستجو می‌کند و چند عکس مرتبط می‌فرستد."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 14))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 14))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 14)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 23))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 23))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 23)
                     except Exception:
                         pass
                     return
-                    
-                if page == 15:
+                if page == 19:
+
                     help_text = (
-                        "تغییر بیوگرافی | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".بیو متن بیوگرافی\n\n"
-                        "مثال:\n"
-                        ".بیو زندگی ادامه دارد\n\n"
-                        "حداکثر ۷۰ کاراکتر"
+                        "هوش مصنوعی | self MR\n\n"
+                        "گزینه مورد نظر را انتخاب کنید."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 15))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 15))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 15)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 19))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 19))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 19)
                     except Exception:
                         pass
                     return
-                    
-                if page == 16:
+                if page == 20:
                     help_text = (
-                        "تغییر یوزرنیم | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".یوزرنیم myname\n\n"
+                        "متن گسترده | self MR\n\n"
+                        "دستور:\n"
+                        ".هوش متن گسترده + متن شما\n\n"
                         "مثال:\n"
-                        ".یوزرنیم self_mr\n\n"
-                        "۵ تا ۳۲ کاراکتر | حرف اول انگلیسی"
+                        ".هوش متن گسترده + علی در روز آفتابی با دوستانش بیرون رفت\n\n"
+                        "ربات متن را زیبا، داستانی و با ایموجی گسترش می‌دهد."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 16))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 16))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 16)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 20))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 20))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 20)
                     except Exception:
                         pass
                     return
-                    
-                if page == 17:
-                    lines = ["انیمیشن | self MR", "", "انیمیشن‌ها:"]
-                    for i, name in enumerate(EMOJI_ANIMATIONS.keys(), 1):
-                        lines.append(f"{i}- .{name}")
-                    help_text = "\n".join(lines)
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 17))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 17))
+                if page == 21:
+                    help_text = (
+                        "استخراج متن آهنگ | self MR\n\n"
+                        "دستورات:\n"
+                        "ریپلای + .متن آهنگ\n\n"
+                        "روی فایل آهنگ (music) ریپلای کنید تا متن آهنگ پیدا شود."
+                    )
                     try:
-                        await edit_panel_colored(callback, target_user_id, 17)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 21))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 21))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 21)
                     except Exception:
                         pass
                     return
-                    
                 if page == 18:
+
                     lst = ROTATING_NAMES.get(target_user_id) or []
                     interval = ROTATING_NAME_INTERVAL.get(target_user_id, 10)
                     st = "on ✅" if ROTATING_NAME_STATUS.get(target_user_id) else "off ❌"
@@ -4464,67 +4707,119 @@ async def callback_panel_handler(client, callback):
                         f".اسم چرخشی روشن\n"
                         f".اسم چرخشی خاموش"
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 18))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 18))
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 18))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 18))
+                    except Exception:
+                        pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 18)
                     except Exception:
                         pass
                     return
-                    
-                if page == 19:
-                    help_text = (
-                        "هوش مصنوعی | self MR\n\n"
-                        "گزینه مورد نظر را انتخاب کنید."
-                    )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 19))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 19))
+                if page == 17:
+                    lines = ["انیمیشن | self MR", "", "انیمیشن‌ها:"]
+                    for i, name in enumerate(EMOJI_ANIMATIONS.keys(), 1):
+                        lines.append(f"{i}- .{name}")
+                    help_text = "\n".join(lines)
                     try:
-                        await edit_panel_colored(callback, target_user_id, 19)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 17))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 17))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 17)
                     except Exception:
                         pass
                     return
-                    
-                if page == 20:
+                if page == 13:
                     help_text = (
-                        "متن گسترده | self MR\n\n"
-                        "دستور:\n"
-                        ".هوش متن گسترده + متن شما\n\n"
+                        "ذخیره | self MR\n\n"
+                        "برای استفاده:\n"
+                        "ریپلای + .ذخیره\n\n"
+                        "پشتیبانی از:\n"
+                        "• متن، عکس، ویدیو، ویس، فایل\n"
+                        "• عکس/ویدیو نابودشونده (تایم‌دار)\n"
+                        "خروجی در Saved Messages ذخیره می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 13))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 13))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 13)
+                    except Exception:
+                        pass
+                    return
+                if page == 14:
+                    help_text = (
+                        "تغییر اسم | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".اسم نام جدید\n\n"
                         "مثال:\n"
-                        ".هوش متن گسترده + علی در روز آفتابی با دوستانش بیرون رفت\n\n"
-                        "ربات متن را زیبا، داستانی و با ایموجی گسترش می‌دهد."
+                        ".اسم محمدرضا"
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 20))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 20))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 20)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 14))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 14))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 14)
                     except Exception:
                         pass
                     return
-                    
-                if page == 21:
+                if page == 15:
                     help_text = (
-                        "استخراج متن آهنگ | self MR\n\n"
-                        "دستورات:\n"
-                        "ریپلای + .متن آهنگ\n\n"
-                        "روی فایل آهنگ (music) ریپلای کنید تا متن آهنگ پیدا شود."
+                        "تغییر بیوگرافی | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".بیو متن بیوگرافی\n\n"
+                        "مثال:\n"
+                        ".بیو زندگی ادامه دارد\n\n"
+                        "حداکثر ۷۰ کاراکتر"
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 21))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 21))
                     try:
-                        await edit_panel_colored(callback, target_user_id, 21)
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 15))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 15))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 15)
                     except Exception:
                         pass
                     return
-                    
+                if page == 16:
+                    help_text = (
+                        "تغییر یوزرنیم | self MR\n\n"
+                        "نحوه استفاده:\n"
+                        ".یوزرنیم myname\n\n"
+                        "مثال:\n"
+                        ".یوزرنیم self_mr\n\n"
+                        "۵ تا ۳۲ کاراکتر | حرف اول انگلیسی"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 16))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 16))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 16)
+                    except Exception:
+                        pass
+                    return
                 if page == 11:
                     st = EDIT_ALERT_STATUS.get(target_user_id, False)
                     help_text = (
@@ -4535,16 +4830,18 @@ async def callback_panel_handler(client, callback):
                         ".هشدار ویرایش خاموش\n\n"
                         "وقتی کسی در پیوی پیامش را ویرایش کند، متن قبل از ویرایش به پیام‌های ذخیره‌شده ارسال می‌شود."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
+                    except Exception:
+                        pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 11)
                     except Exception:
                         pass
                     return
-                    
                 if page == 12:
                     st = DELETE_ALERT_STATUS.get(target_user_id, False)
                     help_text = (
@@ -4555,16 +4852,18 @@ async def callback_panel_handler(client, callback):
                         ".هشدار حذف خاموش\n\n"
                         "وقتی کسی در پیوی پیامش را حذف کند، متن حذف‌شده به پیام‌های ذخیره‌شده ارسال می‌شود."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
+                    except Exception:
+                        pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 12)
                     except Exception:
                         pass
                     return
-                    
                 if page == 10:
                     help_text = (
                         "ساخت ویدیو گرد | self MR\n\n"
@@ -4572,16 +4871,26 @@ async def callback_panel_handler(client, callback):
                         ".ویدیو مسیج\n\n"
                         "روی یک ویدیو ریپلای کن؛ خروجی به صورت ویدیو گرد در همان چت ارسال می‌شود."
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 10))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 10))
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(
+                                callback.inline_message_id,
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 10),
+                            )
+                        else:
+                            await callback.message.edit_text(
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 10),
+                            )
+                    except Exception:
+                        pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 10)
                     except Exception:
                         pass
                     return
-                    
+                # صفحه عضویت اجباری: متن راهنما + دکمه‌های وضعیت
                 if page == 9:
                     st = FORCE_JOIN_PV_STATUS.get(target_user_id, False)
                     chs = FORCE_JOIN_CHANNELS.get(target_user_id) or []
@@ -4598,21 +4907,29 @@ async def callback_panel_handler(client, callback):
                         f".عضویت اجباری خاموش\n\n"
                         f"کانال‌های ثبت‌شده: {len(chs)}"
                     )
-                    if callback.inline_message_id:
-                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 9))
-                    else:
-                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 9))
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(
+                                callback.inline_message_id,
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 9),
+                            )
+                        else:
+                            await callback.message.edit_text(
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, 9),
+                            )
+                    except Exception:
+                        await edit_panel_colored(callback, target_user_id, 9)
+                    # رنگ دکمه‌ها
                     try:
                         await edit_panel_colored(callback, target_user_id, 9)
                     except Exception:
                         pass
-                    return
-                    
                 else:
                     await edit_panel_colored(callback, target_user_id, page)
-                    
-            except Exception as e:
-                logging.error(f"panel_page error: {e}")
+            except Exception:
+                pass
             return
 
         elif action == "toggle_edit_alert":
@@ -4699,9 +5016,16 @@ async def callback_panel_handler(client, callback):
             )
             try:
                 if callback.inline_message_id:
-                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 9))
+                    await client.edit_inline_text(
+                        callback.inline_message_id,
+                        help_text,
+                        reply_markup=generate_panel_markup(target_user_id, 9),
+                    )
                 else:
-                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 9))
+                    await callback.message.edit_text(
+                        help_text,
+                        reply_markup=generate_panel_markup(target_user_id, 9),
+                    )
             except Exception:
                 pass
             try:

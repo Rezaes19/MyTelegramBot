@@ -2774,50 +2774,160 @@ async def capture_chat_to_saved(client, chat_id: int, limit: int = 20):
     return sent, errors
 
 
-async def search_web_images(query: str, limit: int = 5):
-    """جستجوی عکس از Bing و برگرداندن لیست URL"""
+async def _translate_query_for_search(query: str) -> str:
+    """اگر فارسی بود به انگلیسی هم برگردان برای دقت بیشتر"""
+    q = (query or "").strip()
+    if not q:
+        return q
+    try:
+        # اگر حروف فارسی داشت
+        if re.search(r"[\u0600-\u06FF]", q):
+            try:
+                from deep_translator import GoogleTranslator
+                en = GoogleTranslator(source="auto", target="en").translate(q)
+                if en and en.strip():
+                    return en.strip()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return q
+
+
+async def search_web_images(query: str, limit: int = 1):
+    """فقط دقیق‌ترین یک (یا چند) تصویر مرتبط"""
     query = (query or "").strip()
     if not query:
         return []
+    limit = max(1, min(int(limit or 1), 3))
+    en_q = await _translate_query_for_search(query)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
     }
-    urls = []
-    try:
-        from bs4 import BeautifulSoup
-        search_url = f"https://www.bing.com/images/search?q={quote(query)}&form=HDRSC2&first=1"
-        timeout = aiohttp.ClientTimeout(total=25)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(search_url) as resp:
-                if resp.status != 200:
-                    return []
-                html = await resp.text()
-            soup = BeautifulSoup(html, "lxml")
-            # murl در attribute
-            for a in soup.select("a.iusc"):
-                m = a.get("m")
-                if not m:
-                    continue
+    found = []
+
+    async def _add(u):
+        if not u or not isinstance(u, str):
+            return
+        u = u.strip()
+        if not u.startswith("http"):
+            return
+        # فیلتر thumbnailهای بی‌ربط/آیکون
+        low = u.lower()
+        if any(x in low for x in ("favicon", "logo", "sprite", "1x1", "pixel")):
+            return
+        if u not in found:
+            found.append(u)
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        # ----- 1) Wikipedia FA -----
+        try:
+            url = f"https://fa.wikipedia.org/api/rest_v1/page/summary/{quote(query)}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    thumb = (data.get("thumbnail") or {}).get("source")
+                    original = (data.get("originalimage") or {}).get("source")
+                    await _add(original or thumb)
+        except Exception as e:
+            logging.warning(f"wiki fa: {e}")
+
+        if len(found) >= limit:
+            return found[:limit]
+
+        # ----- 2) Wikipedia EN -----
+        try:
+            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(en_q)}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    thumb = (data.get("thumbnail") or {}).get("source")
+                    original = (data.get("originalimage") or {}).get("source")
+                    await _add(original or thumb)
+        except Exception as e:
+            logging.warning(f"wiki en: {e}")
+
+        if len(found) >= limit:
+            return found[:limit]
+
+        # ----- 3) DuckDuckGo instant -----
+        try:
+            for q in (query, en_q):
+                url = f"https://api.duckduckgo.com/?q={quote(q)}&format=json&no_redirect=1&no_html=1"
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        img = data.get("Image") or data.get("ImageURL")
+                        if img:
+                            if img.startswith("/"):
+                                img = "https://duckduckgo.com" + img
+                            await _add(img)
+                        for t in (data.get("RelatedTopics") or [])[:5]:
+                            if isinstance(t, dict):
+                                i2 = (t.get("Icon") or {}).get("URL")
+                                if i2:
+                                    if i2.startswith("/"):
+                                        i2 = "https://duckduckgo.com" + i2
+                                    await _add(i2)
+                if len(found) >= limit:
+                    return found[:limit]
+        except Exception as e:
+            logging.warning(f"ddg: {e}")
+
+        # ----- 4) Bing images (اولین نتایج واقعی) -----
+        try:
+            # qft=photo برای عکس واقعی
+            for q in (en_q, query):
+                search_url = (
+                    f"https://www.bing.com/images/search?q={quote(q)}"
+                    f"&qft=+filterui:photo-photo+filterui:aspect-square&form=IRFLTR"
+                )
+                async with session.get(search_url) as resp:
+                    if resp.status != 200:
+                        continue
+                    html = await resp.text()
                 try:
-                    data = json.loads(m)
-                    u = data.get("murl") or data.get("turl")
-                    if u and u.startswith("http") and u not in urls:
-                        urls.append(u)
-                except Exception:
-                    continue
-                if len(urls) >= limit:
-                    break
-            if len(urls) < limit:
-                for img in soup.select("img.mimg"):
-                    u = img.get("src") or img.get("data-src")
-                    if u and u.startswith("http") and u not in urls:
-                        urls.append(u)
-                    if len(urls) >= limit:
-                        break
-    except Exception as e:
-        logging.error(f"search_web_images: {e}")
-    return urls[:limit]
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html, "lxml")
+                    for a in soup.select("a.iusc"):
+                        m = a.get("m")
+                        if not m:
+                            continue
+                        try:
+                            data = json.loads(m)
+                        except Exception:
+                            continue
+                        u = data.get("murl") or ""
+                        t = (data.get("t") or data.get("desc") or "").lower()
+                        # ترجیح اگر عنوان به کوئری نزدیک باشد
+                        await _add(u)
+                        if len(found) >= limit:
+                            return found[:limit]
+                except Exception as e:
+                    logging.warning(f"bing parse: {e}")
+        except Exception as e:
+            logging.warning(f"bing: {e}")
+
+        # ----- 5) Google images (fallback سبک) -----
+        try:
+            g_url = f"https://www.google.com/search?q={quote(en_q)}&tbm=isch&hl=en&safe=active"
+            async with session.get(g_url) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    # استخراج از AF_initDataKeys سخت است؛ regex روی https://...
+                    for m in re.finditer(r"\"(https://[^\"]+\.(?:jpg|jpeg|png|webp)[^\"]*)\"", html, re.I):
+                        u = m.group(1)
+                        if "gstatic" in u or "google" in u and "encrypted" in u:
+                            continue
+                        await _add(u)
+                        if len(found) >= limit:
+                            break
+        except Exception as e:
+            logging.warning(f"google img: {e}")
+
+    return found[:limit]
 
 
 async def download_image_bytes(url: str):
@@ -2892,39 +3002,40 @@ async def reply_based_controller(client, message):
             return
         await message.edit_text(f"🔍 در حال جستجوی تصویر برای:\\n`{q}`")
         try:
-            urls = await search_web_images(q, limit=5)
+            urls = await search_web_images(q, limit=1)
             if not urls:
                 await message.edit_text("❌ تصویری پیدا نشد.")
                 return
-            sent = 0
+            path = None
             for u in urls:
                 path = await download_image_bytes(u)
-                if not path:
-                    continue
-                try:
-                    await client.send_photo(
-                        message.chat.id,
-                        path,
-                        caption=f"🔍 {q} | self MR" if sent == 0 else None,
-                    )
-                    sent += 1
-                except Exception as e:
-                    logging.warning(f"send search photo: {e}")
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.35)
-            if sent:
+                if path:
+                    break
+            if not path:
+                await message.edit_text("❌ دانلود تصویر ناموفق بود.")
+                return
+            try:
+                await client.send_photo(
+                    message.chat.id,
+                    path,
+                    caption=f"🔍 {q} | self MR",
+                )
                 try:
                     await message.delete()
                 except Exception:
                     try:
-                        await message.edit_text(f"✅ {sent} تصویر ارسال شد.")
+                        await message.edit_text("✅ تصویر ارسال شد.")
                     except Exception:
                         pass
-            else:
-                await message.edit_text("❌ دانلود تصاویر ناموفق بود.")
+            except Exception as e:
+                logging.warning(f"send search photo: {e}")
+                await message.edit_text(f"❌ ارسال تصویر ناموفق: {e}")
+            finally:
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
         except Exception as e:
             logging.error(f"search cmd: {e}")
             await message.edit_text(f"❌ خطا در سرچ: {e}")

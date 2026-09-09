@@ -2418,85 +2418,245 @@ async def run_emoji_animation(client, message, key: str):
 
 
 async def ai_expand_text(seed: str) -> str:
-    """گسترش متن با AI (pollinations) + fallback محلی"""
+    """گسترش متن کاربر — همیشه مرتبط با همان متن"""
     seed = (seed or "").strip()
     if not seed:
         return "❌ متنی برای گسترش وارد نشده."
-    prompt = (
-        "تو یک نویسنده خلاق فارسی هستی. متن کوتاه زیر را به یک متن زیبا، ادبی، "
-        "داستانی و گسترش‌یافته (حدود ۸ تا ۱۵ خط) تبدیل کن. "
-        "چند ایموجی مرتبط با موضوع داخل متن بگذار. فقط خروجی متن نهایی را بده، بدون توضیح اضافه.\n\n"
-        f"متن: {seed}"
+
+    system_prompt = (
+        "You are a creative Persian writer. Expand the user's text into a richer, longer Persian story "
+        "or descriptive paragraph (8-15 lines). Keep the SAME topic, names, and meaning. "
+        "Add relevant emojis inside the text. Output ONLY the expanded Persian text, no English, no preface."
     )
-    # روش ۱: pollinations text API
+    user_prompt = f"متن کاربر برای گسترش:\n{seed}"
+
+    async def _from_pollinations(model: str):
+        timeout = aiohttp.ClientTimeout(total=50)
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.7,
+        }
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post("https://text.pollinations.ai/", json=payload) as resp:
+                if resp.status == 200:
+                    txt = (await resp.text()).strip()
+                    if txt.startswith("{") and "content" in txt:
+                        try:
+                            data = await resp.json()
+                        except Exception:
+                            data = None
+                        if not data:
+                            try:
+                                data = json.loads(txt)
+                            except Exception:
+                                data = None
+                        if isinstance(data, dict):
+                            # openai-like
+                            choices = data.get("choices") or []
+                            if choices:
+                                c = choices[0].get("message", {}).get("content") or choices[0].get("text")
+                                if c:
+                                    return str(c).strip()
+                            if data.get("content"):
+                                return str(data["content"]).strip()
+                    if txt and len(txt) > 30:
+                        return txt[:3500]
+        return None
+
+    # چند مدل امتحان شود
+    for model in ("openai", "openai-fast", "gemini", "mistral"):
+        try:
+            out = await _from_pollinations(model)
+            if out and len(out) > 40:
+                # اگر کاملاً بی‌ربط بود، باز هم برگردان ولی ترجیح با خروجی واقعی
+                return out[:3500]
+        except Exception as e:
+            logging.warning(f"ai_expand model={model}: {e}")
+
+    # GET ساده
     try:
-        url = "https://text.pollinations.ai/" + quote(prompt)
-        timeout = aiohttp.ClientTimeout(total=45)
+        full = system_prompt + "\n\n" + user_prompt
+        url = "https://text.pollinations.ai/" + quote(full[:1500])
+        timeout = aiohttp.ClientTimeout(total=40)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
                     out = (await resp.text()).strip()
-                    if out and len(out) > 20:
+                    if out and len(out) > 40:
                         return out[:3500]
     except Exception as e:
-        logging.warning(f"ai_expand pollinations: {e}")
+        logging.warning(f"ai_expand GET: {e}")
 
-    # روش ۲: fallback محلی با ایموجی
-    emojis = ["✨", "🌟", "☀️", "🌈", "💫", "🌸", "🍀", "🎵", "❤️", "🔥", "🌿", "🦋"]
-    pick = " ".join(emojis[:6])
+    # fallback: گسترش محلی مرتبط با همان متن
+    emojis = ["✨", "🌟", "☀️", "🌈", "💫", "🌸", "🍀", "❤️", "🔥", "🌿", "🦋", "🎶"]
+    pick = " ".join(emojis[:5])
     return (
         f"{pick}\n\n"
         f"{seed}\n\n"
-        f"و این‌گونه داستان ادامه یافت... لحظه‌ها نرم و آرام گذشتند، "
-        f"خنده‌ها در هوا پیچید و خاطره‌ای تازه در قلب‌ها نقش بست. "
-        f"هر قدم، روایتی تازه بود و هر نگاه، فصلی از دوستی.\n\n"
-        f"پایان این لحظه، آغاز قصه‌ای دیگر است. {pick}"
+        f"ادامهٔ همین ماجرا: جزئیات بیشتر نمایان شد؛ حس‌ها عمیق‌تر، "
+        f"فضا زنده‌تر و روایت گسترده‌تر از همان لحظه‌ای که گفته شد. "
+        f"هر بخش از این داستان، ریشه در همان کلمات آغازین دارد و با همان روح پیش می‌رود.\n\n"
+        f"{pick}"
     )
 
 
+def _clean_track_name(name: str) -> str:
+    if not name:
+        return ""
+    name = name.replace("_", " ").replace(".", " ")
+    # حذف پسوندها و تگ‌های کیفیت
+    junk = [
+        "mp3", "flac", "wav", "m4a", "128", "320", "256", "kbps", "official",
+        "lyrics", "audio", "hq", "lq", "copy", "song", "track", "full",
+    ]
+    low = name
+    for j in junk:
+        low = re.sub(rf"(?i)\\b{re.escape(j)}\\b", " ", low)
+    low = re.sub(r"\\s+", " ", low).strip(" -_|")
+    return low.strip()
+
+
+def _split_artist_title(raw: str):
+    raw = _clean_track_name(raw)
+    if not raw:
+        return "", ""
+    for sep in [" - ", " – ", " — ", " | ", " _ "]:
+        if sep in raw:
+            a, t = raw.split(sep, 1)
+            return a.strip(), t.strip()
+    return "", raw
+
+
 async def fetch_song_lyrics(title: str, artist: str = "") -> str:
-    """دریافت متن آهنگ از lyrics.ovh و جستجوی جایگزین"""
-    title = (title or "").strip()
-    artist = (artist or "").strip()
+    """جستجوی قوی متن آهنگ: LRCLIB + lyrics.ovh + پارس نام فایل"""
+    title = _clean_track_name(title or "")
+    artist = _clean_track_name(artist or "")
+
+    # اگر title شامل artist - song باشد
+    if not artist and title:
+        a2, t2 = _split_artist_title(title)
+        if t2:
+            artist = artist or a2
+            title = t2
+
     if not title:
         return "❌ نام آهنگ مشخص نیست."
 
-    # 1) lyrics.ovh
+    queries = []
+    if artist and title:
+        queries.append((artist, title))
+    queries.append(("", title))
     if artist:
+        queries.append((artist, title.split("-")[0].strip()))
+
+    timeout = aiohttp.ClientTimeout(total=25)
+
+    # ---- 1) LRCLIB search ----
+    try:
+        q = f"{artist} {title}".strip()
+        url = f"https://lrclib.net/api/search?q={quote(q)}"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    items = await resp.json()
+                    if isinstance(items, list) and items:
+                        best = items[0]
+                        # plain lyrics
+                        lyrics = (best.get("plainLyrics") or best.get("syncedLyrics") or "").strip()
+                        if lyrics:
+                            ar = best.get("artistName") or artist or ""
+                            tr = best.get("trackName") or title
+                            # synced has timestamps [00:01.00] — clean if needed
+                            if "[" in lyrics and "]" in lyrics and "plainLyrics" not in best:
+                                lyrics = re.sub(r"\\[\\d+:\\d+\\.\\d+\\]\\s*", "", lyrics)
+                            return f"🎵 {ar} — {tr}\n\n{lyrics[:3800]}"
+    except Exception as e:
+        logging.warning(f"lrclib search: {e}")
+
+    # ---- 2) LRCLIB get exact ----
+    for ar, tr in queries:
+        if not tr:
+            continue
         try:
-            url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
-            timeout = aiohttp.ClientTimeout(total=20)
+            url = (
+                "https://lrclib.net/api/get?"
+                f"artist_name={quote(ar or 'Unknown')}&track_name={quote(tr)}"
+            )
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        lyrics = (data.get("plainLyrics") or data.get("syncedLyrics") or "").strip()
+                        if lyrics:
+                            if "syncedLyrics" in data and not data.get("plainLyrics"):
+                                lyrics = re.sub(r"\\[\\d+:\\d+\\.\\d+\\]\\s*", "", lyrics)
+                            return f"🎵 {(ar or data.get('artistName') or '')} — {tr}\n\n{lyrics[:3800]}"
+        except Exception as e:
+            logging.warning(f"lrclib get: {e}")
+
+    # ---- 3) lyrics.ovh ----
+    for ar, tr in queries:
+        if not ar or not tr:
+            continue
+        try:
+            url = f"https://api.lyrics.ovh/v1/{quote(ar)}/{quote(tr)}"
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         lyrics = (data.get("lyrics") or "").strip()
                         if lyrics:
-                            return f"🎵 {artist} — {title}\n\n{lyrics[:3500]}"
+                            return f"🎵 {ar} — {tr}\n\n{lyrics[:3800]}"
         except Exception as e:
             logging.warning(f"lyrics.ovh: {e}")
 
-    # 2) بدون آرتیست: جستجو با lyrics.ovh suggest نیست؛ از some-random-api یا fallback
+    # ---- 4) Genius API search (عمومی) ----
     try:
-        # تلاش با artist خالی گاهی کار نمی‌کند؛ از Google-like page استفاده نمی‌کنیم سنگین
-        q = f"{artist} {title} lyrics".strip()
-        url = f"https://api.lyrics.ovh/v1/{quote(artist or ' ')}/{quote(title)}"
-        timeout = aiohttp.ClientTimeout(total=15)
+        q = f"{artist} {title}".strip()
+        url = f"https://genius.com/api/search?q={quote(q)}"
+        headers = {"User-Agent": "Mozilla/5.0"}
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    lyrics = (data.get("lyrics") or "").strip()
-                    if lyrics:
-                        return f"🎵 {title}\n\n{lyrics[:3500]}"
-    except Exception:
-        pass
+                    hits = (((data or {}).get("response") or {}).get("hits")) or []
+                    if hits:
+                        result = hits[0].get("result") or {}
+                        song_title = result.get("full_title") or title
+                        song_url = result.get("url") or ""
+                        if song_url:
+                            # صفحه آهنگ را برای lyrics scrape کن
+                            async with session.get(song_url, headers=headers) as r2:
+                                if r2.status == 200:
+                                    html = await r2.text()
+                                    # استخراج ساده از containers
+                                    try:
+                                        from bs4 import BeautifulSoup
+                                        soup = BeautifulSoup(html, "lxml")
+                                        parts = soup.select('div[data-lyrics-container="true"]')
+                                        if parts:
+                                            lyrics = "\n".join(p.get_text("\n").strip() for p in parts)
+                                            lyrics = re.sub(r"\\n{3,}", "\n\n", lyrics).strip()
+                                            if lyrics and len(lyrics) > 40:
+                                                return f"🎵 {song_title}\n\n{lyrics[:3800]}"
+                                    except Exception as e:
+                                        logging.warning(f"genius scrape: {e}")
+                        return (
+                            f"🔎 آهنگ پیدا شد ولی متن مستقیم در دسترس نبود:\n"
+                            f"{song_title}\n{song_url}"
+                        )
+    except Exception as e:
+        logging.warning(f"genius: {e}")
 
-    # 3) fallback: لینک جستجو
     q = quote(f"{artist} {title} lyrics".strip())
     return (
-        f"❌ متن آهنگ پیدا نشد.\n\n"
-        f"🔎 جستجو:\n"
+        f"❌ متن آهنگ پیدا نشد برای:\n"
+        f"🎵 {artist + ' - ' if artist else ''}{title}\n\n"
+        f"جستجو:\n"
         f"https://www.google.com/search?q={q}\n"
         f"https://genius.com/search?q={q}"
     )
@@ -2532,39 +2692,57 @@ async def reply_based_controller(client, message):
         return
 
     # ========== متن آهنگ ==========
-    if cmd in (".متن آهنگ", "متن آهنگ"):
-        if not message.reply_to_message:
-            await message.edit_text("❌ روی یک آهنگ/فایل صوتی ریپلای کنید:\n`.متن آهنگ`")
-            return
-        r = message.reply_to_message
+    if cmd in (".متن آهنگ", "متن آهنگ") or cmd.startswith(".متن آهنگ ") or cmd.startswith("متن آهنگ "):
         title = ""
         artist = ""
-        if r.audio:
-            title = r.audio.title or ""
-            artist = r.audio.performer or ""
-            if not title and r.audio.file_name:
-                title = r.audio.file_name.rsplit(".", 1)[0]
-        elif r.voice:
-            await message.edit_text("❌ ویس عنوان ندارد. روی فایل آهنگ (music) ریپلای کنید.")
+        rest = cmd.replace(".متن آهنگ", "", 1).replace("متن آهنگ", "", 1).strip()
+        if rest:
+            a2, t2 = _split_artist_title(rest)
+            if t2:
+                artist, title = a2, t2
+            else:
+                title = rest
+        if not title and not message.reply_to_message:
+            await message.edit_text("❌ روی آهنگ ریپلای کنید یا بنویسید:\n`.متن آهنگ نام آهنگ`")
             return
-        elif r.document:
-            title = (r.document.file_name or "").rsplit(".", 1)[0]
-        elif r.text or r.caption:
-            title = (r.text or r.caption or "").strip()
+        r = message.reply_to_message
+        if r:
+            if r.audio:
+                title = r.audio.title or title
+                artist = r.audio.performer or artist
+                if not title and r.audio.file_name:
+                    title = r.audio.file_name.rsplit(".", 1)[0]
+            elif r.document:
+                fname = r.document.file_name or ""
+                if not title and fname:
+                    title = fname.rsplit(".", 1)[0]
+            elif (r.text or r.caption) and not title:
+                title = (r.text or r.caption or "").strip()
+            elif r.voice and not title:
+                await message.edit_text("❌ ویس متادیتا ندارد. روی فایل آهنگ (Music) ریپلای کنید یا اسم آهنگ را بفرستید:\n`.متن آهنگ نام آهنگ`")
+                return
+        # پارس Artist - Title
+        if title and not artist:
+            a2, t2 = _split_artist_title(title)
+            if t2:
+                artist, title = a2, t2
+        title = _clean_track_name(title)
+        artist = _clean_track_name(artist)
         if not title:
             await message.edit_text("❌ نام آهنگ از پیام پیدا نشد.")
             return
         await message.edit_text(f"⏳ در حال جستجوی متن آهنگ...\n🎵 {artist + ' - ' if artist else ''}{title}")
         try:
             lyrics = await fetch_song_lyrics(title, artist)
-            # اگر خیلی بلند بود تکه تکه
             if len(lyrics) > 3900:
                 await message.edit_text(lyrics[:3900] + "\n\n…")
             else:
                 await message.edit_text(lyrics)
         except Exception as e:
+            logging.error(f"lyrics cmd: {e}")
             await message.edit_text(f"❌ خطا: {e}")
         return
+
 
     # ========== تاس / بولینگ ==========
     if cmd == "تاس":

@@ -160,6 +160,37 @@ MIN_GAME_AMOUNT = 20     # حداقل مبلغ نبرد
 TRANSFER_TAX_PERCENT = 10
 GAME_TAX_PERCENT = 5
 
+# نبردهای فعال: (chat_id, message_id) -> info
+active_games = {}
+
+
+async def get_user_name(user_id: int) -> str:
+    """نام قابل‌نمایش کاربر برای پیام نتیجه نبرد"""
+    try:
+        u = await manager_bot.get_users(int(user_id))
+        name = (u.first_name or str(user_id)).replace("<", "").replace(">", "")
+        return f'<a href="tg://user?id={user_id}">{name}</a>'
+    except Exception:
+        try:
+            return f"<code>{int(user_id)}</code>"
+        except Exception:
+            return str(user_id)
+
+
+async def check_all_channels(user_id: int):
+    """لیست کانال‌هایی که کاربر عضو نیست"""
+    missing = []
+    for ch in FORCE_CHANNELS:
+        try:
+            member = await manager_bot.get_chat_member(ch, user_id)
+            status = str(getattr(member, "status", "")).lower()
+            if "left" in status or "kicked" in status or "banned" in status:
+                missing.append(ch)
+        except Exception:
+            missing.append(ch)
+    return missing
+
+
 def get_user_db(user_id):
     return sqlite3.connect(f'database_users/user_{user_id}.db')
 
@@ -3585,78 +3616,115 @@ async def callback_panel_handler(client, callback):
     # ====== پیوستن به نبرد ======
     if data.startswith("game_join_"):
         parts = data.split("_")
-        amount = int(parts[2])
-        organizer_id = int(parts[3])
+        try:
+            amount = int(parts[2])
+            organizer_id = int(parts[3])
+        except Exception:
+            await callback.answer("❌ داده نبرد نامعتبر", show_alert=True)
+            return
         joiner_id = callback.from_user.id
-        
+
         if joiner_id == organizer_id:
             await callback.answer("❌ شما برگزار کننده هستید!", show_alert=True)
             return
-        
+
+        # جلوگیری از دوبار کلیک روی یک نبرد
+        game_key = (callback.message.chat.id, callback.message.id)
+        if game_key not in active_games:
+            # اگر به هر دلیل در حافظه نبود، باز هم اجازه بده با amount/organizer ادامه دهد
+            active_games[game_key] = {
+                "organizer_id": organizer_id,
+                "amount": amount,
+                "chat_id": callback.message.chat.id,
+                "message_id": callback.message.id,
+            }
+        elif active_games[game_key].get("finished"):
+            await callback.answer("❌ این نبرد تمام شده!", show_alert=True)
+            return
+
         joiner_balance = get_balance(joiner_id)
         if joiner_balance < amount:
             await callback.answer(f"❌ موجودی شما کافی نیست! ({joiner_balance:,})", show_alert=True)
             return
-        
+
         if not deduct_balance(joiner_id, amount):
             await callback.answer("❌ خطا در کسر الماس!", show_alert=True)
             return
-        
-        total_prize = amount * 2
-        tax = int(total_prize * GAME_TAX_PERCENT / 100)
-        prize = total_prize - tax
-        
-        winner_id = random.choice([organizer_id, joiner_id])
-        loser_id = organizer_id if winner_id == joiner_id else joiner_id
-        
-        add_balance(winner_id, prize)
-        
-        winner_name = await get_user_name(winner_id)
-        loser_name = await get_user_name(loser_id)
-        
-        winner_balance = get_balance(winner_id)
-        loser_balance = get_balance(loser_id)
-        
-        result_text = (
-            f"🎯 <b>نتیجه بازی مشخص شد</b>\n\n"
-            f"🏆 کاربر برنده: {winner_name}\n"
-            f"❌ کاربر بازنده: {loser_name}"
-        )
-        
-        result_buttons = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {prize:,}", callback_data="noop")
-            ],
-            [
-                InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {winner_balance:,}", callback_data="noop")
-            ],
-            [
-                InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {loser_balance:,}", callback_data="noop")
-            ]
-        ])
-        
+
         try:
-            await client.delete_messages(callback.message.chat.id, callback.message.id)
-        except:
-            pass
-        
-        try:
-            await callback.message.reply_text(result_text, reply_markup=result_buttons, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logging.error(f"Result message error: {e}")
-            await callback.message.reply_text(
-                f"🎯 نتیجه بازی\n🏆 برنده: {winner_name}\n❌ بازنده: {loser_name}\n💎 جایزه: {prize:,}"
+            total_prize = amount * 2
+            tax = int(total_prize * GAME_TAX_PERCENT / 100)
+            prize = total_prize - tax
+
+            winner_id = random.choice([organizer_id, joiner_id])
+            loser_id = organizer_id if winner_id == joiner_id else joiner_id
+
+            add_balance(winner_id, prize)
+
+            winner_name = await get_user_name(winner_id)
+            loser_name = await get_user_name(loser_id)
+
+            winner_balance = get_balance(winner_id)
+            loser_balance = get_balance(loser_id)
+
+            result_text = (
+                f"🎯 <b>نتیجه بازی مشخص شد</b>\n\n"
+                f"🏆 کاربر برنده: {winner_name}\n"
+                f"❌ کاربر بازنده: {loser_name}"
             )
-        await callback.answer("✅ نبرد به پایان رسید!")
-        
-        game_key = (callback.message.chat.id, callback.message.id)
-        if game_key in active_games:
-            del active_games[game_key]
+
+            result_buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
+                    InlineKeyboardButton(f"💎 {prize:,}", callback_data="noop")
+                ],
+                [
+                    InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
+                    InlineKeyboardButton(f"💎 {winner_balance:,}", callback_data="noop")
+                ],
+                [
+                    InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
+                    InlineKeyboardButton(f"💎 {loser_balance:,}", callback_data="noop")
+                ]
+            ])
+
+            active_games[game_key]["finished"] = True
+
+            try:
+                await client.delete_messages(callback.message.chat.id, callback.message.id)
+            except Exception:
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+
+            try:
+                await client.send_message(
+                    callback.message.chat.id,
+                    result_text,
+                    reply_markup=result_buttons,
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logging.error(f"Result message error: {e}")
+                await client.send_message(
+                    callback.message.chat.id,
+                    f"🎯 نتیجه بازی\n🏆 برنده: {winner_name}\n❌ بازنده: {loser_name}\n💎 جایزه: {prize:,}",
+                )
+
+            await callback.answer("✅ نبرد به پایان رسید!")
+            if game_key in active_games:
+                del active_games[game_key]
+        except Exception as e:
+            logging.error(f"game_join error: {e}")
+            # برگرداندن الماس جوینر در صورت خطا
+            try:
+                add_balance(joiner_id, amount)
+            except Exception:
+                pass
+            await callback.answer("❌ خطا در انجام نبرد", show_alert=True)
         return
-    
+
     # ====== لغو نبرد ======
     if data.startswith("game_cancel_"):
         parts = data.split("_")

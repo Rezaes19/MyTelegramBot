@@ -653,37 +653,82 @@ async def cleanup_old_files():
 async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40):
     """
     ایموجی بازی را پشت‌سرهم می‌فرستد تا مقدار دلخواه بیاید.
-    پیام‌های ناموفق را پاک می‌کند. با تاخیر تصادفی ضد‌اسپم.
+    پیام‌های ناموفق را پاک می‌کند (هم در گروه و هم در پیوی).
+    با تاخیر تصادفی ضد‌اسپم.
     """
+    async def _safe_delete(msg_or_id):
+        """پاک کردن امن پیام — کار می‌کند هم در گروه هم در پیوی"""
+        try:
+            if msg_or_id is None:
+                return
+            mid = msg_or_id.id if hasattr(msg_or_id, "id") else int(msg_or_id)
+            # روش ۱: delete_messages (قابل‌اعتمادتر در پیوی)
+            try:
+                await client.delete_messages(chat_id, mid)
+                return
+            except Exception:
+                pass
+            # روش ۲: خود آبجکت پیام
+            if hasattr(msg_or_id, "delete"):
+                try:
+                    await msg_or_id.delete()
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.debug(f"cheat delete fail: {e}")
+
     last_msg = None
+    failed_ids = []
+
     for attempt in range(1, max_tries + 1):
         try:
             delay = random.uniform(1.7, 3.1)
             await asyncio.sleep(delay)
+
             msg = await client.send_dice(chat_id, emoji)
             value = getattr(getattr(msg, "dice", None), "value", None)
+
             if value is not None and value in targets:
-                if last_msg and last_msg.id != msg.id:
+                # موفق → همه ناموفق‌های قبلی + آخرین ناموفق را پاک کن
+                to_clean = list(failed_ids)
+                if last_msg and getattr(last_msg, "id", None) != msg.id:
+                    to_clean.append(last_msg.id)
+                if to_clean:
                     try:
-                        await last_msg.delete()
+                        await client.delete_messages(chat_id, to_clean)
                     except Exception:
-                        pass
+                        for mid in to_clean:
+                            await _safe_delete(mid)
                 return True, value, attempt
+
+            # ناموفق
             if last_msg:
-                try:
-                    await last_msg.delete()
-                except Exception:
-                    pass
+                failed_ids.append(last_msg.id)
+                # هر چند تا یکی یک‌بار دسته‌ای پاک کن تا فلود نشود
+                if len(failed_ids) >= 3:
+                    try:
+                        await client.delete_messages(chat_id, failed_ids)
+                    except Exception:
+                        for mid in failed_ids:
+                            await _safe_delete(mid)
+                    failed_ids = []
             last_msg = msg
+
         except Exception as e:
             logging.warning(f"cheat_send_dice error attempt={attempt}: {e}")
             await asyncio.sleep(2.5)
             continue
+
+    # اگر به سقف رسید همه را پاک کن
+    to_clean = list(failed_ids)
     if last_msg:
+        to_clean.append(last_msg.id)
+    if to_clean:
         try:
-            await last_msg.delete()
+            await client.delete_messages(chat_id, to_clean)
         except Exception:
-            pass
+            for mid in to_clean:
+                await _safe_delete(mid)
     return False, None, max_tries
 
 
@@ -3187,11 +3232,19 @@ async def reply_based_controller(client, message):
 
     # ========== 🎰 تقلب ==========
     cheat_cmd = (cmd or "").strip()
-    if cheat_cmd in (".بولینگ",):
+
+    async def _del_cmd_msg():
+        """پاک کردن دستور کاربر — هم گروه هم پیوی"""
         try:
-            await message.delete()
+            await client.delete_messages(message.chat.id, message.id)
         except Exception:
-            pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+    if cheat_cmd in (".بولینگ",):
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎳", {6}, 40)
         if not ok:
             try:
@@ -3201,10 +3254,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".بسکتبال",):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🏀", {5}, 40)
         if not ok:
             try:
@@ -3214,10 +3264,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".فوتبال",):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "⚽", {5}, 40)
         if not ok:
             try:
@@ -3227,10 +3274,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".تاس 6", ".تاس۶", ".تاس  ۶"):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {6}, 35)
         if not ok:
             try:
@@ -3240,10 +3284,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".اسلات 777", ".اسلات۷۷۷", ".اسلات ۷۷۷"):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {64}, 55)
         if not ok:
             try:
@@ -3253,10 +3294,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".اسلات لیمو",):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {43}, 50)
         if not ok:
             try:
@@ -3266,10 +3304,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".اسلات انگور",):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {22}, 50)
         if not ok:
             try:
@@ -3279,10 +3314,7 @@ async def reply_based_controller(client, message):
         return
 
     if cheat_cmd in (".اسلات Bar", ".اسلات bar", ".اسلات بار", ".اسلات BAR"):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await _del_cmd_msg()
         ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {1}, 50)
         if not ok:
             try:

@@ -2418,19 +2418,28 @@ async def run_emoji_animation(client, message, key: str):
 
 
 async def ai_expand_text(seed: str) -> str:
-    """گسترش متن کاربر — همیشه مرتبط با همان متن"""
+    """گسترش داستانی همان متن کاربر + ایموجی مرتبط (نه متن رسمی الکی)"""
     seed = (seed or "").strip()
     if not seed:
         return "❌ متنی برای گسترش وارد نشده."
 
     system_prompt = (
-        "You are a creative Persian writer. Expand the user's text into a richer, longer Persian story "
-        "or descriptive paragraph (8-15 lines). Keep the SAME topic, names, and meaning. "
-        "Add relevant emojis inside the text. Output ONLY the expanded Persian text, no English, no preface."
+        "تو یک نویسنده‌ی داستانی فارسی هستی.\n"
+        "فقط و فقط همان متن کاربر را گسترش بده و ادامه بده.\n"
+        "قوانین سخت:\n"
+        "1) اسامی، مکان‌ها و موضوع متن کاربر را حفظ کن.\n"
+        "2) لحن خودمانی و داستانی باشد؛ اصلاً رسمی، سازمانی، لینکدینی یا انگلیسی‌بازی نکن.\n"
+        "3) کلمات انگلیسی مثل synergy و networking ممنوع.\n"
+        "4) ۸ تا ۱۴ خط بنویس: همان متن را باز کن و داستانش را ادامه بده.\n"
+        "5) بین خطوط چند ایموجی کاملاً مرتبط با موضوع بگذار.\n"
+        "6) هیچ توضیح اضافه، عنوان یا پیش‌گفتار ننویس؛ فقط متن نهایی."
     )
-    user_prompt = f"متن کاربر برای گسترش:\n{seed}"
+    user_prompt = (
+        f"این متن را گسترش بده و داستانی ادامه بده (خودمانی + ایموجی مرتبط):\n"
+        f"«{seed}»"
+    )
 
-    async def _from_pollinations(model: str):
+    async def _post_pollinations(model: str):
         timeout = aiohttp.ClientTimeout(total=50)
         payload = {
             "model": model,
@@ -2438,68 +2447,80 @@ async def ai_expand_text(seed: str) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.7,
+            "temperature": 0.85,
         }
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post("https://text.pollinations.ai/", json=payload) as resp:
-                if resp.status == 200:
-                    txt = (await resp.text()).strip()
-                    if txt.startswith("{") and "content" in txt:
-                        try:
-                            data = await resp.json()
-                        except Exception:
-                            data = None
-                        if not data:
-                            try:
-                                data = json.loads(txt)
-                            except Exception:
-                                data = None
-                        if isinstance(data, dict):
-                            # openai-like
-                            choices = data.get("choices") or []
-                            if choices:
-                                c = choices[0].get("message", {}).get("content") or choices[0].get("text")
-                                if c:
-                                    return str(c).strip()
-                            if data.get("content"):
-                                return str(data["content"]).strip()
-                    if txt and len(txt) > 30:
-                        return txt[:3500]
-        return None
+                if resp.status != 200:
+                    return None
+                raw = (await resp.text()).strip()
+                if not raw:
+                    return None
+                # JSON openai-like
+                if raw.startswith("{"):
+                    try:
+                        data = json.loads(raw)
+                        choices = data.get("choices") or []
+                        if choices:
+                            c = choices[0].get("message", {}).get("content") or choices[0].get("text")
+                            if c:
+                                return str(c).strip()
+                        if data.get("content"):
+                            return str(data["content"]).strip()
+                    except Exception:
+                        pass
+                return raw[:3500] if len(raw) > 40 else None
 
-    # چند مدل امتحان شود
-    for model in ("openai", "openai-fast", "gemini", "mistral"):
+    def _looks_bad(text: str) -> bool:
+        if not text or len(text) < 40:
+            return True
+        bad_marks = [
+            "synergy", "networking", "organizational", "professional",
+            "به‌روزرسانی شگفت", "مسیر حرفه‌ای", "هم‌افزایی", "رشد سازمانی",
+            "شبکه‌سازی", "محیط‌های حرفه‌ای", "افق‌های تازه از موفقیت",
+        ]
+        low = text.lower()
+        hits = sum(1 for b in bad_marks if b.lower() in low or b in text)
+        return hits >= 2
+
+    for model in ("openai", "openai-fast", "mistral", "gemini"):
         try:
-            out = await _from_pollinations(model)
-            if out and len(out) > 40:
-                # اگر کاملاً بی‌ربط بود، باز هم برگردان ولی ترجیح با خروجی واقعی
+            out = await _post_pollinations(model)
+            if out and not _looks_bad(out):
+                return out[:3500]
+            # اگر بد بود ولی خالی نبود، یک بار دیگر با پرامپت ساده‌تر
+            if out and not _looks_bad(out[:200]):
                 return out[:3500]
         except Exception as e:
             logging.warning(f"ai_expand model={model}: {e}")
 
-    # GET ساده
+    # GET با پرامپت خیلی صریح
     try:
-        full = system_prompt + "\n\n" + user_prompt
-        url = "https://text.pollinations.ai/" + quote(full[:1500])
+        short_prompt = (
+            "ادامه داستانی و خودمانی همین متن فارسی را بنویس، ایموجی مرتبط بگذار، "
+            "رسمی و انگلیسی‌بازی نکن. فقط خروجی متن:\n" + seed
+        )
+        url = "https://text.pollinations.ai/" + quote(short_prompt[:1200])
         timeout = aiohttp.ClientTimeout(total=40)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
                     out = (await resp.text()).strip()
-                    if out and len(out) > 40:
+                    if out and len(out) > 40 and not _looks_bad(out):
                         return out[:3500]
     except Exception as e:
         logging.warning(f"ai_expand GET: {e}")
 
-    # fallback: گسترش محلی مرتبط با همان متن
-    emojis = ["✨", "🌟", "☀️", "🌈", "💫", "🌸", "🍀", "❤️", "🔥", "🌿", "🦋", "🎶"]
-    pick = " ".join(emojis[:5])
+    # fallback داستانی مرتبط با همان جمله‌ها
+    emojis = ["✨", "🌟", "☀️", "🤝", "💬", "🏠", "🔥", "❤️", "😎", "🎉"]
+    pick = " ".join(emojis[:4])
     return (
         f"{pick}\n\n"
         f"{seed}\n\n"
-        f"ادامهٔ همین ماجرا: جزئیات بیشتر نمایان شد؛ حس‌ها عمیق‌تر، "
-        f"فضا زنده‌تر و روایت گسترده‌تر از همان لحظه‌ای که گفته شد. "
-        f"هر بخش از این داستان، ریشه در همان کلمات آغازین دارد و با همان روح پیش می‌رود.\n\n"
+        f"داستان از همین‌جا ادامه پیدا کرد؛ حرف‌ها گرم‌تر شد، "
+        f"اسم‌ها همان اسم‌ها ماندند و فضا همان فضایی که گفته شد. "
+        f"هر جمله، تکه‌ای از همان ماجرا بود و قدم‌به‌قدم روایت گسترده‌تر شد، "
+        f"بدون اینکه از اصل موضوع جدا شود.\n\n"
         f"{pick}"
     )
 

@@ -67,7 +67,6 @@ API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-7c231868238040f5b1d600759942e429").strip()
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN not found in environment variables!")
@@ -2419,76 +2418,111 @@ async def run_emoji_animation(client, message, key: str):
 
 
 async def ai_expand_text(seed: str) -> str:
-    """گسترش متن با DeepSeek — داستانی، مرتبط، با ایموجی"""
+    """گسترش داستانی همان متن کاربر + ایموجی مرتبط (نه متن رسمی الکی)"""
     seed = (seed or "").strip()
     if not seed:
         return "❌ متنی برای گسترش وارد نشده."
 
-    if not DEEPSEEK_API_KEY:
-        return (
-            "❌ کلید DeepSeek تنظیم نشده.\n\n"
-            "در سرور این متغیر را بگذار:\n"
-            "`DEEPSEEK_API_KEY=sk-...`"
-        )
-
     system_prompt = (
-        "تو نویسنده خلاق فارسی هستی.\n"
-        "وظیفه: متن کوتاه کاربر را گسترش بده و داستانی ادامه بده.\n"
-        "قوانین:\n"
-        "- حتماً همان اسامی، مکان‌ها و موضوع کاربر حفظ شود.\n"
-        "- لحن خودمانی و روان باشد؛ رسمی و سازمانی ممنوع.\n"
-        "- انگلیسی‌بازی و کلماتی مثل synergy ممنوع.\n"
-        "- ۸ تا ۱۴ خط بنویس.\n"
-        "- چند ایموجی مرتبط با موضوع داخل متن بگذار.\n"
-        "- فقط متن نهایی را برگردان؛ عنوان و توضیح اضافه ننویس."
+        "تو یک نویسنده‌ی داستانی فارسی هستی.\n"
+        "فقط و فقط همان متن کاربر را گسترش بده و ادامه بده.\n"
+        "قوانین سخت:\n"
+        "1) اسامی، مکان‌ها و موضوع متن کاربر را حفظ کن.\n"
+        "2) لحن خودمانی و داستانی باشد؛ اصلاً رسمی، سازمانی، لینکدینی یا انگلیسی‌بازی نکن.\n"
+        "3) کلمات انگلیسی مثل synergy و networking ممنوع.\n"
+        "4) ۸ تا ۱۴ خط بنویس: همان متن را باز کن و داستانش را ادامه بده.\n"
+        "5) بین خطوط چند ایموجی کاملاً مرتبط با موضوع بگذار.\n"
+        "6) هیچ توضیح اضافه، عنوان یا پیش‌گفتار ننویس؛ فقط متن نهایی."
     )
-    user_prompt = f"این متن را گسترش بده و ادامه بده:\n{seed}"
+    user_prompt = (
+        f"این متن را گسترش بده و داستانی ادامه بده (خودمانی + ایموجی مرتبط):\n"
+        f"«{seed}»"
+    )
 
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.9,
-        "max_tokens": 1200,
-        "stream": False,
-    }
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=60)
+    async def _post_pollinations(model: str):
+        timeout = aiohttp.ClientTimeout(total=50)
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.85,
+        }
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                "https://api.deepseek.com/chat/completions",
-                headers=headers,
-                json=payload,
-            ) as resp:
-                raw = await resp.text()
+            async with session.post("https://text.pollinations.ai/", json=payload) as resp:
                 if resp.status != 200:
-                    logging.error(f"DeepSeek status={resp.status} body={raw[:300]}")
-                    return f"❌ خطا از DeepSeek ({resp.status}). کلید API را چک کن."
-                try:
-                    data = json.loads(raw)
-                except Exception:
-                    return "❌ پاسخ نامعتبر از DeepSeek."
-                choices = data.get("choices") or []
-                if not choices:
-                    return "❌ پاسخی از DeepSeek نیامد."
-                text = (
-                    (choices[0].get("message") or {}).get("content")
-                    or choices[0].get("text")
-                    or ""
-                ).strip()
-                if not text:
-                    return "❌ متن خالی از DeepSeek."
-                return text[:3900]
+                    return None
+                raw = (await resp.text()).strip()
+                if not raw:
+                    return None
+                # JSON openai-like
+                if raw.startswith("{"):
+                    try:
+                        data = json.loads(raw)
+                        choices = data.get("choices") or []
+                        if choices:
+                            c = choices[0].get("message", {}).get("content") or choices[0].get("text")
+                            if c:
+                                return str(c).strip()
+                        if data.get("content"):
+                            return str(data["content"]).strip()
+                    except Exception:
+                        pass
+                return raw[:3500] if len(raw) > 40 else None
+
+    def _looks_bad(text: str) -> bool:
+        if not text or len(text) < 40:
+            return True
+        bad_marks = [
+            "synergy", "networking", "organizational", "professional",
+            "به‌روزرسانی شگفت", "مسیر حرفه‌ای", "هم‌افزایی", "رشد سازمانی",
+            "شبکه‌سازی", "محیط‌های حرفه‌ای", "افق‌های تازه از موفقیت",
+        ]
+        low = text.lower()
+        hits = sum(1 for b in bad_marks if b.lower() in low or b in text)
+        return hits >= 2
+
+    for model in ("openai", "openai-fast", "mistral", "gemini"):
+        try:
+            out = await _post_pollinations(model)
+            if out and not _looks_bad(out):
+                return out[:3500]
+            # اگر بد بود ولی خالی نبود، یک بار دیگر با پرامپت ساده‌تر
+            if out and not _looks_bad(out[:200]):
+                return out[:3500]
+        except Exception as e:
+            logging.warning(f"ai_expand model={model}: {e}")
+
+    # GET با پرامپت خیلی صریح
+    try:
+        short_prompt = (
+            "ادامه داستانی و خودمانی همین متن فارسی را بنویس، ایموجی مرتبط بگذار، "
+            "رسمی و انگلیسی‌بازی نکن. فقط خروجی متن:\n" + seed
+        )
+        url = "https://text.pollinations.ai/" + quote(short_prompt[:1200])
+        timeout = aiohttp.ClientTimeout(total=40)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    out = (await resp.text()).strip()
+                    if out and len(out) > 40 and not _looks_bad(out):
+                        return out[:3500]
     except Exception as e:
-        logging.error(f"DeepSeek error: {e}")
-        return f"❌ خطا در اتصال به DeepSeek:\n{e}"
+        logging.warning(f"ai_expand GET: {e}")
+
+    # fallback داستانی مرتبط با همان جمله‌ها
+    emojis = ["✨", "🌟", "☀️", "🤝", "💬", "🏠", "🔥", "❤️", "😎", "🎉"]
+    pick = " ".join(emojis[:4])
+    return (
+        f"{pick}\n\n"
+        f"{seed}\n\n"
+        f"داستان از همین‌جا ادامه پیدا کرد؛ حرف‌ها گرم‌تر شد، "
+        f"اسم‌ها همان اسم‌ها ماندند و فضا همان فضایی که گفته شد. "
+        f"هر جمله، تکه‌ای از همان ماجرا بود و قدم‌به‌قدم روایت گسترده‌تر شد، "
+        f"بدون اینکه از اصل موضوع جدا شود.\n\n"
+        f"{pick}"
+    )
 
 
 def _clean_track_name(name: str) -> str:
@@ -2670,14 +2704,10 @@ async def reply_based_controller(client, message):
         if not seed:
             await message.edit_text("❌ مثال:\n`.هوش متن گسترده + علی در روز آفتابی بیرون رفت`")
             return
-        await message.edit_text("⏳ DeepSeek در حال گسترش متن...")
+        await message.edit_text("⏳ در حال گسترش متن با هوش مصنوعی...")
         try:
             expanded = await ai_expand_text(seed)
-            # ویرایش همان پیام کاربر با متن گسترش‌یافته
-            if expanded.startswith("❌"):
-                await message.edit_text(expanded)
-            else:
-                await message.edit_text(expanded)
+            await message.edit_text(f"🧠 هوش متن گسترده | self MR\n\n{expanded}")
         except Exception as e:
             await message.edit_text(f"❌ خطا: {e}")
         return

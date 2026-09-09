@@ -646,6 +646,47 @@ async def cleanup_old_files():
                     except:
                         pass
 
+
+# =============================================
+# 🎰 سیستم تقلب تاس / بولینگ / اسلات (ضد اسپم)
+# =============================================
+async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40):
+    """
+    ایموجی بازی را پشت‌سرهم می‌فرستد تا مقدار دلخواه بیاید.
+    پیام‌های ناموفق را پاک می‌کند. با تاخیر تصادفی ضد‌اسپم.
+    """
+    last_msg = None
+    for attempt in range(1, max_tries + 1):
+        try:
+            delay = random.uniform(1.7, 3.1)
+            await asyncio.sleep(delay)
+            msg = await client.send_dice(chat_id, emoji)
+            value = getattr(getattr(msg, "dice", None), "value", None)
+            if value is not None and value in targets:
+                if last_msg and last_msg.id != msg.id:
+                    try:
+                        await last_msg.delete()
+                    except Exception:
+                        pass
+                return True, value, attempt
+            if last_msg:
+                try:
+                    await last_msg.delete()
+                except Exception:
+                    pass
+            last_msg = msg
+        except Exception as e:
+            logging.warning(f"cheat_send_dice error attempt={attempt}: {e}")
+            await asyncio.sleep(2.5)
+            continue
+    if last_msg:
+        try:
+            await last_msg.delete()
+        except Exception:
+            pass
+    return False, None, max_tries
+
+
 ENEMY_REPLIES = [
     "کیرم تو رحم اجاره ای و خونی مالی مادرت",
     "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام",
@@ -3144,6 +3185,112 @@ async def reply_based_controller(client, message):
             pass
         return
 
+    # ========== 🎰 تقلب ==========
+    cheat_cmd = (cmd or "").strip()
+    if cheat_cmd in (".بولینگ",):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎳", {6}, 40)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ بعد از چند تلاش استرایک نیومد. دوباره بزن.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".بسکتبال",):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🏀", {5}, 40)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ توپ داخل سبد نیفتاد. دوباره امتحان کن.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".فوتبال",):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "⚽", {5}, 40)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ گل نشد. دوباره بزن.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".تاس 6", ".تاس۶", ".تاس  ۶"):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {6}, 35)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ تاس ۶ نیومد.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".اسلات 777", ".اسلات۷۷۷", ".اسلات ۷۷۷"):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {64}, 55)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ جکپات ۷۷۷ نیومد. دوباره بزن.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".اسلات لیمو",):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {43}, 50)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ سه لیمو نیومد.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".اسلات انگور",):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {22}, 50)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ سه انگور نیومد.")
+            except Exception:
+                pass
+        return
+
+    if cheat_cmd in (".اسلات Bar", ".اسلات bar", ".اسلات بار", ".اسلات BAR"):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {1}, 50)
+        if not ok:
+            try:
+                await client.send_message(message.chat.id, "❌ سه بار نیومد.")
+            except Exception:
+                pass
+        return
+
     if cmd == "لیست دشمن":
         enemies = ACTIVE_ENEMIES.get(user_id, set())
         await message.edit_text(f"📜 تعداد دشمنان فعال: {len(enemies)}")
@@ -3942,6 +4089,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🎵 استخراج متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -4157,7 +4307,7 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -4738,6 +4888,34 @@ async def callback_panel_handler(client, callback):
                         pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 23)
+                    except Exception:
+                        pass
+                    return
+                if page == 24:
+                    help_text = (
+                        "🎰 تقلب | self MR\n\n"
+                        "این ویژگی ایموجی بازی را آنقدر می‌فرستد تا بهترین نتیجه بیاید "
+                        "و پیام‌های ناموفق را خودکار پاک می‌کند.\n\n"
+                        "دستورات:\n"
+                        "• `.بولینگ` → استرایک (۶)\n"
+                        "• `.بسکتبال` → توپ داخل سبد (۵)\n"
+                        "• `.فوتبال` → گل (۵)\n"
+                        "• `.تاس 6` → تاس ۶\n"
+                        "• `.اسلات 777` → جکپات ۷۷۷\n"
+                        "• `.اسلات لیمو` → سه لیمو\n"
+                        "• `.اسلات انگور` → سه انگور\n"
+                        "• `.اسلات Bar` → سه بار\n\n"
+                        "⚠️ برای جلوگیری از اسپم و ریپورت، بین هر پرتاب تاخیر تصادفی وجود دارد."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 24))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 24))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 24)
                     except Exception:
                         pass
                     return

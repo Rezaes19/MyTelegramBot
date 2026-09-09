@@ -652,66 +652,43 @@ async def cleanup_old_files():
 # =============================================
 async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40):
     """
-    ایموجی بازی را پشت‌سرهم می‌فرستد تا مقدار دلخواه بیاید.
-    پیام‌های ناموفق را پاک می‌کند (هم در گروه و هم در پیوی).
+    ایموجی بازی را دانه‌دانه می‌فرستد تا مقدار دلخواه بیاید.
+    هر پیام ناموفق را جداگانه پاک می‌کند (گروه و پیوی).
     با تاخیر تصادفی ضد‌اسپم.
     """
     async def _safe_delete(msg_or_id):
-        """پاک کردن امن پیام — کار می‌کند هم در گروه هم در پیوی"""
+        if msg_or_id is None:
+            return
         try:
-            if msg_or_id is None:
-                return
             mid = msg_or_id.id if hasattr(msg_or_id, "id") else int(msg_or_id)
-            # روش ۱: delete_messages (قابل‌اعتمادتر در پیوی)
-            try:
-                await client.delete_messages(chat_id, mid)
-                return
-            except Exception:
-                pass
-            # روش ۲: خود آبجکت پیام
+            await client.delete_messages(chat_id, mid)
+            return
+        except Exception:
+            pass
+        try:
             if hasattr(msg_or_id, "delete"):
-                try:
-                    await msg_or_id.delete()
-                except Exception:
-                    pass
+                await msg_or_id.delete()
         except Exception as e:
             logging.debug(f"cheat delete fail: {e}")
 
     last_msg = None
-    failed_ids = []
-
     for attempt in range(1, max_tries + 1):
         try:
-            delay = random.uniform(1.7, 3.1)
-            await asyncio.sleep(delay)
-
+            await asyncio.sleep(random.uniform(1.8, 3.2))
             msg = await client.send_dice(chat_id, emoji)
+            # کمی صبر تا value آماده شود
+            await asyncio.sleep(0.4)
             value = getattr(getattr(msg, "dice", None), "value", None)
 
             if value is not None and value in targets:
-                # موفق → همه ناموفق‌های قبلی + آخرین ناموفق را پاک کن
-                to_clean = list(failed_ids)
-                if last_msg and getattr(last_msg, "id", None) != msg.id:
-                    to_clean.append(last_msg.id)
-                if to_clean:
-                    try:
-                        await client.delete_messages(chat_id, to_clean)
-                    except Exception:
-                        for mid in to_clean:
-                            await _safe_delete(mid)
+                # نتیجه درست — فقط پیام ناموفق قبلی را پاک کن
+                if last_msg is not None:
+                    await _safe_delete(last_msg)
                 return True, value, attempt
 
-            # ناموفق
-            if last_msg:
-                failed_ids.append(last_msg.id)
-                # هر چند تا یکی یک‌بار دسته‌ای پاک کن تا فلود نشود
-                if len(failed_ids) >= 3:
-                    try:
-                        await client.delete_messages(chat_id, failed_ids)
-                    except Exception:
-                        for mid in failed_ids:
-                            await _safe_delete(mid)
-                    failed_ids = []
+            # نتیجه اشتباه — پیام قبلی را دانه‌دانه پاک کن
+            if last_msg is not None:
+                await _safe_delete(last_msg)
             last_msg = msg
 
         except Exception as e:
@@ -719,16 +696,8 @@ async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tr
             await asyncio.sleep(2.5)
             continue
 
-    # اگر به سقف رسید همه را پاک کن
-    to_clean = list(failed_ids)
-    if last_msg:
-        to_clean.append(last_msg.id)
-    if to_clean:
-        try:
-            await client.delete_messages(chat_id, to_clean)
-        except Exception:
-            for mid in to_clean:
-                await _safe_delete(mid)
+    if last_msg is not None:
+        await _safe_delete(last_msg)
     return False, None, max_tries
 
 

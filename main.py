@@ -2416,10 +2416,154 @@ async def run_emoji_animation(client, message, key: str):
         pass
 
 
+
+async def ai_expand_text(seed: str) -> str:
+    """گسترش متن با AI (pollinations) + fallback محلی"""
+    seed = (seed or "").strip()
+    if not seed:
+        return "❌ متنی برای گسترش وارد نشده."
+    prompt = (
+        "تو یک نویسنده خلاق فارسی هستی. متن کوتاه زیر را به یک متن زیبا، ادبی، "
+        "داستانی و گسترش‌یافته (حدود ۸ تا ۱۵ خط) تبدیل کن. "
+        "چند ایموجی مرتبط با موضوع داخل متن بگذار. فقط خروجی متن نهایی را بده، بدون توضیح اضافه.\n\n"
+        f"متن: {seed}"
+    )
+    # روش ۱: pollinations text API
+    try:
+        url = "https://text.pollinations.ai/" + quote(prompt)
+        timeout = aiohttp.ClientTimeout(total=45)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    out = (await resp.text()).strip()
+                    if out and len(out) > 20:
+                        return out[:3500]
+    except Exception as e:
+        logging.warning(f"ai_expand pollinations: {e}")
+
+    # روش ۲: fallback محلی با ایموجی
+    emojis = ["✨", "🌟", "☀️", "🌈", "💫", "🌸", "🍀", "🎵", "❤️", "🔥", "🌿", "🦋"]
+    pick = " ".join(emojis[:6])
+    return (
+        f"{pick}\n\n"
+        f"{seed}\n\n"
+        f"و این‌گونه داستان ادامه یافت... لحظه‌ها نرم و آرام گذشتند، "
+        f"خنده‌ها در هوا پیچید و خاطره‌ای تازه در قلب‌ها نقش بست. "
+        f"هر قدم، روایتی تازه بود و هر نگاه، فصلی از دوستی.\n\n"
+        f"پایان این لحظه، آغاز قصه‌ای دیگر است. {pick}"
+    )
+
+
+async def fetch_song_lyrics(title: str, artist: str = "") -> str:
+    """دریافت متن آهنگ از lyrics.ovh و جستجوی جایگزین"""
+    title = (title or "").strip()
+    artist = (artist or "").strip()
+    if not title:
+        return "❌ نام آهنگ مشخص نیست."
+
+    # 1) lyrics.ovh
+    if artist:
+        try:
+            url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        lyrics = (data.get("lyrics") or "").strip()
+                        if lyrics:
+                            return f"🎵 {artist} — {title}\n\n{lyrics[:3500]}"
+        except Exception as e:
+            logging.warning(f"lyrics.ovh: {e}")
+
+    # 2) بدون آرتیست: جستجو با lyrics.ovh suggest نیست؛ از some-random-api یا fallback
+    try:
+        # تلاش با artist خالی گاهی کار نمی‌کند؛ از Google-like page استفاده نمی‌کنیم سنگین
+        q = f"{artist} {title} lyrics".strip()
+        url = f"https://api.lyrics.ovh/v1/{quote(artist or ' ')}/{quote(title)}"
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    lyrics = (data.get("lyrics") or "").strip()
+                    if lyrics:
+                        return f"🎵 {title}\n\n{lyrics[:3500]}"
+    except Exception:
+        pass
+
+    # 3) fallback: لینک جستجو
+    q = quote(f"{artist} {title} lyrics".strip())
+    return (
+        f"❌ متن آهنگ پیدا نشد.\n\n"
+        f"🔎 جستجو:\n"
+        f"https://www.google.com/search?q={q}\n"
+        f"https://genius.com/search?q={q}"
+    )
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
     if not cmd:
+        return
+
+
+    # ========== هوش متن گسترده ==========
+    if cmd.startswith(".هوش متن گسترده") or cmd.startswith("هوش متن گسترده"):
+        seed = ""
+        if "+" in cmd:
+            seed = cmd.split("+", 1)[1].strip()
+        elif "گسترده" in cmd:
+            seed = cmd.split("گسترده", 1)[1].strip()
+            if seed.startswith("+"):
+                seed = seed[1:].strip()
+        if not seed and message.reply_to_message and (message.reply_to_message.text or message.reply_to_message.caption):
+            seed = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if not seed:
+            await message.edit_text("❌ مثال:\n`.هوش متن گسترده + علی در روز آفتابی بیرون رفت`")
+            return
+        await message.edit_text("⏳ در حال گسترش متن با هوش مصنوعی...")
+        try:
+            expanded = await ai_expand_text(seed)
+            await message.edit_text(f"🧠 هوش متن گسترده | self MR\n\n{expanded}")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا: {e}")
+        return
+
+    # ========== متن آهنگ ==========
+    if cmd in (".متن آهنگ", "متن آهنگ"):
+        if not message.reply_to_message:
+            await message.edit_text("❌ روی یک آهنگ/فایل صوتی ریپلای کنید:\n`.متن آهنگ`")
+            return
+        r = message.reply_to_message
+        title = ""
+        artist = ""
+        if r.audio:
+            title = r.audio.title or ""
+            artist = r.audio.performer or ""
+            if not title and r.audio.file_name:
+                title = r.audio.file_name.rsplit(".", 1)[0]
+        elif r.voice:
+            await message.edit_text("❌ ویس عنوان ندارد. روی فایل آهنگ (music) ریپلای کنید.")
+            return
+        elif r.document:
+            title = (r.document.file_name or "").rsplit(".", 1)[0]
+        elif r.text or r.caption:
+            title = (r.text or r.caption or "").strip()
+        if not title:
+            await message.edit_text("❌ نام آهنگ از پیام پیدا نشد.")
+            return
+        await message.edit_text(f"⏳ در حال جستجوی متن آهنگ...\n🎵 {artist + ' - ' if artist else ''}{title}")
+        try:
+            lyrics = await fetch_song_lyrics(title, artist)
+            # اگر خیلی بلند بود تکه تکه
+            if len(lyrics) > 3900:
+                await message.edit_text(lyrics[:3900] + "\n\n…")
+            else:
+                await message.edit_text(lyrics)
+        except Exception as e:
+            await message.edit_text(f"❌ خطا: {e}")
         return
 
     # ========== تاس / بولینگ ==========
@@ -3240,6 +3384,10 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
+                _styled_btn("🎵 استخراج متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -3446,7 +3594,12 @@ def build_panel_keyboard(user_id, page=1):
         ]
 
     # ========== صفحات راهنما: ذخیره / پروفایل ==========
-    elif page in (13, 14, 15, 16, 17, 18):
+    elif page == 19:
+        return [
+            [_styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -3988,7 +4141,65 @@ async def callback_panel_handler(client, callback):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
             try:
+                if page == 19:
+                    help_text = (
+                        "هوش مصنوعی | self MR\n\n"
+                        "گزینه مورد نظر را انتخاب کنید."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 19))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 19))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 19)
+                    except Exception:
+                        pass
+                    return
+                if page == 20:
+                    help_text = (
+                        "متن گسترده | self MR\n\n"
+                        "دستور:\n"
+                        ".هوش متن گسترده + متن شما\n\n"
+                        "مثال:\n"
+                        ".هوش متن گسترده + علی در روز آفتابی با دوستانش بیرون رفت\n\n"
+                        "ربات متن را زیبا، داستانی و با ایموجی گسترش می‌دهد."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 20))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 20))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 20)
+                    except Exception:
+                        pass
+                    return
+                if page == 21:
+                    help_text = (
+                        "استخراج متن آهنگ | self MR\n\n"
+                        "دستورات:\n"
+                        "ریپلای + .متن آهنگ\n\n"
+                        "روی فایل آهنگ (music) ریپلای کنید تا متن آهنگ پیدا شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 21))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 21))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 21)
+                    except Exception:
+                        pass
+                    return
                 if page == 18:
+
                     lst = ROTATING_NAMES.get(target_user_id) or []
                     interval = ROTATING_NAME_INTERVAL.get(target_user_id, 10)
                     st = "on ✅" if ROTATING_NAME_STATUS.get(target_user_id) else "off ❌"

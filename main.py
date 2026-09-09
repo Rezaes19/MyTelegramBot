@@ -67,7 +67,7 @@ API_ID = 34996139
 API_HASH = "a1f3db16cae2919cfb05e61d1e968b8d"
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-7c231868238040f5b1d600759942e429").strip()
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN not found in environment variables!")

@@ -923,104 +923,99 @@ async def enhance_photo_quality(client, message):
 
 
 async def search_songs_smart(query: str) -> str:
-    """
-    سرچ آهنگ:
-    - اگر نام خواننده باشد → لیست آهنگ‌ها
-    - اگر تکه متن/عنوان باشد → نزدیک‌ترین آهنگ‌ها
-    + لینک گوگل
-    """
+    """سرچ آهنگ — فقط متن داخل پیام (بدون عکس)"""
     query = (query or "").strip()
     if not query:
         return "❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ یه تیکه از متن`"
 
-    google_url = f"https://www.google.com/search?q={quote(query + ' song lyrics')}"
-    lines = [f"🎵 **سرچ آهنگ | self MR**\n\n🔎 `{query}`\n"]
-    found = False
-    timeout = aiohttp.ClientTimeout(total=25)
+    google_song = f"https://www.google.com/search?q={quote(query + ' آهنگ')}"
+    google_lyrics = f"https://www.google.com/search?q={quote(query + ' متن آهنگ')}"
+    lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {query}\n"]
+    seen = set()
+    n = 0
+    timeout = aiohttp.ClientTimeout(total=20)
 
-    # ۱) iTunes — لیست آهنگ‌های خواننده / عنوان
+    # لیست آهنگ‌ها (خواننده / عنوان)
     try:
-        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=20"
+        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=25"
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(itunes_url) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    results = data.get("results") or []
-                    if results:
-                        found = True
-                        lines.append("📱 **نتایج iTunes:**")
-                        seen = set()
-                        n = 0
-                        for item in results:
-                            ar = item.get("artistName") or ""
-                            tr = item.get("trackName") or ""
-                            key = f"{ar}|{tr}".lower()
-                            if not tr or key in seen:
-                                continue
-                            seen.add(key)
-                            n += 1
-                            preview = item.get("trackViewUrl") or ""
-                            lines.append(f"{n}. {ar} — {tr}")
-                            if preview:
-                                lines.append(f"   🔗 {preview}")
-                            if n >= 15:
-                                break
-                        lines.append("")
+                    for item in (data.get("results") or []):
+                        ar = (item.get("artistName") or "").strip()
+                        tr = (item.get("trackName") or "").strip()
+                        key = f"{ar}|{tr}".lower()
+                        if not tr or key in seen:
+                            continue
+                        seen.add(key)
+                        n += 1
+                        lines.append(f"{n}. {ar} — {tr}")
+                        if n >= 20:
+                            break
     except Exception as e:
         logging.warning(f"itunes search: {e}")
 
-    # ۲) LRCLIB — مناسب تکه متن / عنوان دقیق
+    # تطبیق با تکه متن
+    if n < 5:
+        try:
+            lr_url = f"https://lrclib.net/api/search?q={quote(query)}"
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(lr_url) as resp:
+                    if resp.status == 200:
+                        items = await resp.json()
+                        if isinstance(items, list):
+                            for it in items[:15]:
+                                ar = (it.get("artistName") or "").strip()
+                                tr = (it.get("trackName") or "").strip()
+                                key = f"{ar}|{tr}".lower()
+                                if not tr or key in seen:
+                                    continue
+                                seen.add(key)
+                                n += 1
+                                lines.append(f"{n}. {ar} — {tr}")
+                                if n >= 20:
+                                    break
+        except Exception as e:
+            logging.warning(f"lrclib song search: {e}")
+
+    # نتایج متنی از DuckDuckGo (جایگزین گوگل در پیام)
     try:
-        lr_url = f"https://lrclib.net/api/search?q={quote(query)}"
+        ddg_q = quote(f"{query} song OR آهنگ")
+        ddg_url = f"https://html.duckduckgo.com/html/?q={ddg_q}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(lr_url) as resp:
+            async with session.get(ddg_url, headers=headers) as resp:
                 if resp.status == 200:
-                    items = await resp.json()
-                    if isinstance(items, list) and items:
-                        found = True
-                        lines.append("📝 **تطبیق متن / عنوان:**")
-                        for i, it in enumerate(items[:8], 1):
-                            ar = it.get("artistName") or ""
-                            tr = it.get("trackName") or ""
-                            al = it.get("albumName") or ""
-                            lines.append(f"{i}. {ar} — {tr}" + (f" ({al})" if al else ""))
-                        lines.append("")
+                    html = await resp.text()
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(html, "lxml")
+                        results = soup.select("a.result__a")[:8]
+                        if results:
+                            lines.append("")
+                            for a in results:
+                                title = (a.get_text() or "").strip()
+                                href = a.get("href") or ""
+                                if not title:
+                                    continue
+                                lines.append(f"• {title}")
+                                if href and href.startswith("http"):
+                                    lines.append(f"  {href}")
+                    except Exception as e:
+                        logging.warning(f"ddg parse: {e}")
     except Exception as e:
-        logging.warning(f"lrclib song search: {e}")
+        logging.warning(f"ddg search: {e}")
 
-    # ۳) یوتیوب (yt-dlp)
-    try:
-        def _yt_search():
-            opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": True,
-                "skip_download": True,
-                "default_search": "ytsearch8",
-            }
-            with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"ytsearch8:{query} audio", download=False)
-                return (info or {}).get("entries") or []
+    lines.append("")
+    lines.append(f"🌐 گوگل آهنگ:\n{google_song}")
+    lines.append(f"🌐 گوگل متن:\n{google_lyrics}")
 
-        entries = await asyncio.to_thread(_yt_search)
-        yt_items = [e for e in entries if e]
-        if yt_items:
-            found = True
-            lines.append("▶️ **یوتیوب:**")
-            for i, e in enumerate(yt_items[:8], 1):
-                title = e.get("title") or "بدون عنوان"
-                vid = e.get("id") or ""
-                url = e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else "")
-                lines.append(f"{i}. {title}")
-                if url:
-                    lines.append(f"   🔗 {url}")
-            lines.append("")
-    except Exception as e:
-        logging.warning(f"yt song search: {e}")
+    if n == 0:
+        lines.insert(2, "نتیجه مستقیمی پیدا نشد.\n")
 
-    lines.append(f"🌐 **گوگل:**\n{google_url}")
-    if not found:
-        lines.insert(2, "⚠️ نتیجه مستقیمی پیدا نشد؛ از لینک گوگل استفاده کنید.\n")
     text = "\n".join(lines)
     if len(text) > 3900:
         text = text[:3900] + "\n…"
@@ -3794,7 +3789,10 @@ async def reply_based_controller(client, message):
         return
 
     # ========== سرچ عکس ==========
-    if cmd.startswith(".سرچ") or cmd.startswith("سرچ"):
+    # سرچ آهنگ جداست — اینجا فقط تصویر
+    if (cmd.startswith(".سرچ") or cmd.startswith("سرچ")) and not (
+        cmd.startswith(".سرچ آهنگ") or cmd.startswith("سرچ آهنگ")
+    ):
         q = ""
         if "+" in cmd:
             q = cmd.split("+", 1)[1].strip()
@@ -6085,10 +6083,10 @@ async def callback_panel_handler(client, callback):
                         "🔎 سرچ آهنگ | self MR\n\n"
                         "دستورات:\n"
                         "`.سرچ آهنگ شادمهر`\n"
-                        "(همه آهنگ‌های خواننده)\n\n"
+                        "(آهنگ‌های خواننده)\n\n"
                         "`.سرچ آهنگ تکه از متن آهنگ`\n"
                         "(پیدا کردن آهنگ دقیق)\n\n"
-                        "نتایج از iTunes + متن آهنگ + یوتیوب + لینک گوگل می‌آید."
+                        "نتیجه فقط داخل پیام متنی می‌آید."
                     )
                     try:
                         if callback.inline_message_id:

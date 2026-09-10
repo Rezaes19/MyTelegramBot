@@ -966,6 +966,9 @@ class DataManager:
                 "rotating_names": [],
                 "rotating_interval": 10,
                 "rotating_name": False,
+                "rotating_music": [],
+                "rotating_music_interval": 1,
+                "rotating_music_on": False,
                 "tts_voice": "زن",
             },
             "enemies": [],
@@ -1079,6 +1082,10 @@ ROTATING_NAMES = {}
 ROTATING_NAME_INTERVAL = {}
 ROTATING_NAME_STATUS = {}
 ROTATING_NAME_INDEX = {}
+ROTATING_MUSIC = {}          # user_id -> list[{file_id, title}]
+ROTATING_MUSIC_INTERVAL = {} # ساعت
+ROTATING_MUSIC_STATUS = {}
+ROTATING_MUSIC_INDEX = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 AUTO_SEEN_STATUS = {}
@@ -1132,6 +1139,10 @@ def load_all_states():
         ROTATING_NAME_INTERVAL[user_id] = int(settings.get("rotating_interval") or 10)
         ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
         ROTATING_NAME_INDEX[user_id] = 0
+        ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
+        ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
+        ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
+        ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
@@ -1169,6 +1180,11 @@ def apply_user_settings_from_db(user_id: int):
         ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
         if user_id not in ROTATING_NAME_INDEX:
             ROTATING_NAME_INDEX[user_id] = 0
+        ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
+        ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
+        ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
+        if user_id not in ROTATING_MUSIC_INDEX:
+            ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
@@ -1205,6 +1221,9 @@ def persist_all_user_settings(user_id: int):
             "rotating_names": list(ROTATING_NAMES.get(user_id) or []),
             "rotating_interval": int(ROTATING_NAME_INTERVAL.get(user_id) or 10),
             "rotating_name": bool(ROTATING_NAME_STATUS.get(user_id, False)),
+            "rotating_music": list(ROTATING_MUSIC.get(user_id) or []),
+            "rotating_music_interval": int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1),
+            "rotating_music_on": bool(ROTATING_MUSIC_STATUS.get(user_id, False)),
             "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن"),
         }
         data_manager.update_user_data(user_id, {"settings": settings})
@@ -1295,6 +1314,54 @@ async def rotate_profile_name_task(client: Client, user_id: int):
         except Exception as e:
             logging.error(f"rotate_profile_name_task: {e}")
             await asyncio.sleep(5)
+
+
+async def rotate_profile_music_task(client: Client, user_id: int):
+    """چرخش آهنگ پروفایل — حداقل هر ۱ ساعت، حداکثر ۲۴ ساعت"""
+    await asyncio.sleep(8)
+    while True:
+        try:
+            if user_id not in ACTIVE_BOTS:
+                break
+            if not ROTATING_MUSIC_STATUS.get(user_id, False):
+                await asyncio.sleep(5)
+                continue
+            tracks = ROTATING_MUSIC.get(user_id) or []
+            if len(tracks) < 1:
+                await asyncio.sleep(10)
+                continue
+            hours = max(1, min(24, int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1)))
+            idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(tracks)
+            track = tracks[idx]
+            file_id = track.get("file_id") if isinstance(track, dict) else None
+            title = (track.get("title") if isinstance(track, dict) else str(track)) or "آهنگ"
+            if file_id:
+                try:
+                    from pyrogram.raw import functions, types
+                    from pyrogram.file_id import FileId
+                    fid = FileId.decode(file_id)
+                    input_doc = types.InputDocument(
+                        id=fid.media_id,
+                        access_hash=fid.access_hash,
+                        file_reference=fid.file_reference or b"",
+                    )
+                    # ذخیره در موزیک پروفایل (اگر API موجود باشد)
+                    try:
+                        await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
+                        logging.info(f"🎵 profile music set uid={user_id} title={title}")
+                    except AttributeError:
+                        logging.debug("account.SaveMusic not in this pyrogram layer")
+                    except Exception as e:
+                        logging.warning(f"SaveMusic failed uid={user_id}: {e}")
+                except Exception as e:
+                    logging.warning(f"rotate music parse/set {user_id}: {e}")
+            ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(tracks)
+            await asyncio.sleep(hours * 3600)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"rotate_profile_music_task: {e}")
+            await asyncio.sleep(30)
 
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -1913,78 +1980,78 @@ async def force_join_pv_handler(client, message):
 
 
 async def save_message_powerful(client, reply):
-    """ذخیره قوی: متن، رسانه، و عکس/ویدیو نابودشونده (TTL)"""
+    """ذخیره قوی: متن، رسانه، عکس/ویدیو نابودشونده (TTL) و view-once"""
     if not reply:
         return False, "❌ روی پیام ریپلای کنید."
 
-    # ۱) تلاش فوروارد معمولی
-    try:
-        await reply.forward("me")
-        return True, None
-    except Exception as e1:
-        logging.info(f"forward save failed: {e1}")
-
-    # ۲) کپی محتوا
-    try:
-        await reply.copy("me")
-        return True, None
-    except Exception as e2:
-        logging.info(f"copy save failed: {e2}")
-
-    # ۳) دانلود و آپلود مجدد (برای TTL / view-once / محدودیت فوروارد)
     caption = reply.caption or ""
     text = reply.text or ""
-    try:
-        # متن خالی بدون رسانه
-        if text and not reply.media:
-            await client.send_message("me", f"💾 ذخیره شد | self MR\n\n{text}")
-            return True, None
+    ttl = getattr(reply, "ttl_seconds", None) or getattr(getattr(reply, "media", None), "ttl_seconds", None)
+    is_view_once = bool(ttl) or bool(getattr(reply, "media", None) and getattr(reply.media, "ttl_seconds", None))
 
-        if not reply.media and not text:
-            await client.send_message("me", "💾 پیام بدون محتوای قابل ذخیره.")
-            return True, None
+    # برای view-once / TTL اول دانلود کن (فوروارد معمولاً کار نمی‌کند)
+    path = None
+    download_errors = []
 
-        path = None
+    async def _try_download():
+        nonlocal path
+        # روش ۱: کل پیام
         try:
             path = await client.download_media(reply)
-        except Exception as e3:
-            # بعضی مدیاهای تایم‌دار فقط یک‌بار قابل خواندن‌اند
-            if text or caption:
-                await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
-                return True, None
-            return False, f"❌ دانلود ممکن نشد (احتمالاً منقضی شده): {e3}"
+            if path and os.path.exists(path) and os.path.getsize(path) > 100:
+                return True
+        except Exception as e:
+            download_errors.append(f"msg:{type(e).__name__}")
+        # روش ۲: file_id عکس (بزرگ‌ترین سایز)
+        try:
+            if reply.photo:
+                path = await client.download_media(reply.photo.file_id)
+                if path and os.path.exists(path) and os.path.getsize(path) > 100:
+                    return True
+        except Exception as e:
+            download_errors.append(f"photo:{type(e).__name__}")
+        # روش ۳: ویدیو / داکیومنت / انیمیشن / ویس / آهنگ
+        for attr in ("video", "document", "animation", "voice", "audio", "video_note", "sticker"):
+            try:
+                media_obj = getattr(reply, attr, None)
+                if media_obj and getattr(media_obj, "file_id", None):
+                    path = await client.download_media(media_obj.file_id)
+                    if path and os.path.exists(path) and os.path.getsize(path) > 100:
+                        return True
+            except Exception as e:
+                download_errors.append(f"{attr}:{type(e).__name__}")
+        return False
 
-        if not path or not os.path.exists(path):
-            if text or caption:
-                await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
-                return True, None
-            return False, "❌ فایل دانلود نشد."
+    # اگر مدیا دارد سعی کن دانلود کن
+    if reply.media or reply.photo or reply.video or reply.document:
+        await _try_download()
 
-        cap = f"💾 ذخیره | self MR"
+    # اگر دانلود موفق بود → آپلود به Saved
+    if path and os.path.exists(path) and os.path.getsize(path) > 100:
+        cap = "💾 ذخیره | self MR"
+        if is_view_once or ttl:
+            cap += "\n👁 رسانه یک‌بارمصرف / تایم‌دار ذخیره شد"
+        if ttl:
+            cap += f"\n⏱ TTL: {ttl}s"
         if caption:
             cap += f"\n\n{caption}"
-        # TTL info
-        ttl = getattr(reply, "ttl_seconds", None) or getattr(getattr(reply, "media", None), "ttl_seconds", None)
-        if ttl:
-            cap += f"\n⏱ رسانه تایم‌دار بود ({ttl}s)"
-
         try:
-            if reply.photo or (path.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))):
+            pl = path.lower()
+            if reply.photo or pl.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
                 await client.send_photo("me", path, caption=cap)
-            elif reply.video or path.lower().endswith((".mp4", ".mov", ".mkv")):
+            elif reply.video or pl.endswith((".mp4", ".mov", ".mkv", ".webm")):
                 await client.send_video("me", path, caption=cap)
-            elif reply.voice or path.lower().endswith(".ogg"):
+            elif reply.voice or (pl.endswith(".ogg") and not reply.audio):
                 await client.send_voice("me", path, caption=cap)
             elif reply.video_note:
                 try:
                     await client.send_video_note("me", path)
-                    if caption or ttl:
-                        await client.send_message("me", cap)
+                    await client.send_message("me", cap)
                 except Exception:
                     await client.send_video("me", path, caption=cap)
-            elif reply.audio or path.lower().endswith((".mp3", ".m4a")):
+            elif reply.audio or pl.endswith((".mp3", ".m4a", ".flac", ".aac")):
                 await client.send_audio("me", path, caption=cap)
-            elif reply.animation or path.lower().endswith(".gif"):
+            elif reply.animation or pl.endswith(".gif"):
                 await client.send_animation("me", path, caption=cap)
             elif reply.sticker:
                 try:
@@ -1993,15 +2060,36 @@ async def save_message_powerful(client, reply):
                     await client.send_document("me", path, caption=cap)
             else:
                 await client.send_document("me", path, caption=cap)
+            return True, None
+        except Exception as e:
+            logging.warning(f"save reupload failed: {e}")
         finally:
             try:
                 if path and os.path.exists(path):
                     os.remove(path)
             except Exception:
                 pass
+
+    # فوروارد / کپی برای پیام‌های عادی
+    if not is_view_once:
+        try:
+            await reply.forward("me")
+            return True, None
+        except Exception as e1:
+            logging.info(f"forward save failed: {e1}")
+        try:
+            await reply.copy("me")
+            return True, None
+        except Exception as e2:
+            logging.info(f"copy save failed: {e2}")
+
+    # فقط متن
+    if text or caption:
+        await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
         return True, None
-    except Exception as e:
-        return False, f"❌ ذخیره ناموفق: {e}"
+
+    detail = " | ".join(download_errors[-4:]) if download_errors else "نامشخص"
+    return False, f"❌ ذخیره ناموفق (view-once/محافظت‌شده).\n🔧 {detail}"
 
 
 async def convert_video_to_note(client, message):
@@ -3574,6 +3662,87 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ اسم چرخشی خاموش شد | self MR")
         return
 
+    # ========== آهنگ چرخشی ==========
+    if cmd in (".اضافه کردن آهنگ", "اضافه کردن آهنگ", ".افزودن آهنگ", "افزودن آهنگ"):
+        reply = message.reply_to_message
+        if not reply or not (reply.audio or reply.document or reply.voice):
+            await message.edit_text("❌ روی یک فایل آهنگ / موزیک ریپلای کنید و بعد بفرستید:\n`.اضافه کردن آهنگ`")
+            return
+        media = reply.audio or reply.document or reply.voice
+        file_id = media.file_id
+        title = None
+        if reply.audio:
+            title = reply.audio.title or reply.audio.file_name
+            if reply.audio.performer:
+                title = f"{reply.audio.performer} - {title}" if title else reply.audio.performer
+        if not title:
+            title = getattr(media, "file_name", None) or f"آهنگ {len(ROTATING_MUSIC.get(user_id) or []) + 1}"
+        title = str(title)[:80]
+        lst = ROTATING_MUSIC.get(user_id) or []
+        lst.append({"file_id": file_id, "title": title})
+        ROTATING_MUSIC[user_id] = lst
+        persist_all_user_settings(user_id)
+        await message.edit_text(f"✅ آهنگ اضافه شد: `{title}`\nتعداد لیست: {len(lst)}")
+        return
+
+    if cmd.startswith(".تنظیم تایم آهنگ ") or cmd.startswith("تنظیم تایم آهنگ "):
+        parts = cmd.lstrip(".").split()
+        try:
+            hours = int(parts[-1])
+        except Exception:
+            await message.edit_text("❌ مثال:\n`.تنظیم تایم آهنگ 2`\n(ساعت — حداقل ۱ حداکثر ۲۴)")
+            return
+        if hours < 1:
+            await message.edit_text("❌ حداقل ۱ ساعت.")
+            return
+        if hours > 24:
+            await message.edit_text("❌ حداکثر ۲۴ ساعت.")
+            return
+        ROTATING_MUSIC_INTERVAL[user_id] = hours
+        persist_all_user_settings(user_id)
+        await message.edit_text(f"✅ تایم آهنگ چرخشی: هر {hours} ساعت")
+        return
+
+    if cmd in (".پاکسازی لیست آهنگ چرخشی", "پاکسازی لیست آهنگ چرخشی", ".پاکسازی لیست آهنگ", "پاکسازی لیست آهنگ"):
+        ROTATING_MUSIC[user_id] = []
+        ROTATING_MUSIC_INDEX[user_id] = 0
+        persist_all_user_settings(user_id)
+        await message.edit_text("✅ لیست آهنگ چرخشی پاک شد.")
+        return
+
+    if cmd in (".لیست آهنگ چرخشی", "لیست آهنگ چرخشی", ".لیست آهنگ", "لیست آهنگ"):
+        lst = ROTATING_MUSIC.get(user_id) or []
+        if not lst:
+            await message.edit_text("لیست آهنگ چرخشی خالی است.")
+            return
+        body = "\n".join(
+            f"{i}. {(t.get('title') if isinstance(t, dict) else t)}"
+            for i, t in enumerate(lst, 1)
+        )
+        interval = ROTATING_MUSIC_INTERVAL.get(user_id, 1)
+        st = "on ✅" if ROTATING_MUSIC_STATUS.get(user_id) else "off ❌"
+        await message.edit_text(
+            f"لیست آهنگ چرخشی | self MR\n\n{body}\n\n"
+            f"⏱ تایم: هر {interval} ساعت\nوضعیت: {st}"
+        )
+        return
+
+    if cmd in (".آهنگ چرخشی روشن", "آهنگ چرخشی روشن"):
+        lst = ROTATING_MUSIC.get(user_id) or []
+        if len(lst) < 1:
+            await message.edit_text("❌ اول با ریپلای + `.اضافه کردن آهنگ` آهنگ اضافه کنید.")
+            return
+        ROTATING_MUSIC_STATUS[user_id] = True
+        persist_all_user_settings(user_id)
+        await message.edit_text("✅ آهنگ چرخشی روشن شد | self MR")
+        return
+
+    if cmd in (".آهنگ چرخشی خاموش", "آهنگ چرخشی خاموش"):
+        ROTATING_MUSIC_STATUS[user_id] = False
+        persist_all_user_settings(user_id)
+        await message.edit_text("❌ آهنگ چرخشی خاموش شد | self MR")
+        return
+
     # ========== فونت متن با دستور ==========
     if cmd.startswith(".فونت ") or cmd.startswith("فونت "):
         name = cmd.split(None, 1)[-1].strip() if " " in cmd else ""
@@ -4029,6 +4198,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     tasks = [
         asyncio.create_task(update_profile_clock(client, user_id)),
         asyncio.create_task(rotate_profile_name_task(client, user_id)),
+        asyncio.create_task(rotate_profile_music_task(client, user_id)),
         asyncio.create_task(anti_login_task(client, user_id)),
         asyncio.create_task(status_action_task(client, user_id))
     ]
@@ -4110,6 +4280,7 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
+                _styled_btn("🎵 آهنگ چرخشی", f"panel_page_25_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
@@ -4334,7 +4505,7 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -4943,6 +5114,36 @@ async def callback_panel_handler(client, callback):
                         pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 24)
+                    except Exception:
+                        pass
+                    return
+                if page == 25:
+                    lst = ROTATING_MUSIC.get(target_user_id) or []
+                    interval = ROTATING_MUSIC_INTERVAL.get(target_user_id, 1)
+                    st = "on ✅" if ROTATING_MUSIC_STATUS.get(target_user_id) else "off ❌"
+                    help_text = (
+                        f"🎵 آهنگ چرخشی | self MR\n\n"
+                        f"وضعیت: {st}\n"
+                        f"تایم: هر {interval} ساعت\n"
+                        f"تعداد آهنگ: {len(lst)}\n\n"
+                        f"دستورات:\n"
+                        f"ریپلای روی آهنگ + `.اضافه کردن آهنگ`\n"
+                        f".تنظیم تایم آهنگ 2\n"
+                        f"(حداقل ۱ ساعت — حداکثر ۲۴ ساعت)\n"
+                        f".لیست آهنگ چرخشی\n"
+                        f".پاکسازی لیست آهنگ چرخشی\n"
+                        f".آهنگ چرخشی روشن\n"
+                        f".آهنگ چرخشی خاموش"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 25))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 25))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 25)
                     except Exception:
                         pass
                     return

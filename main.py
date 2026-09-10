@@ -657,62 +657,70 @@ async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tr
     با تاخیر تصادفی ضد‌اسپم.
     """
     async def _safe_delete(msg_or_id):
-        """پاک کردن مطمئن در گروه و پیوی"""
+        """پاک کردن مطمئن — گروه و پیوی"""
         if msg_or_id is None:
-            return
-        mid = None
+            return False
         try:
             mid = msg_or_id.id if hasattr(msg_or_id, "id") else int(msg_or_id)
         except Exception:
-            return
-        # روش ۱: delete_messages با revoke (مهم برای پیوی)
-        try:
-            await client.delete_messages(chat_id, mid, revoke=True)
-            return
-        except Exception:
-            pass
-        # روش ۲: بدون revoke
-        try:
-            await client.delete_messages(chat_id, mid)
-            return
-        except Exception:
-            pass
-        # روش ۳: خود آبجکت پیام
-        try:
-            if hasattr(msg_or_id, "delete"):
-                await msg_or_id.delete(revoke=True)
-                return
-        except Exception:
-            pass
-        try:
-            if hasattr(msg_or_id, "delete"):
-                await msg_or_id.delete()
-                return
-        except Exception:
-            pass
-        # روش ۴: raw API (برای پیوی که گاهی روش‌های بالا جواب نمی‌دهد)
+            return False
+
+        await asyncio.sleep(0.35)
+        errors = []
+
+        # ۱) raw API — معمولاً در پیوی بهتر جواب می‌دهد
         try:
             from pyrogram.raw import functions
             await client.invoke(functions.messages.DeleteMessages(id=[mid], revoke=True))
+            return True
         except Exception as e:
-            logging.debug(f"cheat delete fail mid={mid}: {e}")
+            errors.append(f"raw:{type(e).__name__}")
+
+        # ۲) delete_messages با لیست
+        try:
+            await client.delete_messages(chat_id, [mid], revoke=True)
+            return True
+        except Exception as e:
+            errors.append(f"dm1:{type(e).__name__}")
+
+        try:
+            await client.delete_messages(chat_id, mid, revoke=True)
+            return True
+        except Exception as e:
+            errors.append(f"dm2:{type(e).__name__}")
+
+        # ۳) از روی آبجکت پیام
+        try:
+            if hasattr(msg_or_id, "delete"):
+                await msg_or_id.delete(revoke=True)
+                return True
+        except Exception as e:
+            errors.append(f"obj:{type(e).__name__}")
+
+        # ۴) retry با تأخیر
+        try:
+            await asyncio.sleep(0.9)
+            await client.delete_messages(chat_id, [mid], revoke=True)
+            return True
+        except Exception as e:
+            errors.append(f"retry:{type(e).__name__}")
+
+        logging.warning(f"cheat delete FAIL mid={mid} chat={chat_id} errs={errors}")
+        return False
 
     last_msg = None
     for attempt in range(1, max_tries + 1):
         try:
             await asyncio.sleep(random.uniform(1.8, 3.2))
             msg = await client.send_dice(chat_id, emoji)
-            # کمی صبر تا value و پیام کامل ثبت شود
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.6)
             value = getattr(getattr(msg, "dice", None), "value", None)
 
             if value is not None and value in targets:
-                # نتیجه درست — پیام ناموفق قبلی را پاک کن
                 if last_msg is not None:
                     await _safe_delete(last_msg)
                 return True, value, attempt
 
-            # نتیجه اشتباه — پیام قبلی را دانه‌دانه پاک کن
             if last_msg is not None:
                 await _safe_delete(last_msg)
             last_msg = msg
@@ -5444,7 +5452,36 @@ async def callback_panel_handler(client, callback):
                     except Exception:
                         pass
                 else:
-                    await edit_panel_colored(callback, target_user_id, page)
+                    # صفحات اصلی: متن پنل را برگردان (نه راهنمای قبلی)
+                    page_titles = {
+                        1: f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}",
+                        2: "✏️ حالت متن / فونت‌ها | self MR",
+                        3: "🛡 بخش امنیتی | self MR",
+                        4: "⚡ اکشن‌ها | self MR",
+                        5: "🕐 فونت ساعت | self MR",
+                        6: "💱 قیمت ارز | self MR",
+                        7: "🎤 تبدیل متن به ویس | self MR",
+                        8: "🧩 تبدیل به استیکر | self MR",
+                    }
+                    panel_text = page_titles.get(page, f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}")
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(
+                                callback.inline_message_id,
+                                panel_text,
+                                reply_markup=generate_panel_markup(target_user_id, page),
+                            )
+                        else:
+                            await callback.message.edit_text(
+                                panel_text,
+                                reply_markup=generate_panel_markup(target_user_id, page),
+                            )
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, page)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             return

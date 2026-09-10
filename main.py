@@ -657,31 +657,57 @@ async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tr
     با تاخیر تصادفی ضد‌اسپم.
     """
     async def _safe_delete(msg_or_id):
+        """پاک کردن مطمئن در گروه و پیوی"""
         if msg_or_id is None:
             return
+        mid = None
         try:
             mid = msg_or_id.id if hasattr(msg_or_id, "id") else int(msg_or_id)
+        except Exception:
+            return
+        # روش ۱: delete_messages با revoke (مهم برای پیوی)
+        try:
+            await client.delete_messages(chat_id, mid, revoke=True)
+            return
+        except Exception:
+            pass
+        # روش ۲: بدون revoke
+        try:
             await client.delete_messages(chat_id, mid)
             return
+        except Exception:
+            pass
+        # روش ۳: خود آبجکت پیام
+        try:
+            if hasattr(msg_or_id, "delete"):
+                await msg_or_id.delete(revoke=True)
+                return
         except Exception:
             pass
         try:
             if hasattr(msg_or_id, "delete"):
                 await msg_or_id.delete()
+                return
+        except Exception:
+            pass
+        # روش ۴: raw API (برای پیوی که گاهی روش‌های بالا جواب نمی‌دهد)
+        try:
+            from pyrogram.raw import functions
+            await client.invoke(functions.messages.DeleteMessages(id=[mid], revoke=True))
         except Exception as e:
-            logging.debug(f"cheat delete fail: {e}")
+            logging.debug(f"cheat delete fail mid={mid}: {e}")
 
     last_msg = None
     for attempt in range(1, max_tries + 1):
         try:
             await asyncio.sleep(random.uniform(1.8, 3.2))
             msg = await client.send_dice(chat_id, emoji)
-            # کمی صبر تا value آماده شود
-            await asyncio.sleep(0.4)
+            # کمی صبر تا value و پیام کامل ثبت شود
+            await asyncio.sleep(0.5)
             value = getattr(getattr(msg, "dice", None), "value", None)
 
             if value is not None and value in targets:
-                # نتیجه درست — فقط پیام ناموفق قبلی را پاک کن
+                # نتیجه درست — پیام ناموفق قبلی را پاک کن
                 if last_msg is not None:
                     await _safe_delete(last_msg)
                 return True, value, attempt
@@ -6567,7 +6593,7 @@ async def hourly_diamond_deduction_task():
                     # برای جلوگیری از کسر چندباره: start_time را جلو بکش
                     # فقط یک ساعت در هر دور
                     if not deduct_balance(user_id, HOURLY_COST):
-                        # موجودی کافی نیست → خاموش کردن سلف
+                        # موجودی کافی نیست → خاموش کردن کامل سلف
                         try:
                             if user_id in ACTIVE_BOTS:
                                 client, tasks = ACTIVE_BOTS.pop(user_id)
@@ -6580,17 +6606,33 @@ async def hourly_diamond_deduction_task():
                                     await client.stop()
                                 except Exception:
                                     pass
+                            # حذف از دیتابیس سشن تا بعد از ری‌استارت دوباره روشن نشود
+                            try:
+                                delete_session_by_user_id(user_id)
+                            except Exception as e:
+                                logging.error(f"delete_session low balance {user_id}: {e}")
+                            try:
+                                u_data = data_manager.get_user_data(user_id)
+                                phone = u_data.get("phone") or ""
+                                u_data["session_string"] = ""
+                                if phone and phone in data_manager.data.get("sessions", {}):
+                                    del data_manager.data["sessions"][phone]
+                                data_manager.save_data()
+                            except Exception as e:
+                                logging.error(f"clear session json {user_id}: {e}")
+                            set_self_start_time(user_id, 0)
                             try:
                                 await manager_bot.send_message(
                                     user_id,
-                                    f"⛔ سلف خاموش شد | self MR\n\n"
-                                    f"الماس کافی برای کسر ساعتی ({HOURLY_COST}) نداشتید.\n"
-                                    f"💎 موجودی: {get_balance(user_id):,}"
+                                    f"⛔ **سلف خاموش شد | self MR**\n\n"
+                                    f"الماس کافی برای کسر ساعتی (`{HOURLY_COST}`) نداشتید.\n"
+                                    f"💎 موجودی فعلی: `{get_balance(user_id):,}`\n\n"
+                                    f"برای فعال‌سازی مجدد حداقل `{SELF_PRICE}` الماس نیاز دارید.\n"
+                                    f"دکمه «شماره و شروع» را بزنید."
                                 )
                             except Exception:
                                 pass
-                            set_self_start_time(user_id, 0)
-                            logging.info(f"Self stopped for {user_id} due to low balance")
+                            logging.info(f"Self fully stopped for {user_id} due to low balance")
                         except Exception as e:
                             logging.error(f"stop self on low balance {user_id}: {e}")
                     else:
@@ -6635,6 +6677,16 @@ async def main():
             logging.info(f"🔄 Found {len(sessions)} sessions, starting bots...")
             for i, (phone, session_string, user_id, first_name, username) in enumerate(sessions):
                 try:
+                    # اگر الماس کافی نیست سلف را استارت نکن و سشن را پاک کن
+                    bal = get_balance(user_id)
+                    if bal < HOURLY_COST:
+                        logging.warning(f"⏭ Skip start {user_id}: low balance ({bal})")
+                        try:
+                            delete_session_by_user_id(user_id)
+                        except Exception:
+                            pass
+                        set_self_start_time(user_id, 0)
+                        continue
                     logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
                     asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
                     # هر ۵ تا ربات، ۱۰ ثانیه صبر کن

@@ -1678,46 +1678,116 @@ async def rotate_profile_name_task(client: Client, user_id: int):
             await asyncio.sleep(5)
 
 
+async def _apply_profile_music(client: Client, user_id: int, track: dict) -> bool:
+    """اعمال یک آهنگ روی موزیک پروفایل — از فایل محلی یا file_id"""
+    if not track or not isinstance(track, dict):
+        return False
+    title = track.get("title") or "آهنگ"
+    local_path = track.get("path")
+    file_id = track.get("file_id")
+    try:
+        from pyrogram.raw import types as raw_types
+
+        input_doc = None
+        temp_msg = None
+
+        # اولویت: فایل محلی → آپلود تازه (file_reference معتبر)
+        if local_path and os.path.exists(local_path):
+            try:
+                temp_msg = await client.send_audio("me", local_path, title=title)
+                await asyncio.sleep(0.5)
+                if temp_msg and temp_msg.audio:
+                    from pyrogram.file_id import FileId
+                    fid = FileId.decode(temp_msg.audio.file_id)
+                    input_doc = raw_types.InputDocument(
+                        id=fid.media_id,
+                        access_hash=fid.access_hash,
+                        file_reference=fid.file_reference or b"",
+                    )
+            except Exception as e:
+                logging.warning(f"music upload local failed: {e}")
+
+        # fallback: file_id ذخیره‌شده
+        if input_doc is None and file_id:
+            try:
+                from pyrogram.file_id import FileId
+                fid = FileId.decode(file_id)
+                input_doc = raw_types.InputDocument(
+                    id=fid.media_id,
+                    access_hash=fid.access_hash,
+                    file_reference=fid.file_reference or b"",
+                )
+            except Exception as e:
+                logging.warning(f"music file_id decode failed: {e}")
+
+        if input_doc is None:
+            return False
+
+        ok = False
+        try:
+            await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
+            ok = True
+            logging.info(f"🎵 profile music set uid={user_id} title={title}")
+        except AttributeError:
+            logging.warning("account.SaveMusic در این نسخه pyrogram نیست")
+        except Exception as e:
+            logging.warning(f"SaveMusic failed uid={user_id}: {e}")
+            # تلاش مجدد با آپلود دوباره اگر file_reference منقضی شده
+            if local_path and os.path.exists(local_path) and temp_msg is None:
+                try:
+                    temp_msg = await client.send_audio("me", local_path, title=title)
+                    from pyrogram.file_id import FileId
+                    fid = FileId.decode(temp_msg.audio.file_id)
+                    input_doc = raw_types.InputDocument(
+                        id=fid.media_id,
+                        access_hash=fid.access_hash,
+                        file_reference=fid.file_reference or b"",
+                    )
+                    await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
+                    ok = True
+                except Exception as e2:
+                    logging.warning(f"SaveMusic retry failed: {e2}")
+
+        # پاک کردن پیام موقت از Saved
+        if temp_msg is not None:
+            try:
+                await temp_msg.delete()
+            except Exception:
+                try:
+                    await client.delete_messages("me", temp_msg.id)
+                except Exception:
+                    pass
+        return ok
+    except Exception as e:
+        logging.warning(f"_apply_profile_music: {e}")
+        return False
+
+
 async def rotate_profile_music_task(client: Client, user_id: int):
     """چرخش آهنگ پروفایل — حداقل هر ۱ ساعت، حداکثر ۲۴ ساعت"""
-    await asyncio.sleep(8)
+    await asyncio.sleep(5)
+    applied_once = False
     while True:
         try:
             if user_id not in ACTIVE_BOTS:
                 break
             if not ROTATING_MUSIC_STATUS.get(user_id, False):
+                applied_once = False
                 await asyncio.sleep(5)
                 continue
             tracks = ROTATING_MUSIC.get(user_id) or []
             if len(tracks) < 1:
                 await asyncio.sleep(10)
                 continue
+
             hours = max(1, min(24, int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1)))
             idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(tracks)
             track = tracks[idx]
-            file_id = track.get("file_id") if isinstance(track, dict) else None
-            title = (track.get("title") if isinstance(track, dict) else str(track)) or "آهنگ"
-            if file_id:
-                try:
-                    from pyrogram.raw import functions, types
-                    from pyrogram.file_id import FileId
-                    fid = FileId.decode(file_id)
-                    input_doc = types.InputDocument(
-                        id=fid.media_id,
-                        access_hash=fid.access_hash,
-                        file_reference=fid.file_reference or b"",
-                    )
-                    # ذخیره در موزیک پروفایل (اگر API موجود باشد)
-                    try:
-                        await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
-                        logging.info(f"🎵 profile music set uid={user_id} title={title}")
-                    except AttributeError:
-                        logging.debug("account.SaveMusic not in this pyrogram layer")
-                    except Exception as e:
-                        logging.warning(f"SaveMusic failed uid={user_id}: {e}")
-                except Exception as e:
-                    logging.warning(f"rotate music parse/set {user_id}: {e}")
+
+            await _apply_profile_music(client, user_id, track)
             ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(tracks)
+            applied_once = True
+
             await asyncio.sleep(hours * 3600)
         except asyncio.CancelledError:
             break
@@ -4040,8 +4110,20 @@ async def reply_based_controller(client, message):
         if not title:
             title = getattr(media, "file_name", None) or f"آهنگ {len(ROTATING_MUSIC.get(user_id) or []) + 1}"
         title = str(title)[:80]
+        # دانلود محلی برای اعمال پایدار روی پروفایل
+        local_path = ""
+        try:
+            music_dir = os.path.join(DOWNLOAD_PATH, "music", str(user_id))
+            os.makedirs(music_dir, exist_ok=True)
+            local_path = await client.download_media(
+                reply,
+                file_name=os.path.join(music_dir, f"track_{int(time.time())}_{random.randint(100,999)}")
+            ) or ""
+        except Exception as e:
+            logging.warning(f"music download for rotate: {e}")
+            local_path = ""
         lst = ROTATING_MUSIC.get(user_id) or []
-        lst.append({"file_id": file_id, "title": title})
+        lst.append({"file_id": file_id, "title": title, "path": local_path})
         ROTATING_MUSIC[user_id] = lst
         persist_all_user_settings(user_id)
         await message.edit_text(f"✅ آهنگ اضافه شد: `{title}`\nتعداد لیست: {len(lst)}")
@@ -4096,7 +4178,24 @@ async def reply_based_controller(client, message):
             return
         ROTATING_MUSIC_STATUS[user_id] = True
         persist_all_user_settings(user_id)
-        await message.edit_text("✅ آهنگ چرخشی روشن شد | self MR")
+        # اعمال فوری اولین آهنگ
+        try:
+            idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(lst)
+            ok = await _apply_profile_music(client, user_id, lst[idx])
+            ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(lst)
+            if ok:
+                await message.edit_text(
+                    f"✅ آهنگ چرخشی روشن شد | self MR\n"
+                    f"🎵 الان: `{lst[idx].get('title', 'آهنگ')}`"
+                )
+            else:
+                await message.edit_text(
+                    "✅ آهنگ چرخشی روشن شد | self MR\n"
+                    "⚠️ اعمال روی پروفایل ممکن است چند لحظه طول بکشد یا توسط تلگرام محدود شود."
+                )
+        except Exception as e:
+            logging.warning(f"apply music on enable: {e}")
+            await message.edit_text("✅ آهنگ چرخشی روشن شد | self MR")
         return
 
     if cmd in (".آهنگ چرخشی خاموش", "آهنگ چرخشی خاموش"):
@@ -5647,9 +5746,7 @@ async def callback_panel_handler(client, callback):
                     help_text = (
                         "🎤 ویس به متن | self MR\n\n"
                         "روی یک ویس / صوت ریپلای کنید:\n"
-                        "`.ویس به متن`\n\n"
-                        "نیاز: ffmpeg + SpeechRecognition\n"
-                        "(زبان پیش‌فرض: فارسی)"
+                        "`.ویس به متن`"
                     )
                     try:
                         if callback.inline_message_id:

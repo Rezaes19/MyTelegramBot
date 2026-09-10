@@ -653,81 +653,57 @@ async def cleanup_old_files():
 async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40):
     """
     ایموجی بازی را دانه‌دانه می‌فرستد تا مقدار دلخواه بیاید.
-    هر پیام ناموفق را جداگانه پاک می‌کند (گروه و پیوی).
-    با تاخیر تصادفی ضد‌اسپم.
+    پیام‌های ناموفق را یکی‌یکی پاک می‌کند (گروه و پیوی).
     """
-    async def _safe_delete(msg_or_id):
-        """پاک کردن مطمئن — گروه و پیوی"""
-        if msg_or_id is None:
-            return False
+    async def _safe_delete(msg):
+        if msg is None:
+            return
+        mid = getattr(msg, "id", None)
+        # روش اصلی: خود پیام
         try:
-            mid = msg_or_id.id if hasattr(msg_or_id, "id") else int(msg_or_id)
+            await msg.delete()
+            return
         except Exception:
-            return False
-
-        await asyncio.sleep(0.35)
-        errors = []
-
-        # ۱) raw API — معمولاً در پیوی بهتر جواب می‌دهد
-        try:
-            from pyrogram.raw import functions
-            await client.invoke(functions.messages.DeleteMessages(id=[mid], revoke=True))
-            return True
-        except Exception as e:
-            errors.append(f"raw:{type(e).__name__}")
-
-        # ۲) delete_messages با لیست
-        try:
-            await client.delete_messages(chat_id, [mid], revoke=True)
-            return True
-        except Exception as e:
-            errors.append(f"dm1:{type(e).__name__}")
-
-        try:
-            await client.delete_messages(chat_id, mid, revoke=True)
-            return True
-        except Exception as e:
-            errors.append(f"dm2:{type(e).__name__}")
-
-        # ۳) از روی آبجکت پیام
-        try:
-            if hasattr(msg_or_id, "delete"):
-                await msg_or_id.delete(revoke=True)
-                return True
-        except Exception as e:
-            errors.append(f"obj:{type(e).__name__}")
-
-        # ۴) retry با تأخیر
-        try:
-            await asyncio.sleep(0.9)
-            await client.delete_messages(chat_id, [mid], revoke=True)
-            return True
-        except Exception as e:
-            errors.append(f"retry:{type(e).__name__}")
-
-        logging.warning(f"cheat delete FAIL mid={mid} chat={chat_id} errs={errors}")
-        return False
+            pass
+        # روش دوم: delete_messages
+        if mid is not None:
+            try:
+                await client.delete_messages(chat_id, mid)
+                return
+            except Exception:
+                pass
+            try:
+                await client.delete_messages(chat_id, [mid])
+                return
+            except Exception:
+                pass
+            # raw
+            try:
+                await client.invoke(functions.messages.DeleteMessages(id=[mid], revoke=True))
+            except Exception as e:
+                logging.warning(f"cheat delete fail mid={mid}: {e}")
 
     last_msg = None
     for attempt in range(1, max_tries + 1):
         try:
-            await asyncio.sleep(random.uniform(1.8, 3.2))
+            await asyncio.sleep(random.uniform(1.5, 2.8))
             msg = await client.send_dice(chat_id, emoji)
-            await asyncio.sleep(0.6)
             value = getattr(getattr(msg, "dice", None), "value", None)
 
             if value is not None and value in targets:
-                if last_msg is not None:
+                # موفق — پیام قبلی ناموفق را پاک کن
+                if last_msg is not None and getattr(last_msg, "id", None) != msg.id:
                     await _safe_delete(last_msg)
                 return True, value, attempt
 
+            # ناموفق — پیام قبلی را پاک کن، فعلی را نگه دار
             if last_msg is not None:
                 await _safe_delete(last_msg)
             last_msg = msg
 
         except Exception as e:
             logging.warning(f"cheat_send_dice error attempt={attempt}: {e}")
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(2.0)
             continue
 
     if last_msg is not None:
@@ -740,6 +716,374 @@ ENEMY_REPLIES = [
     "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام",
     "احمق مادر کونی من کس مادرت گذاشتم تو بازم داری کسشر میگی",
 ]
+
+# =============================================
+# ابزارهای کمکی جدید (ساعت / آب‌وهوا / ویس / PDF / تگ)
+# =============================================
+COUNTRY_TZ = {
+    "ایران": "Asia/Tehran", "tehran": "Asia/Tehran", "iran": "Asia/Tehran", "تهران": "Asia/Tehran",
+    "آمریکا": "America/New_York", "america": "America/New_York", "نیویورک": "America/New_York", "new york": "America/New_York",
+    "لس آنجلس": "America/Los_Angeles", "la": "America/Los_Angeles", "california": "America/Los_Angeles",
+    "انگلیس": "Europe/London", "london": "Europe/London", "uk": "Europe/London", "لندن": "Europe/London",
+    "آلمان": "Europe/Berlin", "berlin": "Europe/Berlin", "germany": "Europe/Berlin", "برلین": "Europe/Berlin",
+    "فرانسه": "Europe/Paris", "paris": "Europe/Paris", "france": "Europe/Paris", "پاریس": "Europe/Paris",
+    "ترکیه": "Europe/Istanbul", "istanbul": "Europe/Istanbul", "turkey": "Europe/Istanbul", "استانبول": "Europe/Istanbul",
+    "امارات": "Asia/Dubai", "dubai": "Asia/Dubai", "دبی": "Asia/Dubai", "uae": "Asia/Dubai",
+    "عراق": "Asia/Baghdad", "baghdad": "Asia/Baghdad", "بغداد": "Asia/Baghdad",
+    "هند": "Asia/Kolkata", "india": "Asia/Kolkata", "دهلی": "Asia/Kolkata",
+    "چین": "Asia/Shanghai", "china": "Asia/Shanghai", "پکن": "Asia/Shanghai", "beijing": "Asia/Shanghai",
+    "ژاپن": "Asia/Tokyo", "japan": "Asia/Tokyo", "tokyo": "Asia/Tokyo", "توکیو": "Asia/Tokyo",
+    "کره": "Asia/Seoul", "seoul": "Asia/Seoul", "korea": "Asia/Seoul",
+    "روسیه": "Europe/Moscow", "moscow": "Europe/Moscow", "مسکو": "Europe/Moscow", "russia": "Europe/Moscow",
+    "استرالیا": "Australia/Sydney", "sydney": "Australia/Sydney", "australia": "Australia/Sydney",
+    "کانادا": "America/Toronto", "toronto": "America/Toronto", "canada": "America/Toronto",
+    "برزیل": "America/Sao_Paulo", "brazil": "America/Sao_Paulo",
+    "مصر": "Africa/Cairo", "cairo": "Africa/Cairo", "egypt": "Africa/Cairo",
+    "عربستان": "Asia/Riyadh", "riyadh": "Asia/Riyadh", "saudi": "Asia/Riyadh",
+}
+
+
+async def get_time_for_place(place: str) -> str:
+    key = (place or "").strip().lower()
+    tz_name = COUNTRY_TZ.get(key) or COUNTRY_TZ.get(place.strip()) if place else None
+    if not tz_name:
+        # جستجوی تقریبی
+        for k, v in COUNTRY_TZ.items():
+            if key in k.lower() or k.lower() in key:
+                tz_name = v
+                break
+    if not tz_name:
+        # try zoneinfo direct
+        try:
+            ZoneInfo(place)
+            tz_name = place
+        except Exception:
+            return (
+                f"❌ منطقه پیدا نشد: `{place}`\n\n"
+                f"مثال:\n`.ساعت ایران`\n`.ساعت Tokyo`\n`.ساعت دبی`"
+            )
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+        return (
+            f"🕐 **زمان | self MR**\n\n"
+            f"📍 `{place}`\n"
+            f"🗺 `{tz_name}`\n"
+            f"📅 {now.strftime('%Y/%m/%d')}\n"
+            f"⏰ {now.strftime('%H:%M:%S')}\n"
+            f"📌 {now.strftime('%A')}"
+        )
+    except Exception as e:
+        return f"❌ خطا در دریافت زمان: {e}"
+
+
+async def get_weather_for_place(place: str) -> str:
+    place = (place or "").strip()
+    if not place:
+        return "❌ مثال:\n`.آب و هوا تهران`"
+    try:
+        async with aiohttp.ClientSession() as session:
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={quote(place)}&count=1&language=fa&format=json"
+            async with session.get(geo_url, timeout=15) as r:
+                geo = await r.json()
+            results = geo.get("results") or []
+            if not results:
+                return f"❌ شهر پیدا نشد: `{place}`"
+            g = results[0]
+            lat, lon = g["latitude"], g["longitude"]
+            name = g.get("name") or place
+            country = g.get("country") or ""
+            w_url = (
+                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
+                f"&timezone=auto"
+            )
+            async with session.get(w_url, timeout=15) as r:
+                w = await r.json()
+            cur = w.get("current") or {}
+            code = int(cur.get("weather_code") or 0)
+            code_map = {
+                0: "آفتابی ☀️", 1: "عمدتاً صاف 🌤", 2: "نیمه‌ابری ⛅", 3: "ابری ☁️",
+                45: "مه 🌫", 48: "مه یخ‌زده 🌫",
+                51: "نم‌نم باران 🌦", 61: "بارانی 🌧", 63: "باران متوسط 🌧", 65: "باران شدید ⛈",
+                71: "برفی ❄️", 73: "برف متوسط ❄️", 75: "برف شدید ❄️",
+                80: "رگبار 🌦", 95: "رعدوبرق ⛈",
+            }
+            desc = code_map.get(code, f"کد {code}")
+            return (
+                f"🌤 **آب و هوا | self MR**\n\n"
+                f"📍 {name} {('— ' + country) if country else ''}\n"
+                f"🌡 دما: `{cur.get('temperature_2m', '?')}°C`\n"
+                f"💧 رطوبت: `{cur.get('relative_humidity_2m', '?')}%`\n"
+                f"💨 باد: `{cur.get('wind_speed_10m', '?')} km/h`\n"
+                f"📊 وضعیت: {desc}"
+            )
+    except Exception as e:
+        return f"❌ خطا در دریافت آب‌وهوا: {e}"
+
+
+async def voice_to_text(client, message) -> str:
+    """تبدیل ویس/صوت به متن (Google STT در صورت موجود بودن)"""
+    reply = message.reply_to_message
+    if not reply or not (reply.voice or reply.audio or reply.video_note):
+        return "❌ روی یک ویس / صوت ریپلای کنید و بفرستید:\n`.ویس به متن`"
+    path = None
+    wav_path = None
+    try:
+        path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/stt_{int(time.time())}")
+        if not path or not os.path.exists(path):
+            return "❌ دانلود ویس ناموفق بود."
+        # تبدیل به wav با ffmpeg
+        wav_path = f"{path}.wav"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", path, "-ar", "16000", "-ac", "1", wav_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except Exception:
+            wav_path = path
+        text = None
+        try:
+            import speech_recognition as sr
+            r = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio = r.record(source)
+            try:
+                text = r.recognize_google(audio, language="fa-IR")
+            except Exception:
+                text = r.recognize_google(audio, language="en-US")
+        except ImportError:
+            return (
+                "❌ کتابخانه `SpeechRecognition` نصب نیست.\n"
+                "روی سرور اضافه کنید: `pip install SpeechRecognition`"
+            )
+        except Exception as e:
+            return f"❌ تشخیص گفتار ناموفق: {e}"
+        if not text:
+            return "❌ متنی تشخیص داده نشد."
+        return f"🎤 **ویس → متن | self MR**\n\n{text}"
+    except Exception as e:
+        return f"❌ خطا: {e}"
+    finally:
+        for p in (path, wav_path):
+            try:
+                if p and os.path.exists(p) and p.endswith((".wav", ".ogg", ".mp3", ".m4a")):
+                    # فقط فایل‌های موقت stt
+                    if "stt_" in os.path.basename(p) or p.endswith(".wav"):
+                        os.remove(p)
+            except Exception:
+                pass
+
+
+async def photo_to_pdf(client, message):
+    reply = message.reply_to_message
+    if not reply or not (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
+        await message.edit_text("❌ روی یک **عکس** ریپلای کنید:\n`.عکس به pdf`")
+        return
+    path = None
+    pdf_path = None
+    try:
+        path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/img2pdf_{int(time.time())}")
+        from PIL import Image
+        img = Image.open(path)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        pdf_path = f"{DOWNLOAD_PATH}/photo_{int(time.time())}.pdf"
+        img.save(pdf_path, "PDF", resolution=100.0)
+        await client.send_document(message.chat.id, pdf_path, caption="📄 عکس → PDF | self MR")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await message.edit_text(f"❌ خطا: {e}")
+        except Exception:
+            pass
+    finally:
+        for p in (path, pdf_path):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
+async def pdf_to_photo(client, message):
+    reply = message.reply_to_message
+    is_pdf = False
+    if reply and reply.document:
+        mime = (reply.document.mime_type or "").lower()
+        name = (reply.document.file_name or "").lower()
+        is_pdf = "pdf" in mime or name.endswith(".pdf")
+    if not is_pdf:
+        await message.edit_text("❌ روی یک فایل **PDF** ریپلای کنید:\n`.pdf به عکس`")
+        return
+    path = None
+    out_path = None
+    try:
+        path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/pdf2img_{int(time.time())}.pdf")
+        # PyMuPDF
+        try:
+            import fitz
+            doc = fitz.open(path)
+            page = doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            out_path = f"{DOWNLOAD_PATH}/pdf_page_{int(time.time())}.png"
+            pix.save(out_path)
+            doc.close()
+            await client.send_photo(message.chat.id, out_path, caption="🖼 PDF → عکس (صفحه ۱) | self MR")
+        except ImportError:
+            await message.edit_text(
+                "❌ برای PDF→عکس نیاز به `pymupdf` است.\n"
+                "`pip install pymupdf`"
+            )
+            return
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await message.edit_text(f"❌ خطا: {e}")
+        except Exception:
+            pass
+    finally:
+        for p in (path, out_path):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
+async def tag_admins(client, message):
+    chat = message.chat
+    if not chat or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await message.edit_text("❌ این دستور فقط داخل گروه کار می‌کند.")
+        return
+    try:
+        admins = []
+        try:
+            from pyrogram.enums import ChatMembersFilter
+            admin_filter = ChatMembersFilter.ADMINISTRATORS
+        except Exception:
+            admin_filter = "administrators"
+        async for m in client.get_chat_members(chat.id, filter=admin_filter):
+            u = m.user
+            if not u or u.is_bot:
+                continue
+            if u.username:
+                admins.append(f"@{u.username}")
+            else:
+                name = (u.first_name or "Admin").replace("<", "").replace(">", "")
+                admins.append(f"[{name}](tg://user?id={u.id})")
+        if not admins:
+            await message.edit_text("❌ ادمینی پیدا نشد.")
+            return
+        # ارسال دسته‌ای برای جلوگیری از محدودیت طول
+        header = "👑 **تگ ادمین‌ها | self MR**\n\n"
+        chunk = header
+        for a in admins:
+            if len(chunk) + len(a) + 1 > 3500:
+                await client.send_message(chat.id, chunk, disable_web_page_preview=True)
+                chunk = a + " "
+            else:
+                chunk += a + " "
+        if chunk.strip():
+            await client.send_message(chat.id, chunk, disable_web_page_preview=True)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await message.edit_text(f"❌ خطا: {e}")
+
+
+async def tag_members(client, message):
+    chat = message.chat
+    if not chat or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await message.edit_text("❌ این دستور فقط داخل گروه کار می‌کند.")
+        return
+    try:
+        await message.edit_text("⏳ در حال جمع‌آوری اعضا...")
+        members = []
+        count = 0
+        async for m in client.get_chat_members(chat.id):
+            u = m.user
+            if not u or u.is_bot:
+                continue
+            if u.username:
+                members.append(f"@{u.username}")
+            else:
+                name = (u.first_name or "User").replace("<", "").replace(">", "")
+                members.append(f"[{name}](tg://user?id={u.id})")
+            count += 1
+            if count >= 200:
+                break
+            if count % 30 == 0:
+                await asyncio.sleep(0.4)
+        if not members:
+            await message.edit_text("❌ عضوی پیدا نشد.")
+            return
+        header = f"👥 **تگ اعضا | self MR**\n(حداکثر ۲۰۰ نفر — {len(members)} نفر)\n\n"
+        chunk = header
+        for a in members:
+            if len(chunk) + len(a) + 1 > 3500:
+                await client.send_message(chat.id, chunk, disable_web_page_preview=True)
+                await asyncio.sleep(1.2)
+                chunk = a + " "
+            else:
+                chunk += a + " "
+        if chunk.strip():
+            await client.send_message(chat.id, chunk, disable_web_page_preview=True)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await message.edit_text(f"❌ خطا: {e}")
+        except Exception:
+            pass
+
+
+async def first_comment_handler(client, message: Message):
+    """کامنت اول خودکار روی پست کانال (گروه بحث)"""
+    try:
+        # پیدا کردن owner این کلاینت
+        owner_id = None
+        for uid, (cli, _) in list(ACTIVE_BOTS.items()):
+            if cli is client:
+                owner_id = uid
+                break
+        if not owner_id or not FIRST_COMMENT_STATUS.get(owner_id, False):
+            return
+        if not message or not message.chat:
+            return
+        # فقط پست کانال
+        if message.chat.type != ChatType.CHANNEL:
+            return
+        text = FIRST_COMMENT_TEXT.get(owner_id) or "🔥"
+        try:
+            disc = await client.get_discussion_message(message.chat.id, message.id)
+            if disc:
+                await disc.reply(text)
+                return
+        except Exception as e:
+            logging.debug(f"first_comment discussion: {e}")
+        # fallback: linked chat
+        try:
+            chat = await client.get_chat(message.chat.id)
+            linked = getattr(chat, "linked_chat", None)
+            if linked:
+                await client.send_message(linked.id, text)
+        except Exception as e:
+            logging.debug(f"first_comment linked: {e}")
+    except Exception as e:
+        logging.warning(f"first_comment_handler: {e}")
+
 
 # =============================================
 # فونت‌ها
@@ -977,6 +1321,8 @@ class DataManager:
                 "rotating_music": [],
                 "rotating_music_interval": 1,
                 "rotating_music_on": False,
+                "first_comment": False,
+                "first_comment_text": "🔥",
                 "tts_voice": "زن",
             },
             "enemies": [],
@@ -1107,6 +1453,8 @@ FORCE_JOIN_CHANNELS = {}
 EDIT_ALERT_STATUS = {}
 DELETE_ALERT_STATUS = {}
 TTS_VOICE_STATUS = {}
+FIRST_COMMENT_STATUS = {}
+FIRST_COMMENT_TEXT = {}
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 ACTION_STATUS = {}
@@ -1152,6 +1500,8 @@ def load_all_states():
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
         ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
+        FIRST_COMMENT_STATUS[user_id] = bool(settings.get("first_comment", False))
+        FIRST_COMMENT_TEXT[user_id] = settings.get("first_comment_text", "🔥") or "🔥"
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
         AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
@@ -1194,6 +1544,8 @@ def apply_user_settings_from_db(user_id: int):
         if user_id not in ROTATING_MUSIC_INDEX:
             ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
+        FIRST_COMMENT_STATUS[user_id] = bool(settings.get("first_comment", False))
+        FIRST_COMMENT_TEXT[user_id] = settings.get("first_comment_text", "🔥") or "🔥"
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
         AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
@@ -1232,6 +1584,8 @@ def persist_all_user_settings(user_id: int):
             "rotating_music": list(ROTATING_MUSIC.get(user_id) or []),
             "rotating_music_interval": int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1),
             "rotating_music_on": bool(ROTATING_MUSIC_STATUS.get(user_id, False)),
+            "first_comment": bool(FIRST_COMMENT_STATUS.get(user_id, False)),
+            "first_comment_text": FIRST_COMMENT_TEXT.get(user_id, "🔥") or "🔥",
             "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن"),
         }
         data_manager.update_user_data(user_id, {"settings": settings})
@@ -3751,6 +4105,84 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ آهنگ چرخشی خاموش شد | self MR")
         return
 
+    # ========== ساعت کشورها ==========
+    if cmd.startswith(".ساعت ") or cmd.startswith("ساعت ") or cmd.startswith(".زمان "):
+        place = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if not place:
+            await message.edit_text("❌ مثال:\n`.ساعت ایران`\n`.ساعت Tokyo`")
+            return
+        txt = await get_time_for_place(place)
+        await message.edit_text(txt)
+        return
+
+    # ========== آب و هوا ==========
+    if cmd.startswith(".آب و هوا ") or cmd.startswith("آب و هوا ") or cmd.startswith(".هوای "):
+        place = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        # برای ".آب و هوا تهران" split با ۱ کافی نیست چون ۲ فاصله دارد
+        for prefix in (".آب و هوا ", "آب و هوا ", ".هوای "):
+            if cmd.startswith(prefix):
+                place = cmd[len(prefix):].strip()
+                break
+        if not place:
+            await message.edit_text("❌ مثال:\n`.آب و هوا تهران`")
+            return
+        await message.edit_text("⏳ دریافت آب‌وهوا...")
+        txt = await get_weather_for_place(place)
+        await message.edit_text(txt)
+        return
+
+    # ========== ویس به متن ==========
+    if cmd in (".ویس به متن", "ویس به متن", ".تبدیل ویس به متن", "تبدیل ویس به متن"):
+        await message.edit_text("⏳ در حال تبدیل ویس به متن...")
+        txt = await voice_to_text(client, message)
+        await message.edit_text(txt)
+        return
+
+    # ========== عکس به PDF ==========
+    if cmd in (".عکس به pdf", "عکس به pdf", ".عکس به PDF", "عکس به PDF", ".تبدیل عکس به pdf"):
+        await photo_to_pdf(client, message)
+        return
+
+    # ========== PDF به عکس ==========
+    if cmd in (".pdf به عکس", "pdf به عکس", ".PDF به عکس", ".تبدیل pdf به عکس"):
+        await pdf_to_photo(client, message)
+        return
+
+    # ========== تگ ادمین / اعضا ==========
+    if cmd in (".تگ ادمین", "تگ ادمین", ".تگ ادمین‌ها", "تگ ادمین‌ها"):
+        await tag_admins(client, message)
+        return
+
+    if cmd in (".تگ اعضا", "تگ اعضا", ".تگ همه", "تگ همه"):
+        await tag_members(client, message)
+        return
+
+    # ========== کامنت اول کانال ==========
+    if cmd in (".کامنت اول روشن", "کامنت اول روشن"):
+        FIRST_COMMENT_STATUS[user_id] = True
+        persist_all_user_settings(user_id)
+        await message.edit_text("✅ کامنت اول روشن شد | self MR")
+        return
+    if cmd in (".کامنت اول خاموش", "کامنت اول خاموش"):
+        FIRST_COMMENT_STATUS[user_id] = False
+        persist_all_user_settings(user_id)
+        await message.edit_text("❌ کامنت اول خاموش شد | self MR")
+        return
+    if cmd.startswith(".تنظیم کامنت اول ") or cmd.startswith("تنظیم کامنت اول "):
+        for prefix in (".تنظیم کامنت اول ", "تنظیم کامنت اول "):
+            if cmd.startswith(prefix):
+                text = cmd[len(prefix):].strip()
+                break
+        else:
+            text = ""
+        if not text:
+            await message.edit_text("❌ مثال:\n`.تنظیم کامنت اول سلام دوستان 🔥`")
+            return
+        FIRST_COMMENT_TEXT[user_id] = text[:500]
+        persist_all_user_settings(user_id)
+        await message.edit_text(f"✅ متن کامنت اول تنظیم شد:\n`{text[:200]}`")
+        return
+
     # ========== فونت متن با دستور ==========
     if cmd.startswith(".فونت ") or cmd.startswith("فونت "):
         name = cmd.split(None, 1)[-1].strip() if " " in cmd else ""
@@ -4168,6 +4600,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
             client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
             client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
             client.add_handler(MessageHandler(reply_based_controller, filters.me))
+            client.add_handler(MessageHandler(first_comment_handler, filters.channel), group=5)
 
             await client.start()
             user_id = (await client.get_me()).id
@@ -4296,6 +4729,18 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
+                _styled_btn("🌤 آب و هوا", f"panel_page_27_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🎤 ویس به متن", f"panel_page_28_{user_id}", style="primary"),
+                _styled_btn("📄 عکس ↔ PDF", f"panel_page_29_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("👑 تگ ادمین/اعضا", f"panel_page_30_{user_id}", style="primary"),
+                _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
@@ -4513,7 +4958,7 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -5152,6 +5597,138 @@ async def callback_panel_handler(client, callback):
                         pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 25)
+                    except Exception:
+                        pass
+                    return
+                if page == 26:
+                    help_text = (
+                        "🕐 ساعت کشورها | self MR\n\n"
+                        "دستورات:\n"
+                        "`.ساعت ایران`\n"
+                        "`.ساعت Tokyo`\n"
+                        "`.ساعت دبی`\n"
+                        "`.زمان لندن`\n\n"
+                        "نام کشور یا شهر را بعد از دستور بنویسید."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 26))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 26))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 26)
+                    except Exception:
+                        pass
+                    return
+                if page == 27:
+                    help_text = (
+                        "🌤 آب و هوا | self MR\n\n"
+                        "دستورات:\n"
+                        "`.آب و هوا تهران`\n"
+                        "`.آب و هوا London`\n"
+                        "`.هوای شیراز`\n\n"
+                        "نام شهر را بعد از دستور بنویسید."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 27))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 27))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 27)
+                    except Exception:
+                        pass
+                    return
+                if page == 28:
+                    help_text = (
+                        "🎤 ویس به متن | self MR\n\n"
+                        "روی یک ویس / صوت ریپلای کنید:\n"
+                        "`.ویس به متن`\n\n"
+                        "نیاز: ffmpeg + SpeechRecognition\n"
+                        "(زبان پیش‌فرض: فارسی)"
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 28))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 28))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 28)
+                    except Exception:
+                        pass
+                    return
+                if page == 29:
+                    help_text = (
+                        "📄 عکس ↔ PDF | self MR\n\n"
+                        "ریپلای روی عکس:\n"
+                        "`.عکس به pdf`\n\n"
+                        "ریپلای روی PDF:\n"
+                        "`.pdf به عکس`\n"
+                        "(صفحه اول PDF → عکس)\n\n"
+                        "PDF→عکس نیاز به pymupdf دارد."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 29))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 29))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 29)
+                    except Exception:
+                        pass
+                    return
+                if page == 30:
+                    help_text = (
+                        "👑 تگ ادمین / اعضا | self MR\n\n"
+                        "فقط داخل گروه:\n"
+                        "`.تگ ادمین`\n"
+                        "`.تگ اعضا`\n\n"
+                        "تگ اعضا حداکثر ۲۰۰ نفر\n"
+                        "با تاخیر ضد‌اسپم ارسال می‌شود."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 30))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 30))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 30)
+                    except Exception:
+                        pass
+                    return
+                if page == 31:
+                    st = FIRST_COMMENT_STATUS.get(target_user_id, False)
+                    txt = FIRST_COMMENT_TEXT.get(target_user_id, "🔥") or "🔥"
+                    help_text = (
+                        f"💬 کامنت اول کانال | self MR\n\n"
+                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n"
+                        f"متن فعلی: {txt[:80]}\n\n"
+                        f"دستورات:\n"
+                        f".کامنت اول روشن\n"
+                        f".کامنت اول خاموش\n"
+                        f".تنظیم کامنت اول متن دلخواه\n\n"
+                        f"روی پست کانال‌هایی که گروه بحث دارند\n"
+                        f"به‌صورت خودکار کامنت می‌گذارد."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 31))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 31))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 31)
                     except Exception:
                         pass
                     return

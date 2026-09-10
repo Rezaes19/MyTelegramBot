@@ -777,46 +777,96 @@ async def get_time_for_place(place: str) -> str:
 
 
 async def get_weather_for_place(place: str) -> str:
+    """آب‌وهوای لحظه‌ای از wttr.in — دقیق‌تر (دما، احساس، وضعیت واقعی روز/شب)"""
     place = (place or "").strip()
     if not place:
         return "❌ مثال:\n`.آب و هوا تهران`"
     try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; selfMR/1.0)"}
+        url = f"https://wttr.in/{quote(place)}?format=j1&lang=fa"
         async with aiohttp.ClientSession() as session:
-            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={quote(place)}&count=1&language=fa&format=json"
-            async with session.get(geo_url, timeout=15) as r:
-                geo = await r.json()
-            results = geo.get("results") or []
-            if not results:
-                return f"❌ شهر پیدا نشد: `{place}`"
-            g = results[0]
-            lat, lon = g["latitude"], g["longitude"]
-            name = g.get("name") or place
-            country = g.get("country") or ""
-            w_url = (
-                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                f"&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"
-                f"&timezone=auto"
-            )
-            async with session.get(w_url, timeout=15) as r:
-                w = await r.json()
-            cur = w.get("current") or {}
-            code = int(cur.get("weather_code") or 0)
-            code_map = {
-                0: "آفتابی ☀️", 1: "عمدتاً صاف 🌤", 2: "نیمه‌ابری ⛅", 3: "ابری ☁️",
-                45: "مه 🌫", 48: "مه یخ‌زده 🌫",
-                51: "نم‌نم باران 🌦", 61: "بارانی 🌧", 63: "باران متوسط 🌧", 65: "باران شدید ⛈",
-                71: "برفی ❄️", 73: "برف متوسط ❄️", 75: "برف شدید ❄️",
-                80: "رگبار 🌦", 95: "رعدوبرق ⛈",
-            }
-            desc = code_map.get(code, f"کد {code}")
-            return (
-                f"🌤 **آب و هوا | self MR**\n\n"
-                f"📍 {name} {('— ' + country) if country else ''}\n"
-                f"🌡 دما: `{cur.get('temperature_2m', '?')}°C`\n"
-                f"💧 رطوبت: `{cur.get('relative_humidity_2m', '?')}%`\n"
-                f"💨 باد: `{cur.get('wind_speed_10m', '?')} km/h`\n"
-                f"📊 وضعیت: {desc}"
-            )
+            async with session.get(url, headers=headers, timeout=20) as r:
+                if r.status != 200:
+                    return f"❌ دریافت آب‌وهوا ناموفق (کد {r.status}). شهر را بررسی کنید."
+                data = await r.json(content_type=None)
+
+        cur_list = data.get("current_condition") or []
+        if not cur_list:
+            return f"❌ داده آب‌وهوا برای `{place}` پیدا نشد."
+        cur = cur_list[0]
+
+        area = place
+        try:
+            a = (data.get("nearest_area") or [{}])[0]
+            area_name = (a.get("areaName") or [{}])[0].get("value") or place
+            country = (a.get("country") or [{}])[0].get("value") or ""
+            region = (a.get("region") or [{}])[0].get("value") or ""
+            area = area_name
+            if region:
+                area += f"، {region}"
+            if country:
+                area += f" — {country}"
+        except Exception:
+            pass
+
+        desc = ""
+        try:
+            lang_fa = cur.get("lang_fa") or []
+            if lang_fa and lang_fa[0].get("value"):
+                desc = lang_fa[0]["value"]
+            else:
+                desc = (cur.get("weatherDesc") or [{}])[0].get("value") or ""
+        except Exception:
+            desc = ""
+
+        temp = cur.get("temp_C") or "?"
+        feels = cur.get("FeelsLikeC") or temp
+        humidity = cur.get("humidity") or "?"
+        wind = cur.get("windspeedKmph") or "?"
+        wind_dir = cur.get("winddir16Point") or ""
+        pressure = cur.get("pressure") or "?"
+        visibility = cur.get("visibility") or "?"
+        cloud = cur.get("cloudcover") or "?"
+        uv = cur.get("uvIndex") or "?"
+        obs = cur.get("localObsDateTime") or cur.get("observation_time") or ""
+
+        today_line = ""
+        tomorrow_line = ""
+        try:
+            days = data.get("weather") or []
+            if days:
+                d0 = days[0]
+                today_line = (
+                    f"📅 امروز: کمینه `{d0.get('mintempC', '?')}°` / بیشینه `{d0.get('maxtempC', '?')}°`"
+                )
+            if len(days) > 1:
+                d1 = days[1]
+                tomorrow_line = (
+                    f"📅 فردا: کمینه `{d1.get('mintempC', '?')}°` / بیشینه `{d1.get('maxtempC', '?')}°`"
+                )
+        except Exception:
+            pass
+
+        lines = [
+            "🌤 **آب و هوا | self MR**",
+            "",
+            f"📍 {area}",
+            f"📊 وضعیت: {desc or '—'}",
+            f"🌡 دما: `{temp}°C` (احساس: `{feels}°C`)",
+            f"💧 رطوبت: `{humidity}%`",
+            f"💨 باد: `{wind} km/h` {wind_dir}".rstrip(),
+            f"🌡 فشار: `{pressure} mb` | 👁 دید: `{visibility} km`",
+            f"☁️ ابر: `{cloud}%` | ☀️ UV: `{uv}`",
+        ]
+        if obs:
+            lines.append(f"🕐 مشاهده: `{obs}`")
+        if today_line:
+            lines.extend(["", today_line])
+        if tomorrow_line:
+            lines.append(tomorrow_line)
+        return "\n".join(lines)
+    except asyncio.TimeoutError:
+        return "❌ زمان درخواست آب‌وهوا تمام شد. دوباره تلاش کنید."
     except Exception as e:
         return f"❌ خطا در دریافت آب‌وهوا: {e}"
 

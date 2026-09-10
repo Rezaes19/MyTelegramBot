@@ -871,6 +871,162 @@ async def get_weather_for_place(place: str) -> str:
         return f"❌ خطا در دریافت آب‌وهوا: {e}"
 
 
+async def enhance_photo_quality(client, message):
+    """بالا بردن کیفیت عکس با آپ‌اسکیل + شارپ + کنتراست"""
+    reply = message.reply_to_message
+    if not reply or not (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
+        await message.edit_text("❌ روی یک **عکس** ریپلای کنید:\n`.کیفیت عکس`")
+        return
+    path = None
+    out_path = None
+    try:
+        await message.edit_text("⏳ در حال بهبود کیفیت عکس...")
+        path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/enh_{int(time.time())}")
+        if not path or not os.path.exists(path):
+            await message.edit_text("❌ دانلود عکس ناموفق بود.")
+            return
+        from PIL import Image, ImageEnhance, ImageFilter
+        img = Image.open(path)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        # آپ‌اسکیل ۲ برابر
+        w, h = img.size
+        img = img.resize((w * 2, h * 2), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
+        # کنتراست / رنگ / شارپ
+        img = ImageEnhance.Contrast(img).enhance(1.18)
+        img = ImageEnhance.Color(img).enhance(1.12)
+        img = ImageEnhance.Sharpness(img).enhance(1.55)
+        img = img.filter(ImageFilter.DETAIL)
+        out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}.jpg"
+        img.save(out_path, "JPEG", quality=95, optimize=True)
+        await client.send_photo(
+            message.chat.id,
+            out_path,
+            caption="✨ کیفیت عکس بالا رفت | self MR",
+        )
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await message.edit_text(f"❌ خطا در بهبود عکس: {e}")
+        except Exception:
+            pass
+    finally:
+        for p in (path, out_path):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
+async def search_songs_smart(query: str) -> str:
+    """
+    سرچ آهنگ:
+    - اگر نام خواننده باشد → لیست آهنگ‌ها
+    - اگر تکه متن/عنوان باشد → نزدیک‌ترین آهنگ‌ها
+    + لینک گوگل
+    """
+    query = (query or "").strip()
+    if not query:
+        return "❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ یه تیکه از متن`"
+
+    google_url = f"https://www.google.com/search?q={quote(query + ' song lyrics')}"
+    lines = [f"🎵 **سرچ آهنگ | self MR**\n\n🔎 `{query}`\n"]
+    found = False
+    timeout = aiohttp.ClientTimeout(total=25)
+
+    # ۱) iTunes — لیست آهنگ‌های خواننده / عنوان
+    try:
+        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=20"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(itunes_url) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    results = data.get("results") or []
+                    if results:
+                        found = True
+                        lines.append("📱 **نتایج iTunes:**")
+                        seen = set()
+                        n = 0
+                        for item in results:
+                            ar = item.get("artistName") or ""
+                            tr = item.get("trackName") or ""
+                            key = f"{ar}|{tr}".lower()
+                            if not tr or key in seen:
+                                continue
+                            seen.add(key)
+                            n += 1
+                            preview = item.get("trackViewUrl") or ""
+                            lines.append(f"{n}. {ar} — {tr}")
+                            if preview:
+                                lines.append(f"   🔗 {preview}")
+                            if n >= 15:
+                                break
+                        lines.append("")
+    except Exception as e:
+        logging.warning(f"itunes search: {e}")
+
+    # ۲) LRCLIB — مناسب تکه متن / عنوان دقیق
+    try:
+        lr_url = f"https://lrclib.net/api/search?q={quote(query)}"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(lr_url) as resp:
+                if resp.status == 200:
+                    items = await resp.json()
+                    if isinstance(items, list) and items:
+                        found = True
+                        lines.append("📝 **تطبیق متن / عنوان:**")
+                        for i, it in enumerate(items[:8], 1):
+                            ar = it.get("artistName") or ""
+                            tr = it.get("trackName") or ""
+                            al = it.get("albumName") or ""
+                            lines.append(f"{i}. {ar} — {tr}" + (f" ({al})" if al else ""))
+                        lines.append("")
+    except Exception as e:
+        logging.warning(f"lrclib song search: {e}")
+
+    # ۳) یوتیوب (yt-dlp)
+    try:
+        def _yt_search():
+            opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "default_search": "ytsearch8",
+            }
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"ytsearch8:{query} audio", download=False)
+                return (info or {}).get("entries") or []
+
+        entries = await asyncio.to_thread(_yt_search)
+        yt_items = [e for e in entries if e]
+        if yt_items:
+            found = True
+            lines.append("▶️ **یوتیوب:**")
+            for i, e in enumerate(yt_items[:8], 1):
+                title = e.get("title") or "بدون عنوان"
+                vid = e.get("id") or ""
+                url = e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else "")
+                lines.append(f"{i}. {title}")
+                if url:
+                    lines.append(f"   🔗 {url}")
+            lines.append("")
+    except Exception as e:
+        logging.warning(f"yt song search: {e}")
+
+    lines.append(f"🌐 **گوگل:**\n{google_url}")
+    if not found:
+        lines.insert(2, "⚠️ نتیجه مستقیمی پیدا نشد؛ از لینک گوگل استفاده کنید.\n")
+    text = "\n".join(lines)
+    if len(text) > 3900:
+        text = text[:3900] + "\n…"
+    return text
+
+
 async def voice_to_text(client, message) -> str:
     """تبدیل ویس/صوت به متن (Google STT در صورت موجود بودن)"""
     reply = message.reply_to_message
@@ -4287,6 +4443,27 @@ async def reply_based_controller(client, message):
         await message.edit_text(txt)
         return
 
+    # ========== کیفیت عکس ==========
+    if cmd in (".کیفیت عکس", "کیفیت عکس", ".بهبود عکس", "بهبود عکس", ".افزایش کیفیت", "افزایش کیفیت"):
+        await enhance_photo_quality(client, message)
+        return
+
+    # ========== سرچ آهنگ ==========
+    if cmd.startswith(".سرچ آهنگ ") or cmd.startswith("سرچ آهنگ "):
+        for prefix in (".سرچ آهنگ ", "سرچ آهنگ "):
+            if cmd.startswith(prefix):
+                q = cmd[len(prefix):].strip()
+                break
+        else:
+            q = ""
+        if not q:
+            await message.edit_text("❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ تکه از متن آهنگ`")
+            return
+        await message.edit_text("⏳ در حال سرچ آهنگ...")
+        txt = await search_songs_smart(q)
+        await message.edit_text(txt, disable_web_page_preview=True)
+        return
+
     # ========== عکس به PDF ==========
     if cmd in (".عکس به pdf", "عکس به pdf", ".عکس به PDF", "عکس به PDF", ".تبدیل عکس به pdf"):
         await photo_to_pdf(client, message)
@@ -4892,6 +5069,10 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("✨ کیفیت عکس", f"panel_page_32_{user_id}", style="primary"),
+                _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
@@ -5107,7 +5288,7 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -5876,6 +6057,48 @@ async def callback_panel_handler(client, callback):
                         pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 31)
+                    except Exception:
+                        pass
+                    return
+                if page == 32:
+                    help_text = (
+                        "✨ کیفیت عکس | self MR\n\n"
+                        "روی عکس ریپلای کنید:\n"
+                        "`.کیفیت عکس`\n"
+                        "`.بهبود عکس`\n\n"
+                        "عکس را بزرگ‌تر، شارپ‌تر و با کنتراست بهتر می‌کند."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 32))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 32))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 32)
+                    except Exception:
+                        pass
+                    return
+                if page == 33:
+                    help_text = (
+                        "🔎 سرچ آهنگ | self MR\n\n"
+                        "دستورات:\n"
+                        "`.سرچ آهنگ شادمهر`\n"
+                        "(همه آهنگ‌های خواننده)\n\n"
+                        "`.سرچ آهنگ تکه از متن آهنگ`\n"
+                        "(پیدا کردن آهنگ دقیق)\n\n"
+                        "نتایج از iTunes + متن آهنگ + یوتیوب + لینک گوگل می‌آید."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 33))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 33))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 33)
                     except Exception:
                         pass
                     return

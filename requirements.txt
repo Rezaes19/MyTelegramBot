@@ -17,3 +17,4 @@ gTTS
 pilmoji
 python-bidi
 ffmpeg
+SpeechRecognition

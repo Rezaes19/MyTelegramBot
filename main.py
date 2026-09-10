@@ -872,7 +872,7 @@ async def get_weather_for_place(place: str) -> str:
 
 
 async def enhance_photo_quality(client, message):
-    """بالا بردن کیفیت عکس با آپ‌اسکیل + شارپ + کنتراست"""
+    """بالا بردن شدید کیفیت عکس — آپ‌اسکیل چندبرابری + شارپ قوی"""
     reply = message.reply_to_message
     if not reply or not (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
         await message.edit_text("❌ روی یک **عکس** ریپلای کنید:\n`.کیفیت عکس`")
@@ -880,30 +880,78 @@ async def enhance_photo_quality(client, message):
     path = None
     out_path = None
     try:
-        await message.edit_text("⏳ در حال بهبود کیفیت عکس...")
+        await message.edit_text("⏳ در حال افزایش شدید کیفیت و پیکسل‌ها...")
         path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/enh_{int(time.time())}")
         if not path or not os.path.exists(path):
             await message.edit_text("❌ دانلود عکس ناموفق بود.")
             return
         from PIL import Image, ImageEnhance, ImageFilter
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
         img = Image.open(path)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        # آپ‌اسکیل ۲ برابر
-        w, h = img.size
-        img = img.resize((w * 2, h * 2), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
-        # کنتراست / رنگ / شارپ
-        img = ImageEnhance.Contrast(img).enhance(1.18)
-        img = ImageEnhance.Color(img).enhance(1.12)
-        img = ImageEnhance.Sharpness(img).enhance(1.55)
+        elif img.mode == "L":
+            img = img.convert("RGB")
+
+        orig_w, orig_h = img.size
+        # ضریب آپ‌اسکیل: عکس کوچک → ۴ برابر / متوسط → ۳ / بزرگ → ۲ (سقف پیکسل)
+        max_side = max(orig_w, orig_h)
+        if max_side < 600:
+            scale = 4
+        elif max_side < 1200:
+            scale = 3
+        else:
+            scale = 2
+        new_w, new_h = orig_w * scale, orig_h * scale
+        # سقف برای جلوگیری از فایل غول‌آسا (تلگرام)
+        max_dim = 6000
+        if max(new_w, new_h) > max_dim:
+            ratio = max_dim / float(max(new_w, new_h))
+            new_w = max(1, int(new_w * ratio))
+            new_h = max(1, int(new_h * ratio))
+
+        # آپ‌اسکیل مرحله‌ای (کیفیت بهتر از یک‌باره)
+        cur_w, cur_h = orig_w, orig_h
+        while cur_w * 2 <= new_w and cur_h * 2 <= new_h:
+            cur_w *= 2
+            cur_h *= 2
+            img = img.resize((cur_w, cur_h), resample)
+        if (cur_w, cur_h) != (new_w, new_h):
+            img = img.resize((new_w, new_h), resample)
+
+        # بهبود رنگ و وضوح
+        img = ImageEnhance.Contrast(img).enhance(1.25)
+        img = ImageEnhance.Color(img).enhance(1.15)
+        img = ImageEnhance.Brightness(img).enhance(1.03)
+        img = ImageEnhance.Sharpness(img).enhance(2.2)
+        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=2))
         img = img.filter(ImageFilter.DETAIL)
-        out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}.jpg"
-        img.save(out_path, "JPEG", quality=95, optimize=True)
-        await client.send_photo(
-            message.chat.id,
-            out_path,
-            caption="✨ کیفیت عکس بالا رفت | self MR",
+        img = ImageEnhance.Sharpness(img).enhance(1.35)
+
+        out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}_{new_w}x{new_h}.jpg"
+        img.save(out_path, "JPEG", quality=98, optimize=True, subsampling=0)
+
+        caption = (
+            f"✨ کیفیت فوق‌العاده | self MR\n"
+            f"📐 قبل: `{orig_w}×{orig_h}`\n"
+            f"📐 بعد: `{new_w}×{new_h}`\n"
+            f"🔢 ضریب: ×{scale}"
         )
+        # فایل بزرگ را به صورت document بفرست تا تلگرام فشرده‌اش نکند
+        file_size = os.path.getsize(out_path)
+        if file_size > 2_500_000 or max(new_w, new_h) > 2560:
+            await client.send_document(
+                message.chat.id,
+                out_path,
+                caption=caption,
+                force_document=True,
+            )
+        else:
+            try:
+                await client.send_photo(message.chat.id, out_path, caption=caption)
+            except Exception:
+                await client.send_document(message.chat.id, out_path, caption=caption)
+
         try:
             await message.delete()
         except Exception:
@@ -6064,7 +6112,8 @@ async def callback_panel_handler(client, callback):
                         "روی عکس ریپلای کنید:\n"
                         "`.کیفیت عکس`\n"
                         "`.بهبود عکس`\n\n"
-                        "عکس را بزرگ‌تر، شارپ‌تر و با کنتراست بهتر می‌کند."
+                        "پیکسل‌ها تا چند برابر بالا می‌رود\n"
+                        "و وضوح تصویر خیلی بیشتر می‌شود."
                     )
                     try:
                         if callback.inline_message_id:

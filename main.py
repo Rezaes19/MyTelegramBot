@@ -9,11 +9,11 @@ import random
 import sqlite3
 from urllib.parse import quote
 from pyrogram import Client, filters, idle
-from pyrogram.handlers import MessageHandler
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.enums import ChatType, ChatAction, ParseMode
 from pyrogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
     InlineQueryResultArticle, InputTextMessageContent, MessageEntity
 )
 from pyrogram.raw import functions
@@ -872,7 +872,7 @@ async def get_weather_for_place(place: str) -> str:
 
 
 async def enhance_photo_quality(client, message):
-    """بالا بردن شدید کیفیت عکس — آپ‌اسکیل چندبرابری + شارپ قوی"""
+    """بهبود نرم کیفیت عکس — بدون پیکسله‌شدن زشت"""
     reply = message.reply_to_message
     if not reply or not (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
         await message.edit_text("❌ روی یک **عکس** ریپلای کنید:\n`.کیفیت عکس`")
@@ -880,7 +880,7 @@ async def enhance_photo_quality(client, message):
     path = None
     out_path = None
     try:
-        await message.edit_text("⏳ در حال افزایش شدید کیفیت و پیکسل‌ها...")
+        await message.edit_text("⏳ در حال بهبود کیفیت عکس...")
         path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/enh_{int(time.time())}")
         if not path or not os.path.exists(path):
             await message.edit_text("❌ دانلود عکس ناموفق بود.")
@@ -888,70 +888,34 @@ async def enhance_photo_quality(client, message):
         from PIL import Image, ImageEnhance, ImageFilter
         resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
         img = Image.open(path)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        elif img.mode == "L":
+        if img.mode != "RGB":
             img = img.convert("RGB")
 
         orig_w, orig_h = img.size
-        # ضریب آپ‌اسکیل: عکس کوچک → ۴ برابر / متوسط → ۳ / بزرگ → ۲ (سقف پیکسل)
-        max_side = max(orig_w, orig_h)
-        if max_side < 600:
-            scale = 4
-        elif max_side < 1200:
-            scale = 3
-        else:
-            scale = 2
+        # فقط ۲ برابر — نرم و بدون پیکسله‌شدن
+        scale = 2
         new_w, new_h = orig_w * scale, orig_h * scale
-        # سقف برای جلوگیری از فایل غول‌آسا (تلگرام)
-        max_dim = 6000
+        max_dim = 4096
         if max(new_w, new_h) > max_dim:
             ratio = max_dim / float(max(new_w, new_h))
             new_w = max(1, int(new_w * ratio))
             new_h = max(1, int(new_h * ratio))
 
-        # آپ‌اسکیل مرحله‌ای (کیفیت بهتر از یک‌باره)
-        cur_w, cur_h = orig_w, orig_h
-        while cur_w * 2 <= new_w and cur_h * 2 <= new_h:
-            cur_w *= 2
-            cur_h *= 2
-            img = img.resize((cur_w, cur_h), resample)
-        if (cur_w, cur_h) != (new_w, new_h):
-            img = img.resize((new_w, new_h), resample)
+        # نرم‌سازی خیلی کم قبل از بزرگ‌کردن تا لبه‌های زشت نسازد
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.4))
+        img = img.resize((new_w, new_h), resample)
 
-        # بهبود رنگ و وضوح
-        img = ImageEnhance.Contrast(img).enhance(1.25)
-        img = ImageEnhance.Color(img).enhance(1.15)
-        img = ImageEnhance.Brightness(img).enhance(1.03)
-        img = ImageEnhance.Sharpness(img).enhance(2.2)
-        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=2))
-        img = img.filter(ImageFilter.DETAIL)
-        img = ImageEnhance.Sharpness(img).enhance(1.35)
+        # بهبود ملایم (نه شارپ خشن)
+        img = ImageEnhance.Contrast(img).enhance(1.08)
+        img = ImageEnhance.Color(img).enhance(1.06)
+        img = ImageEnhance.Sharpness(img).enhance(1.15)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=3))
 
-        out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}_{new_w}x{new_h}.jpg"
-        img.save(out_path, "JPEG", quality=98, optimize=True, subsampling=0)
+        out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}.jpg"
+        img.save(out_path, "JPEG", quality=92, optimize=True)
 
-        caption = (
-            f"✨ کیفیت فوق‌العاده | self MR\n"
-            f"📐 قبل: `{orig_w}×{orig_h}`\n"
-            f"📐 بعد: `{new_w}×{new_h}`\n"
-            f"🔢 ضریب: ×{scale}"
-        )
-        # فایل بزرگ را به صورت document بفرست تا تلگرام فشرده‌اش نکند
-        file_size = os.path.getsize(out_path)
-        if file_size > 2_500_000 or max(new_w, new_h) > 2560:
-            await client.send_document(
-                message.chat.id,
-                out_path,
-                caption=caption,
-                force_document=True,
-            )
-        else:
-            try:
-                await client.send_photo(message.chat.id, out_path, caption=caption)
-            except Exception:
-                await client.send_document(message.chat.id, out_path, caption=caption)
-
+        caption = f"✨ کیفیت بهتر | self MR\n📐 `{orig_w}×{orig_h}` → `{new_w}×{new_h}`"
+        await client.send_photo(message.chat.id, out_path, caption=caption)
         try:
             await message.delete()
         except Exception:
@@ -970,22 +934,17 @@ async def enhance_photo_quality(client, message):
                 pass
 
 
-async def search_songs_smart(query: str) -> str:
-    """سرچ آهنگ — فقط متن داخل پیام (بدون عکس)"""
+async def search_songs_list(query: str) -> list:
+    """لیست آهنگ‌ها برای نمایش دکمه‌ای"""
     query = (query or "").strip()
-    if not query:
-        return "❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ یه تیکه از متن`"
-
-    google_song = f"https://www.google.com/search?q={quote(query + ' آهنگ')}"
-    google_lyrics = f"https://www.google.com/search?q={quote(query + ' متن آهنگ')}"
-    lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {query}\n"]
+    tracks = []
     seen = set()
-    n = 0
+    if not query:
+        return tracks
     timeout = aiohttp.ClientTimeout(total=20)
 
-    # لیست آهنگ‌ها (خواننده / عنوان)
     try:
-        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=25"
+        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=30"
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(itunes_url) as resp:
                 if resp.status == 200:
@@ -997,15 +956,13 @@ async def search_songs_smart(query: str) -> str:
                         if not tr or key in seen:
                             continue
                         seen.add(key)
-                        n += 1
-                        lines.append(f"{n}. {ar} — {tr}")
-                        if n >= 20:
+                        tracks.append({"artist": ar, "title": tr, "query": f"{ar} {tr}".strip()})
+                        if len(tracks) >= 20:
                             break
     except Exception as e:
         logging.warning(f"itunes search: {e}")
 
-    # تطبیق با تکه متن
-    if n < 5:
+    if len(tracks) < 5:
         try:
             lr_url = f"https://lrclib.net/api/search?q={quote(query)}"
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1013,61 +970,144 @@ async def search_songs_smart(query: str) -> str:
                     if resp.status == 200:
                         items = await resp.json()
                         if isinstance(items, list):
-                            for it in items[:15]:
+                            for it in items:
                                 ar = (it.get("artistName") or "").strip()
                                 tr = (it.get("trackName") or "").strip()
                                 key = f"{ar}|{tr}".lower()
                                 if not tr or key in seen:
                                     continue
                                 seen.add(key)
-                                n += 1
-                                lines.append(f"{n}. {ar} — {tr}")
-                                if n >= 20:
+                                tracks.append({"artist": ar, "title": tr, "query": f"{ar} {tr}".strip()})
+                                if len(tracks) >= 20:
                                     break
         except Exception as e:
             logging.warning(f"lrclib song search: {e}")
 
-    # نتایج متنی از DuckDuckGo (جایگزین گوگل در پیام)
+    return tracks
+
+
+async def download_song_audio(search_q: str) -> tuple:
+    """دانلود صوت آهنگ با yt-dlp — (path, title) یا (None, err)"""
+    out_tmpl = f"{DOWNLOAD_PATH}/song_{int(time.time())}_{random.randint(100,999)}.%(ext)s"
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": out_tmpl,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "default_search": "ytsearch1",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+    }
     try:
-        ddg_q = quote(f"{query} song OR آهنگ")
-        ddg_url = f"https://html.duckduckgo.com/html/?q={ddg_q}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(ddg_url, headers=headers) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
-                    try:
-                        from bs4 import BeautifulSoup
-                        soup = BeautifulSoup(html, "lxml")
-                        results = soup.select("a.result__a")[:8]
-                        if results:
-                            lines.append("")
-                            for a in results:
-                                title = (a.get_text() or "").strip()
-                                href = a.get("href") or ""
-                                if not title:
-                                    continue
-                                lines.append(f"• {title}")
-                                if href and href.startswith("http"):
-                                    lines.append(f"  {href}")
-                    except Exception as e:
-                        logging.warning(f"ddg parse: {e}")
+        def _dl():
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{search_q}", download=True)
+                entries = info.get("entries") if info and "entries" in info else [info]
+                entry = None
+                for e in (entries or []):
+                    if e:
+                        entry = e
+                        break
+                title = (entry or {}).get("title") or search_q
+                # پیدا کردن فایل خروجی
+                path = None
+                base = out_tmpl.replace("%(ext)s", "")
+                for ext in ("mp3", "m4a", "webm", "opus", "ogg"):
+                    cand = base + ext
+                    if os.path.exists(cand):
+                        path = cand
+                        break
+                if not path:
+                    # جستجو در پوشه
+                    for f in os.listdir(DOWNLOAD_PATH):
+                        if f.startswith(os.path.basename(base)):
+                            path = os.path.join(DOWNLOAD_PATH, f)
+                            break
+                return path, title
+
+        path, title = await asyncio.to_thread(_dl)
+        if not path or not os.path.exists(path):
+            return None, "فایل صوت پیدا نشد"
+        return path, title
     except Exception as e:
-        logging.warning(f"ddg search: {e}")
+        logging.warning(f"download_song_audio: {e}")
+        return None, str(e)
 
-    lines.append("")
-    lines.append(f"🌐 گوگل آهنگ:\n{google_song}")
-    lines.append(f"🌐 گوگل متن:\n{google_lyrics}")
 
-    if n == 0:
-        lines.insert(2, "نتیجه مستقیمی پیدا نشد.\n")
+async def song_download_callback(client, callback: CallbackQuery):
+    """کلیک روی دکمه آهنگ → دانلود و ارسال صوت"""
+    data = callback.data or ""
+    if not data.startswith("song_dl_"):
+        return
+    try:
+        # song_dl_{user_id}_{index}
+        parts = data.split("_")
+        owner_id = int(parts[2])
+        idx = int(parts[3])
+    except Exception:
+        await callback.answer("❌ داده نامعتبر", show_alert=True)
+        return
 
-    text = "\n".join(lines)
-    if len(text) > 3900:
-        text = text[:3900] + "\n…"
-    return text
+    if callback.from_user and callback.from_user.id != owner_id:
+        await callback.answer("⛔️ فقط خودت می‌تونی دانلود کنی", show_alert=True)
+        return
+
+    tracks = SONG_SEARCH_CACHE.get(owner_id) or []
+    if idx < 0 or idx >= len(tracks):
+        await callback.answer("❌ این آهنگ منقضی شده؛ دوباره سرچ کن", show_alert=True)
+        return
+
+    track = tracks[idx]
+    q = track.get("query") or f"{track.get('artist', '')} {track.get('title', '')}"
+    await callback.answer("⏳ در حال دانلود...")
+    try:
+        await callback.message.reply_text(f"⏳ دانلود:\n{track.get('artist', '')} — {track.get('title', '')}")
+    except Exception:
+        pass
+
+    path, title_or_err = await download_song_audio(q)
+    if not path:
+        try:
+            await client.send_message(callback.message.chat.id, f"❌ دانلود ناموفق:\n{title_or_err}")
+        except Exception:
+            pass
+        return
+
+    try:
+        await client.send_audio(
+            callback.message.chat.id,
+            path,
+            title=track.get("title") or title_or_err,
+            performer=track.get("artist") or "",
+            caption=f"🎵 {track.get('artist', '')} — {track.get('title', '')}\nself MR",
+        )
+    except Exception as e:
+        try:
+            await client.send_document(callback.message.chat.id, path, caption=f"🎵 {title_or_err}")
+        except Exception as e2:
+            await client.send_message(callback.message.chat.id, f"❌ ارسال ناموفق: {e2}")
+    finally:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+async def search_songs_smart(query: str) -> str:
+    """متن ساده — برای سازگاری؛ لیست اصلی از search_songs_list می‌آید"""
+    tracks = await search_songs_list(query)
+    if not tracks:
+        return f"❌ آهنگی برای `{query}` پیدا نشد."
+    lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {query}\n"]
+    for i, t in enumerate(tracks, 1):
+        lines.append(f"{i}. {t.get('artist', '')} — {t.get('title', '')}")
+    lines.append("\nروی دکمه آهنگ بزن تا فایل صوتی دانلود شود.")
+    return "\n".join(lines)
 
 
 async def voice_to_text(client, message) -> str:
@@ -1704,6 +1744,7 @@ DELETE_ALERT_STATUS = {}
 TTS_VOICE_STATUS = {}
 FIRST_COMMENT_STATUS = {}
 FIRST_COMMENT_TEXT = {}
+SONG_SEARCH_CACHE = {}  # user_id -> list[{artist, title, query}]
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 ACTION_STATUS = {}
@@ -4506,8 +4547,31 @@ async def reply_based_controller(client, message):
             await message.edit_text("❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ تکه از متن آهنگ`")
             return
         await message.edit_text("⏳ در حال سرچ آهنگ...")
-        txt = await search_songs_smart(q)
-        await message.edit_text(txt, disable_web_page_preview=True)
+        tracks = await search_songs_list(q)
+        if not tracks:
+            await message.edit_text(f"❌ آهنگی برای `{q}` پیدا نشد.")
+            return
+        SONG_SEARCH_CACHE[user_id] = tracks
+        lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {q}\n"]
+        for i, t in enumerate(tracks, 1):
+            lines.append(f"{i}. {t.get('artist', '')} — {t.get('title', '')}")
+        lines.append("\nروی دکمه بزن تا فایل صوتی دانلود شود.")
+        text = "\n".join(lines)
+        if len(text) > 3500:
+            text = text[:3500] + "\n…"
+        # دکمه‌ها — هر ردیف یک آهنگ (حداکثر ۱۵ تا برای محدودیت تلگرام)
+        rows = []
+        for i, t in enumerate(tracks[:15]):
+            label = f"{i+1}. {t.get('title') or 'آهنگ'}"
+            if t.get("artist"):
+                label = f"{i+1}. {t['artist'][:18]} - {(t.get('title') or '')[:20]}"
+            label = label[:60]
+            rows.append([InlineKeyboardButton(label, callback_data=f"song_dl_{user_id}_{i}")])
+        try:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), disable_web_page_preview=True)
+        except Exception:
+            await message.edit_text(text, disable_web_page_preview=True)
+            await client.send_message(message.chat.id, "دکمه‌ها:", reply_markup=InlineKeyboardMarkup(rows))
         return
 
     # ========== عکس به PDF ==========
@@ -4973,6 +5037,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
             client.add_handler(MessageHandler(panel_command_controller, filters.me & filters.regex(r"^(پنل|panel)$")))
             client.add_handler(MessageHandler(reply_based_controller, filters.me))
             client.add_handler(MessageHandler(first_comment_handler, filters.channel), group=5)
+            client.add_handler(CallbackQueryHandler(song_download_callback, filters.regex(r"^song_dl_")), group=6)
 
             await client.start()
             user_id = (await client.get_me()).id
@@ -6112,8 +6177,7 @@ async def callback_panel_handler(client, callback):
                         "روی عکس ریپلای کنید:\n"
                         "`.کیفیت عکس`\n"
                         "`.بهبود عکس`\n\n"
-                        "پیکسل‌ها تا چند برابر بالا می‌رود\n"
-                        "و وضوح تصویر خیلی بیشتر می‌شود."
+                        "بزرگ‌نمایی نرم بدون پیکسله‌شدن."
                     )
                     try:
                         if callback.inline_message_id:
@@ -6132,10 +6196,9 @@ async def callback_panel_handler(client, callback):
                         "🔎 سرچ آهنگ | self MR\n\n"
                         "دستورات:\n"
                         "`.سرچ آهنگ شادمهر`\n"
-                        "(آهنگ‌های خواننده)\n\n"
-                        "`.سرچ آهنگ تکه از متن آهنگ`\n"
-                        "(پیدا کردن آهنگ دقیق)\n\n"
-                        "نتیجه فقط داخل پیام متنی می‌آید."
+                        "`.سرچ آهنگ تکه از متن`\n\n"
+                        "لیست آهنگ‌ها با دکمه می‌آید.\n"
+                        "روی هر دکمه بزن تا فایل صوتی دانلود شود."
                     )
                     try:
                         if callback.inline_message_id:

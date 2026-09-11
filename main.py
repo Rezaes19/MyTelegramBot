@@ -872,7 +872,7 @@ async def get_weather_for_place(place: str) -> str:
 
 
 async def enhance_photo_quality(client, message):
-    """بهبود نرم کیفیت عکس — بدون پیکسله‌شدن زشت"""
+    """بهبود واقعی‌تر کیفیت عکس + ارسال بدون فشرده‌سازی تلگرام"""
     reply = message.reply_to_message
     if not reply or not (reply.photo or (reply.document and (reply.document.mime_type or "").startswith("image/"))):
         await message.edit_text("❌ روی یک **عکس** ریپلای کنید:\n`.کیفیت عکس`")
@@ -881,46 +881,81 @@ async def enhance_photo_quality(client, message):
     out_path = None
     try:
         await message.edit_text("⏳ در حال بهبود کیفیت عکس...")
+        # بزرگ‌ترین سایز عکس تلگرام
         path = await client.download_media(reply, file_name=f"{DOWNLOAD_PATH}/enh_{int(time.time())}")
         if not path or not os.path.exists(path):
             await message.edit_text("❌ دانلود عکس ناموفق بود.")
             return
-        from PIL import Image, ImageEnhance, ImageFilter
+
+        from PIL import Image, ImageEnhance, ImageFilter, ImageOps
         resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
         img = Image.open(path)
-        if img.mode != "RGB":
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif img.mode == "L":
             img = img.convert("RGB")
 
         orig_w, orig_h = img.size
-        # فقط ۲ برابر — نرم و بدون پیکسله‌شدن
-        scale = 2
-        new_w, new_h = orig_w * scale, orig_h * scale
+
+        # حذف نویز خیلی ملایم قبل از بزرگ‌کردن
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+
+        # بزرگ‌کردن تدریجی تا ~2.5x (نتیجه نرم‌تر از یک‌باره)
+        target_scale = 2.5
+        target_w = int(orig_w * target_scale)
+        target_h = int(orig_h * target_scale)
         max_dim = 4096
-        if max(new_w, new_h) > max_dim:
-            ratio = max_dim / float(max(new_w, new_h))
-            new_w = max(1, int(new_w * ratio))
-            new_h = max(1, int(new_h * ratio))
+        if max(target_w, target_h) > max_dim:
+            ratio = max_dim / float(max(target_w, target_h))
+            target_w = max(1, int(target_w * ratio))
+            target_h = max(1, int(target_h * ratio))
 
-        # نرم‌سازی خیلی کم قبل از بزرگ‌کردن تا لبه‌های زشت نسازد
-        img = img.filter(ImageFilter.GaussianBlur(radius=0.4))
-        img = img.resize((new_w, new_h), resample)
+        cur = img
+        while cur.size[0] * 1.5 < target_w and cur.size[1] * 1.5 < target_h:
+            nw = min(target_w, int(cur.size[0] * 1.5))
+            nh = min(target_h, int(cur.size[1] * 1.5))
+            cur = cur.resize((nw, nh), resample)
+        if cur.size != (target_w, target_h):
+            cur = cur.resize((target_w, target_h), resample)
 
-        # بهبود ملایم (نه شارپ خشن)
-        img = ImageEnhance.Contrast(img).enhance(1.08)
-        img = ImageEnhance.Color(img).enhance(1.06)
-        img = ImageEnhance.Sharpness(img).enhance(1.15)
-        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=3))
+        # بهبود رنگ / کنتراست / شارپ کنترل‌شده
+        cur = ImageEnhance.Contrast(cur).enhance(1.12)
+        cur = ImageEnhance.Color(cur).enhance(1.10)
+        cur = ImageEnhance.Brightness(cur).enhance(1.03)
+        cur = ImageEnhance.Sharpness(cur).enhance(1.35)
+        cur = cur.filter(ImageFilter.UnsharpMask(radius=1.6, percent=90, threshold=2))
 
+        new_w, new_h = cur.size
         out_path = f"{DOWNLOAD_PATH}/enhanced_{int(time.time())}.jpg"
-        img.save(out_path, "JPEG", quality=92, optimize=True)
+        cur.save(out_path, "JPEG", quality=97, optimize=True, subsampling=0)
 
-        caption = f"✨ کیفیت بهتر | self MR\n📐 `{orig_w}×{orig_h}` → `{new_w}×{new_h}`"
-        await client.send_photo(message.chat.id, out_path, caption=caption)
+        caption = (
+            f"✨ کیفیت بهتر | self MR\n"
+            f"📐 `{orig_w}×{orig_h}` → `{new_w}×{new_h}`"
+        )
+
+        # send_document = بدون فشرده‌سازی عکس تلگرام (کیفیت واقعی می‌مونه)
+        try:
+            await client.send_document(
+                message.chat.id,
+                out_path,
+                caption=caption,
+                force_document=True,
+            )
+        except TypeError:
+            await client.send_document(message.chat.id, out_path, caption=caption)
+        except Exception:
+            # fallback
+            await client.send_photo(message.chat.id, out_path, caption=caption)
+
         try:
             await message.delete()
         except Exception:
             pass
     except Exception as e:
+        logging.error(f"enhance_photo: {e}")
         try:
             await message.edit_text(f"❌ خطا در بهبود عکس: {e}")
         except Exception:
@@ -988,6 +1023,9 @@ async def search_songs_list(query: str) -> list:
 
 async def download_song_audio(search_q: str) -> tuple:
     """دانلود صوت آهنگ با yt-dlp — (path, title) یا (None, err)"""
+    search_q = (search_q or "").strip()
+    if not search_q:
+        return None, "کوئری خالی"
     out_tmpl = f"{DOWNLOAD_PATH}/song_{int(time.time())}_{random.randint(100,999)}.%(ext)s"
     opts = {
         "format": "bestaudio/best",
@@ -996,6 +1034,8 @@ async def download_song_audio(search_q: str) -> tuple:
         "no_warnings": True,
         "noplaylist": True,
         "default_search": "ytsearch1",
+        "socket_timeout": 30,
+        "retries": 2,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -1044,7 +1084,6 @@ async def song_download_callback(client, callback: CallbackQuery):
     if not data.startswith("song_dl_"):
         return
     try:
-        # song_dl_{user_id}_{index}
         parts = data.split("_")
         owner_id = int(parts[2])
         idx = int(parts[3])
@@ -1058,21 +1097,37 @@ async def song_download_callback(client, callback: CallbackQuery):
 
     tracks = SONG_SEARCH_CACHE.get(owner_id) or []
     if idx < 0 or idx >= len(tracks):
-        await callback.answer("❌ این آهنگ منقضی شده؛ دوباره سرچ کن", show_alert=True)
+        await callback.answer("❌ منقضی شده؛ دوباره سرچ کن", show_alert=True)
         return
 
     track = tracks[idx]
-    q = track.get("query") or f"{track.get('artist', '')} {track.get('title', '')}"
-    await callback.answer("⏳ در حال دانلود...")
+    q = (track.get("query") or f"{track.get('artist', '')} {track.get('title', '')}").strip()
+    title = track.get("title") or "آهنگ"
+    artist = track.get("artist") or ""
+
     try:
-        await callback.message.reply_text(f"⏳ دانلود:\n{track.get('artist', '')} — {track.get('title', '')}")
+        await callback.answer("⏳ دانلود...")
+    except Exception:
+        pass
+
+    status = None
+    try:
+        status = await callback.message.reply_text(f"⏳ در حال دانلود:\n🎵 {artist} — {title}")
     except Exception:
         pass
 
     path, title_or_err = await download_song_audio(q)
     if not path:
+        # یک بار دیگر با فقط عنوان
+        if title and title != q:
+            path, title_or_err = await download_song_audio(f"{title} {artist}".strip())
+    if not path:
+        msg = f"❌ دانلود ناموفق:\n{title_or_err}"
         try:
-            await client.send_message(callback.message.chat.id, f"❌ دانلود ناموفق:\n{title_or_err}")
+            if status:
+                await status.edit_text(msg)
+            else:
+                await client.send_message(callback.message.chat.id, msg)
         except Exception:
             pass
         return
@@ -1081,15 +1136,35 @@ async def song_download_callback(client, callback: CallbackQuery):
         await client.send_audio(
             callback.message.chat.id,
             path,
-            title=track.get("title") or title_or_err,
-            performer=track.get("artist") or "",
-            caption=f"🎵 {track.get('artist', '')} — {track.get('title', '')}\nself MR",
+            title=title,
+            performer=artist,
+            caption=f"🎵 {artist} — {title}\nself MR" if artist else f"🎵 {title}\nself MR",
         )
+        if status:
+            try:
+                await status.delete()
+            except Exception:
+                pass
     except Exception as e:
         try:
-            await client.send_document(callback.message.chat.id, path, caption=f"🎵 {title_or_err}")
+            await client.send_document(
+                callback.message.chat.id,
+                path,
+                caption=f"🎵 {artist} — {title}",
+            )
+            if status:
+                try:
+                    await status.delete()
+                except Exception:
+                    pass
         except Exception as e2:
-            await client.send_message(callback.message.chat.id, f"❌ ارسال ناموفق: {e2}")
+            try:
+                if status:
+                    await status.edit_text(f"❌ ارسال ناموفق: {e2}")
+                else:
+                    await client.send_message(callback.message.chat.id, f"❌ ارسال ناموفق: {e2}")
+            except Exception:
+                pass
     finally:
         try:
             if path and os.path.exists(path):
@@ -4552,26 +4627,35 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ آهنگی برای `{q}` پیدا نشد.")
             return
         SONG_SEARCH_CACHE[user_id] = tracks
-        lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {q}\n"]
-        for i, t in enumerate(tracks, 1):
-            lines.append(f"{i}. {t.get('artist', '')} — {t.get('title', '')}")
-        lines.append("\nروی دکمه بزن تا فایل صوتی دانلود شود.")
-        text = "\n".join(lines)
-        if len(text) > 3500:
-            text = text[:3500] + "\n…"
-        # دکمه‌ها — هر ردیف یک آهنگ (حداکثر ۱۵ تا برای محدودیت تلگرام)
+        # فقط دکمه — بدون لیست متنی
+        text = (
+            f"🎵 سرچ آهنگ | self MR\n\n"
+            f"🔎 `{q}`\n"
+            f"📌 {min(len(tracks), 15)} نتیجه — روی دکمه بزن تا دانلود شود"
+        )
         rows = []
         for i, t in enumerate(tracks[:15]):
-            label = f"{i+1}. {t.get('title') or 'آهنگ'}"
-            if t.get("artist"):
-                label = f"{i+1}. {t['artist'][:18]} - {(t.get('title') or '')[:20]}"
-            label = label[:60]
+            ar = (t.get("artist") or "").strip()
+            ti = (t.get("title") or "آهنگ").strip()
+            if ar:
+                label = f"🎵 {ar[:22]} — {ti[:28]}"
+            else:
+                label = f"🎵 {ti[:50]}"
+            label = label[:64]
             rows.append([InlineKeyboardButton(label, callback_data=f"song_dl_{user_id}_{i}")])
         try:
             await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), disable_web_page_preview=True)
         except Exception:
-            await message.edit_text(text, disable_web_page_preview=True)
-            await client.send_message(message.chat.id, "دکمه‌ها:", reply_markup=InlineKeyboardMarkup(rows))
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            await client.send_message(
+                message.chat.id,
+                text,
+                reply_markup=InlineKeyboardMarkup(rows),
+                disable_web_page_preview=True,
+            )
         return
 
     # ========== عکس به PDF ==========

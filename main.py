@@ -4258,9 +4258,8 @@ async def sender_loop_task(client: Client, user_id: int):
 
 
 async def mass_forward_banner(client: Client, user_id: int, banner_chat_id: int, banner_msg_id: int):
-    """فوروارد بنر به همه گپ / کانال / پیوی با تاخیر ضدفلود + آمار تفکیکی"""
-    state = SENDER_MASS.get(user_id) or {}
-    state.update({
+    """فوروارد/کپی بنر به همه پیوی + گپ + کانال با آمار تفکیکی"""
+    state = {
         "running": True,
         "banner_chat_id": banner_chat_id,
         "banner_msg_id": banner_msg_id,
@@ -4273,14 +4272,13 @@ async def mass_forward_banner(client: Client, user_id: int, banner_chat_id: int,
         "fail_pv": 0,
         "fail_group": 0,
         "fail_channel": 0,
-    })
+    }
     SENDER_MASS[user_id] = state
 
-    def _classify(chat) -> str:
-        """برمی‌گرداند: pv | group | channel"""
+    def _kind(chat) -> str:
         try:
             from pyrogram.enums import ChatType
-            t = getattr(chat, "type", None)
+            t = chat.type
             if t == ChatType.PRIVATE:
                 return "pv"
             if t in (ChatType.GROUP, ChatType.SUPERGROUP):
@@ -4289,89 +4287,99 @@ async def mass_forward_banner(client: Client, user_id: int, banner_chat_id: int,
                 return "channel"
         except Exception:
             pass
-        t = str(getattr(chat, "type", "")).lower()
-        if "private" in t:
+        s = str(getattr(chat, "type", "")).lower()
+        if "private" in s:
             return "pv"
-        if "channel" in t:
+        if "channel" in s:
             return "channel"
-        if "group" in t:
-            return "group"
         return "group"
 
-    targets = []  # list of (chat_id, kind)
+    targets = []
     try:
-        async for dialog in client.get_dialogs():
-            chat = dialog.chat
+        async for d in client.get_dialogs():
+            chat = getattr(d, "chat", None)
             if not chat:
                 continue
-            kind = _classify(chat)
+            kind = _kind(chat)
             if kind == "pv" and getattr(chat, "is_bot", False):
                 continue
-            # فقط pv / group / channel
-            if kind not in ("pv", "group", "channel"):
-                continue
-            targets.append((chat.id, kind))
+            # خودِ چت بنر را هم می‌توان فرستاد؛ مشکلی نیست
+            targets.append((int(chat.id), kind, getattr(chat, "title", None) or getattr(chat, "first_name", "") or str(chat.id)))
     except Exception as e:
-        logging.error(f"mass_forward dialogs: {e}")
+        logging.exception("mass_forward get_dialogs")
         state["running"] = False
         SENDER_MASS[user_id] = state
         try:
-            await client.send_message("me", f"❌ خطا در گرفتن لیست چت‌ها:\n{e}")
+            await client.send_message("me", f"❌ نتوانستم لیست چت‌ها را بگیرم:\n`{e}`")
         except Exception:
             pass
         return
 
     state["total"] = len(targets)
     SENDER_MASS[user_id] = state
+    n_pv = sum(1 for _, k, _ in targets if k == "pv")
+    n_g = sum(1 for _, k, _ in targets if k == "group")
+    n_c = sum(1 for _, k, _ in targets if k == "channel")
 
-    n_pv = sum(1 for _, k in targets if k == "pv")
-    n_g = sum(1 for _, k in targets if k == "group")
-    n_c = sum(1 for _, k in targets if k == "channel")
     try:
         await client.send_message(
             "me",
-            f"📣 سندر فور شروع شد | self MR\n\n"
-            f"🎯 کل هدف: {len(targets)}\n"
+            f"📣 سندر فور شروع | self MR\n\n"
+            f"🎯 کل چت پیدا شده: {len(targets)}\n"
             f"👤 پیوی: {n_pv}\n"
             f"👥 گپ: {n_g}\n"
             f"📢 کانال: {n_c}\n\n"
-            f"⏱ تاخیر تصادفی ضدفلود فعال است\n"
+            f"در حال ارسال...\n"
             f"توقف: `.سندر فور خاموش`",
         )
     except Exception:
         pass
 
-    for i, (chat_id, kind) in enumerate(targets):
+    if not targets:
+        state["running"] = False
+        SENDER_MASS[user_id] = state
+        try:
+            await client.send_message("me", "❌ هیچ چتی برای ارسال پیدا نشد.")
+        except Exception:
+            pass
+        return
+
+    for i, (chat_id, kind, title) in enumerate(targets):
         st = SENDER_MASS.get(user_id) or {}
         if not st.get("running"):
             break
+
+        ok = False
+        # 1) فوروارد
         try:
-            await client.forward_messages(chat_id, banner_chat_id, banner_msg_id)
+            await client.forward_messages(chat_id, int(banner_chat_id), int(banner_msg_id))
+            ok = True
+        except Exception as e1:
+            # 2) کپی اگر فوروارد ممنوع بود
+            try:
+                await client.copy_message(chat_id, int(banner_chat_id), int(banner_msg_id))
+                ok = True
+            except Exception as e2:
+                logging.warning(f"mass send fail {chat_id} ({kind}/{title}): {e1} | {e2}")
+                ok = False
+
+        if ok:
             st["sent"] = int(st.get("sent") or 0) + 1
-            if kind == "pv":
-                st["sent_pv"] = int(st.get("sent_pv") or 0) + 1
-            elif kind == "channel":
-                st["sent_channel"] = int(st.get("sent_channel") or 0) + 1
-            else:
-                st["sent_group"] = int(st.get("sent_group") or 0) + 1
-        except Exception as e:
+            st[f"sent_{kind}"] = int(st.get(f"sent_{kind}") or 0) + 1
+        else:
             st["failed"] = int(st.get("failed") or 0) + 1
-            if kind == "pv":
-                st["fail_pv"] = int(st.get("fail_pv") or 0) + 1
-            elif kind == "channel":
-                st["fail_channel"] = int(st.get("fail_channel") or 0) + 1
-            else:
-                st["fail_group"] = int(st.get("fail_group") or 0) + 1
-            logging.warning(f"mass forward to {chat_id} ({kind}): {e}")
+            st[f"fail_{kind}"] = int(st.get(f"fail_{kind}") or 0) + 1
         SENDER_MASS[user_id] = st
-        await asyncio.sleep(random.uniform(2.5, 5.5))
-        if (i + 1) % 25 == 0:
+
+        # ضد فلود
+        await asyncio.sleep(random.uniform(2.0, 4.5))
+        if (i + 1) % 20 == 0:
             try:
                 await client.send_message(
                     "me",
-                    f"📣 پیشرفت سندر:\n"
-                    f"✅ کل: {st.get('sent', 0)} | ❌ {st.get('failed', 0)}\n"
-                    f"👤 پیوی: {st.get('sent_pv', 0)} | 👥 گپ: {st.get('sent_group', 0)} | 📢 کانال: {st.get('sent_channel', 0)}",
+                    f"📣 پیشرفت: {i+1}/{len(targets)}\n"
+                    f"✅ {st.get('sent',0)} | ❌ {st.get('failed',0)}\n"
+                    f"👤 {st.get('sent_pv',0)} | 👥 {st.get('sent_group',0)} | 📢 {st.get('sent_channel',0)}",
                 )
             except Exception:
                 pass
@@ -5086,7 +5094,7 @@ async def reply_based_controller(client, message):
 
 
     # ========== سندر فور همگانی (یک دستور) ==========
-    if cmd in (".تنظیم سندر فور", "تنظیم سندر فور"):
+    if cmd in (".تنظیم سندر فور", "تنظیم سندر فور", ".تنظیم بنر فور", "تنظیم بنر فور", ".سندر فور", "سندر فور"):
         reply = message.reply_to_message
         if not reply:
             await message.edit_text(

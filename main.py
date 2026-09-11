@@ -970,34 +970,46 @@ async def enhance_photo_quality(client, message):
 
 
 async def search_songs_list(query: str) -> list:
-    """لیست آهنگ‌ها برای نمایش دکمه‌ای"""
+    """جستجوی آهنگ از چند منبع: iTunes + LRCLIB + YouTube + SoundCloud"""
     query = (query or "").strip()
     tracks = []
     seen = set()
     if not query:
         return tracks
-    timeout = aiohttp.ClientTimeout(total=20)
 
+    def _add(ar, tr, extra_q=None):
+        ar = (ar or "").strip()
+        tr = (tr or "").strip()
+        if not tr:
+            return
+        key = f"{ar}|{tr}".lower()
+        if key in seen:
+            return
+        seen.add(key)
+        tracks.append({
+            "artist": ar,
+            "title": tr,
+            "query": (extra_q or f"{ar} {tr}".strip() or tr),
+        })
+
+    timeout = aiohttp.ClientTimeout(total=18)
+
+    # 1) iTunes
     try:
-        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=30"
+        itunes_url = f"https://itunes.apple.com/search?term={quote(query)}&entity=song&limit=25"
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(itunes_url) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
                     for item in (data.get("results") or []):
-                        ar = (item.get("artistName") or "").strip()
-                        tr = (item.get("trackName") or "").strip()
-                        key = f"{ar}|{tr}".lower()
-                        if not tr or key in seen:
-                            continue
-                        seen.add(key)
-                        tracks.append({"artist": ar, "title": tr, "query": f"{ar} {tr}".strip()})
+                        _add(item.get("artistName"), item.get("trackName"))
                         if len(tracks) >= 20:
                             break
     except Exception as e:
         logging.warning(f"itunes search: {e}")
 
-    if len(tracks) < 5:
+    # 2) LRCLIB
+    if len(tracks) < 15:
         try:
             lr_url = f"https://lrclib.net/api/search?q={quote(query)}"
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1006,19 +1018,60 @@ async def search_songs_list(query: str) -> list:
                         items = await resp.json()
                         if isinstance(items, list):
                             for it in items:
-                                ar = (it.get("artistName") or "").strip()
-                                tr = (it.get("trackName") or "").strip()
-                                key = f"{ar}|{tr}".lower()
-                                if not tr or key in seen:
-                                    continue
-                                seen.add(key)
-                                tracks.append({"artist": ar, "title": tr, "query": f"{ar} {tr}".strip()})
+                                _add(it.get("artistName"), it.get("trackName"))
                                 if len(tracks) >= 20:
                                     break
         except Exception as e:
             logging.warning(f"lrclib song search: {e}")
 
-    return tracks
+    # 3) YouTube search (بدون دانلود)
+    if len(tracks) < 12:
+        try:
+            def _yt():
+                opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True}
+                out = []
+                with YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch12:{query}", download=False)
+                    for e in (info.get("entries") or []):
+                        if not e:
+                            continue
+                        title = e.get("title") or ""
+                        uploader = e.get("uploader") or e.get("channel") or ""
+                        vid = e.get("id") or e.get("url") or ""
+                        q2 = f"https://www.youtube.com/watch?v={vid}" if vid and len(str(vid)) < 20 else f"{uploader} {title}"
+                        out.append((uploader, title, q2))
+                return out
+            for ar, tr, q2 in await asyncio.to_thread(_yt):
+                _add(ar, tr, q2)
+                if len(tracks) >= 20:
+                    break
+        except Exception as e:
+            logging.warning(f"yt search: {e}")
+
+    # 4) SoundCloud search flat
+    if len(tracks) < 12:
+        try:
+            def _sc():
+                opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True}
+                out = []
+                with YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(f"scsearch8:{query}", download=False)
+                    for e in (info.get("entries") or []):
+                        if not e:
+                            continue
+                        title = e.get("title") or ""
+                        uploader = e.get("uploader") or ""
+                        url = e.get("url") or e.get("webpage_url") or f"{uploader} {title}"
+                        out.append((uploader, title, url))
+                return out
+            for ar, tr, q2 in await asyncio.to_thread(_sc):
+                _add(ar, tr, q2)
+                if len(tracks) >= 20:
+                    break
+        except Exception as e:
+            logging.warning(f"sc search: {e}")
+
+    return tracks[:20]
 
 
 async def download_song_audio(search_q: str) -> tuple:
@@ -1050,9 +1103,29 @@ async def download_song_audio(search_q: str) -> tuple:
     try:
         def _dl():
             with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"ytsearch1:{search_q}", download=True)
+                info = None
+                # اگر لینک مستقیم بود
+                candidates = []
+                if search_q.startswith("http://") or search_q.startswith("https://"):
+                    candidates.append(search_q)
+                candidates.extend([
+                    f"ytsearch1:{search_q}",
+                    f"scsearch1:{search_q}",
+                    f"ytsearch1:{search_q} audio",
+                    f"ytsearch1:{search_q} official audio",
+                ])
+                last_err = None
+                for cand in candidates:
+                    try:
+                        info = ydl.extract_info(cand, download=True)
+                        if info:
+                            break
+                    except Exception as ee:
+                        last_err = ee
+                        info = None
+                        continue
                 if not info:
-                    return None, "نتیجه‌ای پیدا نشد"
+                    return None, f"نتیجه‌ای پیدا نشد ({last_err})"
                 if "entries" in info:
                     entries = [e for e in (info.get("entries") or []) if e]
                     entry = entries[0] if entries else None
@@ -4224,12 +4297,15 @@ async def reply_based_controller(client, message):
                 pass
         return
 
-    if cheat_cmd in (".تاس 6", ".تاس۶", ".تاس  ۶"):
+    # تاس ۱ تا ۶
+    dice_match = re.match(r"^\.تاس\s*([1-6۶])$", cheat_cmd.replace("۶", "6").replace("۵", "5").replace("۴", "4").replace("۳", "3").replace("۲", "2").replace("۱", "1"))
+    if dice_match:
+        target = int(dice_match.group(1))
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {6}, 35)
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {target}, 40)
         if not ok:
             try:
-                await client.send_message(message.chat.id, "❌ تاس ۶ نیومد.")
+                await client.send_message(message.chat.id, f"❌ تاس {target} نیومد. دوباره بزن.")
             except Exception:
                 pass
         return
@@ -4689,54 +4765,74 @@ async def reply_based_controller(client, message):
         if not q:
             await message.edit_text("❌ مثال:\n`.سرچ آهنگ شادمهر`")
             return
-        await message.edit_text("⏳ در حال سرچ آهنگ...")
+        await message.edit_text("⏳ در حال سرچ از یوتیوب / ساندکلود / ...")
         tracks = await search_songs_list(q)
         if not tracks:
             await message.edit_text(f"❌ آهنگی برای `{q}` پیدا نشد.")
             return
-        tracks = tracks[:10]
+        tracks = tracks[:12]
         SONG_SEARCH_CACHE[user_id] = tracks
         PENDING_SONG_PICK[user_id] = True
 
-        # ویرایش پیام خود کاربر — لیست + راهنما
-        lines = [f"🎵 **سرچ آهنگ | self MR**\n\n🔎 `{q}`\n"]
-        for i, t in enumerate(tracks, 1):
-            ar = t.get("artist") or ""
-            ti = t.get("title") or "آهنگ"
-            lines.append(f"**{i}.** {ar} — {ti}" if ar else f"**{i}.** {ti}")
-        lines.append("\n📌 شماره آهنگ را بفرست (مثلاً `1`) یا:\n`.آهنگ 1`")
-        text = "\n".join(lines)
-
-        # ReplyKeyboard — هر آهنگ یک دکمه جدا (روی اکانت سلف کار می‌کند)
-        kb_rows = []
-        for i, t in enumerate(tracks, 1):
+        header = f"🎵 سرچ آهنگ | self MR\n\n🔎 {q}\n📌 {len(tracks)} نتیجه — روی دکمه بزن"
+        rows = []
+        for i, t in enumerate(tracks):
             ar = (t.get("artist") or "").strip()
             ti = (t.get("title") or "آهنگ").strip()
-            label = f"{i}️⃣ {ar} — {ti}" if ar else f"{i}️⃣ {ti}"
+            label = f"🎵 {ar} — {ti}" if ar else f"🎵 {ti}"
+            label = label[:64]
+            rows.append([InlineKeyboardButton(label, callback_data=f"song_dl_{user_id}_{i}")])
+
+        sent = False
+        # دکمه اینلاین از ربات منیجر (هر آهنگ یک دکمه)
+        try:
+            await manager_bot.send_message(
+                message.chat.id,
+                header,
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            sent = True
+        except Exception as e1:
+            logging.warning(f"song inline chat: {e1}")
+            try:
+                await manager_bot.send_message(
+                    user_id,
+                    header + "\n\n(در پیوی — ربات را به گروه اضافه کن تا اینجا هم بیاید)",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
+                sent = True
+            except Exception as e2:
+                logging.warning(f"song inline pm: {e2}")
+
+        # کیبورد سلف (هر آهنگ یک دکمه) — همیشه
+        kb_rows = []
+        for i, t in enumerate(tracks):
+            ar = (t.get("artist") or "").strip()
+            ti = (t.get("title") or "آهنگ").strip()
+            label = f"{i+1}️⃣ {ar} — {ti}" if ar else f"{i+1}️⃣ {ti}"
             label = label[:64]
             kb_rows.append([KeyboardButton(label)])
         kb_rows.append([KeyboardButton("❌ لغو سرچ")])
-        kb = ReplyKeyboardMarkup(kb_rows, resize_keyboard=True, one_time_keyboard=True)
-
-        try:
-            await message.edit_text(text)
-        except Exception:
-            pass
         try:
             await client.send_message(
                 message.chat.id,
-                "⬇️ روی دکمه آهنگ بزن یا شماره را بفرست:",
-                reply_markup=kb,
+                "⬇️ یا از دکمه‌های پایین یکی را انتخاب کن:",
+                reply_markup=ReplyKeyboardMarkup(kb_rows, resize_keyboard=True, one_time_keyboard=True),
             )
+            sent = True
         except Exception as e:
-            logging.warning(f"song kb: {e}")
-            try:
-                await message.edit_text(text + "\n\n(دکمه ارسال نشد؛ شماره را تایپ کن)")
-            except Exception:
-                pass
+            logging.warning(f"song reply kb: {e}")
+
+        try:
+            if sent:
+                await message.edit_text("✅ نتایج آماده است — روی دکمه آهنگ بزن.")
+            else:
+                await message.edit_text("❌ ارسال دکمه‌ها ناموفق بود.")
+        except Exception:
+            pass
         return
 
-    # انتخاب آهنگ با شماره یا دکمه کیبورد
+    # انتخاب آهنگ با شماره / دکمه کیبورد سلف
     if PENDING_SONG_PICK.get(user_id) and SONG_SEARCH_CACHE.get(user_id):
         tracks = SONG_SEARCH_CACHE.get(user_id) or []
         pick = None
@@ -4744,11 +4840,14 @@ async def reply_based_controller(client, message):
         if raw in ("❌ لغو سرچ", "لغو سرچ", "لغو"):
             PENDING_SONG_PICK[user_id] = False
             try:
-                await message.edit_text("❌ سرچ لغو شد.", reply_markup=ReplyKeyboardRemove())
+                await message.reply_text("❌ سرچ لغو شد.", reply_markup=ReplyKeyboardRemove())
             except Exception:
-                await client.send_message(message.chat.id, "❌ سرچ لغو شد.", reply_markup=ReplyKeyboardRemove())
+                pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
             return
-        # دکمه: "1️⃣ Artist — Title" یا فقط عدد
         mnum = re.match(r"^(\d{1,2})\s*[️⃣.)\-]?\s*", raw)
         if mnum:
             pick = int(mnum.group(1)) - 1
@@ -4762,36 +4861,27 @@ async def reply_based_controller(client, message):
             PENDING_SONG_PICK[user_id] = False
             q = (track.get("query") or f"{track.get('artist','')} {track.get('title','')}").strip()
             try:
-                await message.edit_text(
-                    f"⏳ دانلود آهنگ...\n🎵 {track.get('artist','')} — {track.get('title','')}",
+                await message.reply_text(
+                    f"⏳ دانلود...\n🎵 {track.get('artist','')} — {track.get('title','')}",
                     reply_markup=ReplyKeyboardRemove(),
                 )
             except Exception:
-                try:
-                    await client.send_message(message.chat.id, "⏳ دانلود...", reply_markup=ReplyKeyboardRemove())
-                except Exception:
-                    pass
+                pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
             result, err = await download_song_audio(q)
             if not result:
-                # retry with title only
                 result, err = await download_song_audio(track.get("title") or q)
             if not result:
-                try:
-                    await message.edit_text(f"❌ دانلود ناموفق:\n`{err}`")
-                except Exception:
-                    await client.send_message(message.chat.id, f"❌ دانلود ناموفق:\n{err}")
+                await client.send_message(message.chat.id, f"❌ دانلود ناموفق:\n`{err}`")
                 return
-            # عنوان را از سرچ نگه دار اگر بهتر بود
             if track.get("title"):
                 result["title"] = track.get("title") or result.get("title")
             if track.get("artist"):
                 result["artist"] = track.get("artist") or result.get("artist")
-            ok = await send_downloaded_song(client, message.chat.id, result, status_msg=message)
-            if not ok:
-                try:
-                    await message.edit_text("❌ ارسال آهنگ ناموفق بود.")
-                except Exception:
-                    pass
+            await send_downloaded_song(client, message.chat.id, result, status_msg=None)
             return
 
     # ========== عکس به PDF ==========
@@ -6217,7 +6307,7 @@ async def callback_panel_handler(client, callback):
                         "• `.بولینگ` → استرایک (۶)\n"
                         "• `.بسکتبال` → توپ داخل سبد (۵)\n"
                         "• `.فوتبال` → گل (۵)\n"
-                        "• `.تاس 6` → تاس ۶\n"
+                        "• `.تاس 1` تا `.تاس 6` → عدد دلخواه\n"
                         "• `.اسلات 777` → جکپات ۷۷۷\n"
                         "• `.اسلات لیمو` → سه لیمو\n"
                         "• `.اسلات انگور` → سه انگور\n"

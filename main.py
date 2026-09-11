@@ -1944,6 +1944,12 @@ ROTATING_MUSIC = {}          # user_id -> list[{file_id, title}]
 ROTATING_MUSIC_INTERVAL = {} # ساعت
 ROTATING_MUSIC_STATUS = {}
 ROTATING_MUSIC_INDEX = {}
+
+# سندر بنر گروهی: user_id -> { chat_id(str) -> config }
+# config: enabled, mode(copy/forward), banner_chat_id, banner_msg_id, delay, hourly_limit, sent_hour, hour_ts
+SENDER_CONFIG = {}
+# سندر فور همگانی: user_id -> {running, banner_chat_id, banner_msg_id, sent, failed, task}
+SENDER_MASS = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 AUTO_SEEN_STATUS = {}
@@ -2004,6 +2010,12 @@ def load_all_states():
         ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
+        try:
+            sc = settings.get("sender_config") or {}
+            # keys must be str for JSON
+            SENDER_CONFIG[user_id] = {str(k): v for k, v in sc.items()} if isinstance(sc, dict) else {}
+        except Exception:
+            SENDER_CONFIG[user_id] = {}
         ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
         FIRST_COMMENT_STATUS[user_id] = bool(settings.get("first_comment", False))
@@ -2047,6 +2059,12 @@ def apply_user_settings_from_db(user_id: int):
         ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
+        try:
+            sc = settings.get("sender_config") or {}
+            # keys must be str for JSON
+            SENDER_CONFIG[user_id] = {str(k): v for k, v in sc.items()} if isinstance(sc, dict) else {}
+        except Exception:
+            SENDER_CONFIG[user_id] = {}
         if user_id not in ROTATING_MUSIC_INDEX:
             ROTATING_MUSIC_INDEX[user_id] = 0
         TTS_VOICE_STATUS[user_id] = settings.get("tts_voice", "زن")
@@ -2090,6 +2108,7 @@ def persist_all_user_settings(user_id: int):
             "rotating_music": list(ROTATING_MUSIC.get(user_id) or []),
             "rotating_music_interval": int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1),
             "rotating_music_on": bool(ROTATING_MUSIC_STATUS.get(user_id, False)),
+            "sender_config": SENDER_CONFIG.get(user_id) or {},
             "first_comment": bool(FIRST_COMMENT_STATUS.get(user_id, False)),
             "first_comment_text": FIRST_COMMENT_TEXT.get(user_id, "🔥") or "🔥",
             "tts_voice": TTS_VOICE_STATUS.get(user_id, "زن"),
@@ -2185,48 +2204,112 @@ async def rotate_profile_name_task(client: Client, user_id: int):
 
 
 async def _apply_profile_music(client: Client, user_id: int, track: dict) -> bool:
-    """اعمال یک آهنگ روی موزیک پروفایل — از فایل محلی یا file_id"""
+    """اعمال آهنگ روی موزیک پروفایل — با رفرش file_reference و دانلود مجدد"""
     if not track or not isinstance(track, dict):
         return False
     title = track.get("title") or "آهنگ"
-    local_path = track.get("path")
-    file_id = track.get("file_id")
+    local_path = track.get("path") or ""
+    file_id = track.get("file_id") or ""
+    src_chat = track.get("chat_id")
+    src_msg = track.get("msg_id")
+
     try:
         from pyrogram.raw import types as raw_types
+        from pyrogram.file_id import FileId
+    except Exception as e:
+        logging.warning(f"import for music: {e}")
+        return False
 
-        input_doc = None
-        temp_msg = None
+    if not hasattr(functions.account, "SaveMusic"):
+        logging.warning("account.SaveMusic در این نسخه pyrogram موجود نیست")
+        return False
 
-        # اولویت: فایل محلی → آپلود تازه (file_reference معتبر)
-        if local_path and os.path.exists(local_path):
+    async def _make_input_from_audio_msg(msg) -> object:
+        if not msg or not msg.audio:
+            return None
+        try:
+            fid = FileId.decode(msg.audio.file_id)
+            return raw_types.InputDocument(
+                id=fid.media_id,
+                access_hash=fid.access_hash,
+                file_reference=fid.file_reference or b"",
+            )
+        except Exception as e:
+            logging.warning(f"decode audio msg: {e}")
+            return None
+
+    async def _upload_path(path: str):
+        if not path or not os.path.exists(path):
+            return None, None
+        try:
+            # send as audio برای متادیتای موزیک
+            temp = await client.send_audio("me", path, title=title[:64])
+            await asyncio.sleep(0.4)
+            return temp, await _make_input_from_audio_msg(temp)
+        except Exception:
             try:
-                temp_msg = await client.send_audio("me", local_path, title=title)
-                await asyncio.sleep(0.5)
-                if temp_msg and temp_msg.audio:
-                    from pyrogram.file_id import FileId
-                    fid = FileId.decode(temp_msg.audio.file_id)
-                    input_doc = raw_types.InputDocument(
+                temp = await client.send_document("me", path)
+                await asyncio.sleep(0.4)
+                if temp and temp.document:
+                    fid = FileId.decode(temp.document.file_id)
+                    inp = raw_types.InputDocument(
                         id=fid.media_id,
                         access_hash=fid.access_hash,
                         file_reference=fid.file_reference or b"",
                     )
+                    return temp, inp
             except Exception as e:
-                logging.warning(f"music upload local failed: {e}")
+                logging.warning(f"upload path failed: {e}")
+        return None, None
 
-        # fallback: file_id ذخیره‌شده
+    temp_msg = None
+    input_doc = None
+    try:
+        # 1) رفرش از پیام اصلی (بهترین روش)
+        if src_chat and src_msg:
+            try:
+                orig = await client.get_messages(int(src_chat), int(src_msg))
+                if orig and (orig.audio or orig.document):
+                    # دانلود تازه برای آپلود معتبر
+                    music_dir = os.path.join(DOWNLOAD_PATH, "music", str(user_id))
+                    os.makedirs(music_dir, exist_ok=True)
+                    dl = await client.download_media(
+                        orig,
+                        file_name=os.path.join(music_dir, f"rot_{int(time.time())}_{random.randint(100,999)}")
+                    )
+                    if dl and os.path.exists(dl):
+                        local_path = dl
+                        track["path"] = dl
+                        if orig.audio:
+                            track["file_id"] = orig.audio.file_id
+                        elif orig.document:
+                            track["file_id"] = orig.document.file_id
+                        file_id = track.get("file_id") or file_id
+            except Exception as e:
+                logging.warning(f"refresh orig msg music: {e}")
+
+        # 2) فایل محلی
+        if local_path and os.path.exists(local_path):
+            temp_msg, input_doc = await _upload_path(local_path)
+
+        # 3) دانلود از file_id ذخیره‌شده
         if input_doc is None and file_id:
             try:
-                from pyrogram.file_id import FileId
-                fid = FileId.decode(file_id)
-                input_doc = raw_types.InputDocument(
-                    id=fid.media_id,
-                    access_hash=fid.access_hash,
-                    file_reference=fid.file_reference or b"",
+                music_dir = os.path.join(DOWNLOAD_PATH, "music", str(user_id))
+                os.makedirs(music_dir, exist_ok=True)
+                dl = await client.download_media(
+                    file_id,
+                    file_name=os.path.join(music_dir, f"fid_{int(time.time())}_{random.randint(100,999)}")
                 )
+                if dl and os.path.exists(dl):
+                    local_path = dl
+                    track["path"] = dl
+                    temp_msg, input_doc = await _upload_path(dl)
             except Exception as e:
-                logging.warning(f"music file_id decode failed: {e}")
+                logging.warning(f"download by file_id music: {e}")
 
         if input_doc is None:
+            logging.warning(f"no input_doc for music uid={user_id} title={title}")
             return False
 
         ok = False
@@ -2234,27 +2317,40 @@ async def _apply_profile_music(client: Client, user_id: int, track: dict) -> boo
             await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
             ok = True
             logging.info(f"🎵 profile music set uid={user_id} title={title}")
-        except AttributeError:
-            logging.warning("account.SaveMusic در این نسخه pyrogram نیست")
         except Exception as e:
-            logging.warning(f"SaveMusic failed uid={user_id}: {e}")
-            # تلاش مجدد با آپلود دوباره اگر file_reference منقضی شده
-            if local_path and os.path.exists(local_path) and temp_msg is None:
+            err = str(e)
+            logging.warning(f"SaveMusic failed uid={user_id}: {err}")
+            # FILE_REFERENCE منقضی → یک بار دیگر از path
+            if local_path and os.path.exists(local_path):
                 try:
-                    temp_msg = await client.send_audio("me", local_path, title=title)
-                    from pyrogram.file_id import FileId
-                    fid = FileId.decode(temp_msg.audio.file_id)
-                    input_doc = raw_types.InputDocument(
-                        id=fid.media_id,
-                        access_hash=fid.access_hash,
-                        file_reference=fid.file_reference or b"",
-                    )
-                    await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
-                    ok = True
+                    if temp_msg:
+                        try:
+                            await temp_msg.delete()
+                        except Exception:
+                            pass
+                    temp_msg, input_doc = await _upload_path(local_path)
+                    if input_doc:
+                        await client.invoke(functions.account.SaveMusic(id=input_doc, unsave=False))
+                        ok = True
+                        logging.info(f"🎵 profile music retry ok uid={user_id}")
                 except Exception as e2:
                     logging.warning(f"SaveMusic retry failed: {e2}")
 
-        # پاک کردن پیام موقت از Saved
+        # آپدیت لیست در حافظه (path تازه)
+        try:
+            lst = ROTATING_MUSIC.get(user_id) or []
+            for i, t in enumerate(lst):
+                if t is track or (t.get("title") == title and t.get("file_id") == file_id):
+                    lst[i] = track
+                    break
+            ROTATING_MUSIC[user_id] = lst
+            try:
+                persist_all_user_settings(user_id)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         if temp_msg is not None:
             try:
                 await temp_msg.delete()
@@ -2271,28 +2367,32 @@ async def _apply_profile_music(client: Client, user_id: int, track: dict) -> boo
 
 async def rotate_profile_music_task(client: Client, user_id: int):
     """چرخش آهنگ پروفایل — حداقل هر ۱ ساعت، حداکثر ۲۴ ساعت"""
-    await asyncio.sleep(5)
-    applied_once = False
+    await asyncio.sleep(8)
     while True:
         try:
             if user_id not in ACTIVE_BOTS:
                 break
             if not ROTATING_MUSIC_STATUS.get(user_id, False):
-                applied_once = False
-                await asyncio.sleep(5)
+                await asyncio.sleep(8)
                 continue
             tracks = ROTATING_MUSIC.get(user_id) or []
             if len(tracks) < 1:
-                await asyncio.sleep(10)
+                await asyncio.sleep(15)
                 continue
 
             hours = max(1, min(24, int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1)))
             idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(tracks)
             track = tracks[idx]
 
-            await _apply_profile_music(client, user_id, track)
-            ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(tracks)
-            applied_once = True
+            ok = await _apply_profile_music(client, user_id, track)
+            if ok:
+                ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(tracks)
+                logging.info(f"🎵 rotated music uid={user_id} idx={idx} title={track.get('title')}")
+            else:
+                logging.warning(f"🎵 rotate apply failed uid={user_id} title={track.get('title')}")
+                # اگر شکست خورد، ۳۰ دقیقه بعد دوباره تلاش (ایندکس را جلو نبر)
+                await asyncio.sleep(30 * 60)
+                continue
 
             await asyncio.sleep(hours * 3600)
         except asyncio.CancelledError:
@@ -4063,6 +4163,240 @@ async def download_image_bytes(url: str):
         return None
 
 
+
+def _sender_get(user_id: int, chat_id: int) -> dict:
+    uid = int(user_id)
+    cid = str(int(chat_id))
+    if uid not in SENDER_CONFIG:
+        SENDER_CONFIG[uid] = {}
+    cfg = SENDER_CONFIG[uid].get(cid) or {
+        "enabled": False,
+        "mode": "copy",
+        "banner_chat_id": None,
+        "banner_msg_id": None,
+        "delay": 60,
+        "hourly_limit": 100,
+        "sent_hour": 0,
+        "hour_ts": 0,
+    }
+    SENDER_CONFIG[uid][cid] = cfg
+    return cfg
+
+
+def _sender_set(user_id: int, chat_id: int, **kwargs):
+    cfg = _sender_get(user_id, chat_id)
+    cfg.update(kwargs)
+    SENDER_CONFIG[int(user_id)][str(int(chat_id))] = cfg
+    try:
+        persist_all_user_settings(user_id)
+    except Exception:
+        pass
+    return cfg
+
+
+async def _sender_send_once(client, user_id: int, chat_id: int, cfg: dict) -> bool:
+    """یک بار ارسال بنر در گروه"""
+    bchat = cfg.get("banner_chat_id")
+    bmsg = cfg.get("banner_msg_id")
+    if not bchat or not bmsg:
+        return False
+    mode = (cfg.get("mode") or "copy").lower()
+    try:
+        if mode == "forward":
+            await client.forward_messages(int(chat_id), int(bchat), int(bmsg))
+        else:
+            await client.copy_message(int(chat_id), int(bchat), int(bmsg))
+        return True
+    except Exception as e:
+        logging.warning(f"sender send uid={user_id} chat={chat_id}: {e}")
+        return False
+
+
+async def sender_loop_task(client: Client, user_id: int):
+    """حلقه سندر — برای هر گروهی که روشن است، بنر را با تاخیر و سقف ساعتی می‌فرستد"""
+    await asyncio.sleep(12)
+    while True:
+        try:
+            if user_id not in ACTIVE_BOTS:
+                break
+            configs = SENDER_CONFIG.get(user_id) or {}
+            if not configs:
+                await asyncio.sleep(8)
+                continue
+            now = int(time.time())
+            for cid_str, cfg in list(configs.items()):
+                if not cfg or not cfg.get("enabled"):
+                    continue
+                if not cfg.get("banner_chat_id") or not cfg.get("banner_msg_id"):
+                    continue
+                # ریست شمارنده ساعتی
+                hour_ts = int(cfg.get("hour_ts") or 0)
+                if now - hour_ts >= 3600:
+                    cfg["hour_ts"] = now
+                    cfg["sent_hour"] = 0
+                limit = max(50, min(200, int(cfg.get("hourly_limit") or 100)))
+                sent = int(cfg.get("sent_hour") or 0)
+                if sent >= limit:
+                    continue
+                delay = max(5, min(3600, int(cfg.get("delay") or 60)))
+                last = int(cfg.get("last_send") or 0)
+                if now - last < delay:
+                    continue
+                ok = await _sender_send_once(client, user_id, int(cid_str), cfg)
+                if ok:
+                    cfg["sent_hour"] = sent + 1
+                    cfg["last_send"] = now
+                    SENDER_CONFIG[user_id][cid_str] = cfg
+                await asyncio.sleep(1.2)
+            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"sender_loop_task: {e}")
+            await asyncio.sleep(10)
+
+
+
+async def mass_forward_banner(client: Client, user_id: int, banner_chat_id: int, banner_msg_id: int):
+    """فوروارد بنر به همه گپ / کانال / پیوی با تاخیر ضدفلود + آمار تفکیکی"""
+    state = SENDER_MASS.get(user_id) or {}
+    state.update({
+        "running": True,
+        "banner_chat_id": banner_chat_id,
+        "banner_msg_id": banner_msg_id,
+        "sent": 0,
+        "failed": 0,
+        "total": 0,
+        "sent_pv": 0,
+        "sent_group": 0,
+        "sent_channel": 0,
+        "fail_pv": 0,
+        "fail_group": 0,
+        "fail_channel": 0,
+    })
+    SENDER_MASS[user_id] = state
+
+    def _classify(chat) -> str:
+        """برمی‌گرداند: pv | group | channel"""
+        try:
+            from pyrogram.enums import ChatType
+            t = getattr(chat, "type", None)
+            if t == ChatType.PRIVATE:
+                return "pv"
+            if t in (ChatType.GROUP, ChatType.SUPERGROUP):
+                return "group"
+            if t == ChatType.CHANNEL:
+                return "channel"
+        except Exception:
+            pass
+        t = str(getattr(chat, "type", "")).lower()
+        if "private" in t:
+            return "pv"
+        if "channel" in t:
+            return "channel"
+        if "group" in t:
+            return "group"
+        return "group"
+
+    targets = []  # list of (chat_id, kind)
+    try:
+        async for dialog in client.get_dialogs():
+            chat = dialog.chat
+            if not chat:
+                continue
+            kind = _classify(chat)
+            if kind == "pv" and getattr(chat, "is_bot", False):
+                continue
+            # فقط pv / group / channel
+            if kind not in ("pv", "group", "channel"):
+                continue
+            targets.append((chat.id, kind))
+    except Exception as e:
+        logging.error(f"mass_forward dialogs: {e}")
+        state["running"] = False
+        SENDER_MASS[user_id] = state
+        try:
+            await client.send_message("me", f"❌ خطا در گرفتن لیست چت‌ها:\n{e}")
+        except Exception:
+            pass
+        return
+
+    state["total"] = len(targets)
+    SENDER_MASS[user_id] = state
+
+    n_pv = sum(1 for _, k in targets if k == "pv")
+    n_g = sum(1 for _, k in targets if k == "group")
+    n_c = sum(1 for _, k in targets if k == "channel")
+    try:
+        await client.send_message(
+            "me",
+            f"📣 سندر فور شروع شد | self MR\n\n"
+            f"🎯 کل هدف: {len(targets)}\n"
+            f"👤 پیوی: {n_pv}\n"
+            f"👥 گپ: {n_g}\n"
+            f"📢 کانال: {n_c}\n\n"
+            f"⏱ تاخیر تصادفی ضدفلود فعال است\n"
+            f"توقف: `.سندر فور خاموش`",
+        )
+    except Exception:
+        pass
+
+    for i, (chat_id, kind) in enumerate(targets):
+        st = SENDER_MASS.get(user_id) or {}
+        if not st.get("running"):
+            break
+        try:
+            await client.forward_messages(chat_id, banner_chat_id, banner_msg_id)
+            st["sent"] = int(st.get("sent") or 0) + 1
+            if kind == "pv":
+                st["sent_pv"] = int(st.get("sent_pv") or 0) + 1
+            elif kind == "channel":
+                st["sent_channel"] = int(st.get("sent_channel") or 0) + 1
+            else:
+                st["sent_group"] = int(st.get("sent_group") or 0) + 1
+        except Exception as e:
+            st["failed"] = int(st.get("failed") or 0) + 1
+            if kind == "pv":
+                st["fail_pv"] = int(st.get("fail_pv") or 0) + 1
+            elif kind == "channel":
+                st["fail_channel"] = int(st.get("fail_channel") or 0) + 1
+            else:
+                st["fail_group"] = int(st.get("fail_group") or 0) + 1
+            logging.warning(f"mass forward to {chat_id} ({kind}): {e}")
+        SENDER_MASS[user_id] = st
+        await asyncio.sleep(random.uniform(2.5, 5.5))
+        if (i + 1) % 25 == 0:
+            try:
+                await client.send_message(
+                    "me",
+                    f"📣 پیشرفت سندر:\n"
+                    f"✅ کل: {st.get('sent', 0)} | ❌ {st.get('failed', 0)}\n"
+                    f"👤 پیوی: {st.get('sent_pv', 0)} | 👥 گپ: {st.get('sent_group', 0)} | 📢 کانال: {st.get('sent_channel', 0)}",
+                )
+            except Exception:
+                pass
+
+    st = SENDER_MASS.get(user_id) or {}
+    st["running"] = False
+    SENDER_MASS[user_id] = st
+    try:
+        await client.send_message(
+            "me",
+            f"🏁 سندر فور تمام شد | self MR\n\n"
+            f"✅ موفق کل: {st.get('sent', 0)}\n"
+            f"❌ ناموفق کل: {st.get('failed', 0)}\n"
+            f"📋 هدف کل: {st.get('total', 0)}\n\n"
+            f"👤 پیوی ارسال‌شده: {st.get('sent_pv', 0)}\n"
+            f"👥 گپ ارسال‌شده: {st.get('sent_group', 0)}\n"
+            f"📢 کانال ارسال‌شده: {st.get('sent_channel', 0)}\n\n"
+            f"👤 پیوی ناموفق: {st.get('fail_pv', 0)}\n"
+            f"👥 گپ ناموفق: {st.get('fail_group', 0)}\n"
+            f"📢 کانال ناموفق: {st.get('fail_channel', 0)}",
+        )
+    except Exception:
+        pass
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
@@ -4635,7 +4969,7 @@ async def reply_based_controller(client, message):
             logging.warning(f"music download for rotate: {e}")
             local_path = ""
         lst = ROTATING_MUSIC.get(user_id) or []
-        lst.append({"file_id": file_id, "title": title, "path": local_path})
+        lst.append({"file_id": file_id, "title": title, "path": local_path or "", "chat_id": reply.chat.id if reply.chat else None, "msg_id": reply.id})
         ROTATING_MUSIC[user_id] = lst
         persist_all_user_settings(user_id)
         await message.edit_text(f"✅ آهنگ اضافه شد: `{title}`\nتعداد لیست: {len(lst)}")
@@ -4747,6 +5081,186 @@ async def reply_based_controller(client, message):
         await message.edit_text("⏳ در حال تبدیل ویس به متن...")
         txt = await voice_to_text(client, message)
         await message.edit_text(txt)
+        return
+
+
+
+    # ========== سندر فور همگانی (یک دستور) ==========
+    if cmd in (".تنظیم سندر فور", "تنظیم سندر فور"):
+        reply = message.reply_to_message
+        if not reply:
+            await message.edit_text(
+                "❌ روی پیام بنر **ریپلای** کن و بفرست:\n`.تنظیم سندر فور`"
+            )
+            return
+        bchat = reply.chat.id if reply.chat else message.chat.id
+        bmsg = reply.id
+        st = SENDER_MASS.get(user_id) or {}
+        if st.get("running"):
+            await message.edit_text("⚠️ سندر قبلی هنوز در حال اجراست.\nاول `.سندر فور خاموش` بزن.")
+            return
+        await message.edit_text(
+            "🚀 سندر فور شروع شد...\n"
+            "به همه گپ / کانال / پیوی‌ها فوروارد می‌شود.\n"
+            "گزارش در Saved Messages می‌آید.\n"
+            "توقف: `.سندر فور خاموش`"
+        )
+        asyncio.create_task(mass_forward_banner(client, user_id, bchat, bmsg))
+        return
+
+    if cmd in (".سندر فور خاموش", "سندر فور خاموش"):
+        st = SENDER_MASS.get(user_id) or {}
+        st["running"] = False
+        SENDER_MASS[user_id] = st
+        await message.edit_text("⏹ سندر فور متوقف شد.")
+        return
+
+    if cmd in (".سندر فور وضعیت", "سندر فور وضعیت"):
+        st = SENDER_MASS.get(user_id) or {}
+        running = "در حال اجرا ✅" if st.get("running") else "خاموش ❌"
+        await message.edit_text(
+            f"📣 وضعیت سندر فور | self MR\n\n"
+            f"وضعیت: {running}\n"
+            f"✅ موفق کل: {st.get('sent', 0)}\n"
+            f"❌ ناموفق کل: {st.get('failed', 0)}\n"
+            f"📋 کل هدف: {st.get('total', 0)}\n\n"
+            f"👤 پیوی ارسال‌شده: {st.get('sent_pv', 0)}\n"
+            f"👥 گپ ارسال‌شده: {st.get('sent_group', 0)}\n"
+            f"📢 کانال ارسال‌شده: {st.get('sent_channel', 0)}"
+        )
+        return
+
+    # ========== سندر ==========
+    if cmd in (".تنظیم بنر سندر", "تنظیم بنر سندر"):
+        reply = message.reply_to_message
+        if not reply:
+            await message.edit_text("❌ روی بنر ریپلای کن:\n`.تنظیم بنر سندر`")
+            return
+        chat_id = message.chat.id
+        _sender_set(
+            user_id, chat_id,
+            banner_chat_id=reply.chat.id if reply.chat else chat_id,
+            banner_msg_id=reply.id,
+            mode="copy",
+        )
+        await message.edit_text(
+            "✅ بنر سندر (کپی) ثبت شد | self MR\n"
+            "با `.سندر روشن 100` فعال کن."
+        )
+        return
+
+    if cmd in (".تنظیم بنر فور", "تنظیم بنر فور", ".تنظیم بنر فوروارد"):
+        reply = message.reply_to_message
+        if not reply:
+            await message.edit_text("❌ روی بنر ریپلای کن:\n`.تنظیم بنر فور`")
+            return
+        chat_id = message.chat.id
+        _sender_set(
+            user_id, chat_id,
+            banner_chat_id=reply.chat.id if reply.chat else chat_id,
+            banner_msg_id=reply.id,
+            mode="forward",
+        )
+        await message.edit_text(
+            "✅ بنر فور (فوروارد) ثبت شد | self MR\n"
+            "با `.سندر روشن 100` فعال کن."
+        )
+        return
+
+    if cmd.startswith(".سندر روشن") or cmd.startswith("سندر روشن"):
+        parts = cmd.split()
+        limit = 100
+        for p in parts:
+            if p.isdigit():
+                limit = int(p)
+                break
+        limit = max(50, min(200, limit))
+        chat_id = message.chat.id
+        cfg = _sender_get(user_id, chat_id)
+        if not cfg.get("banner_msg_id"):
+            await message.edit_text(
+                "❌ اول بنر را تنظیم کن:\n"
+                "`.تنظیم بنر سندر` یا `.تنظیم بنر فور`\n"
+                "(روی پیام بنر ریپلای کن)"
+            )
+            return
+        _sender_set(
+            user_id, chat_id,
+            enabled=True,
+            hourly_limit=limit,
+            sent_hour=0,
+            hour_ts=int(time.time()),
+        )
+        await message.edit_text(
+            f"✅ سندر روشن شد | self MR\n"
+            f"📊 سهمیه: {limit} ارسال / ساعت\n"
+            f"⏱ تاخیر: {cfg.get('delay', 60)} ثانیه\n"
+            f"📤 حالت: {cfg.get('mode', 'copy')}"
+        )
+        return
+
+    if cmd in (".سندر خاموش", "سندر خاموش"):
+        chat_id = message.chat.id
+        _sender_set(user_id, chat_id, enabled=False)
+        await message.edit_text("❌ سندر خاموش شد | self MR")
+        return
+
+    if cmd.startswith(".سندر تاخیر") or cmd.startswith("سندر تاخیر"):
+        parts = cmd.split()
+        delay = None
+        for p in parts:
+            if p.isdigit():
+                delay = int(p)
+                break
+        if delay is None:
+            await message.edit_text("❌ مثال:\n`.سندر تاخیر 60`")
+            return
+        delay = max(5, min(3600, delay))
+        chat_id = message.chat.id
+        _sender_set(user_id, chat_id, delay=delay)
+        await message.edit_text(f"✅ تاخیر سندر: {delay} ثانیه")
+        return
+
+    if cmd in (".بنر فور", "بنر فور", ".بنر فوروارد"):
+        chat_id = message.chat.id
+        _sender_set(user_id, chat_id, mode="forward")
+        await message.edit_text("✅ حالت ارسال: **فوروارد**")
+        return
+
+    if cmd in (".بنر کپی", "بنر کپی"):
+        chat_id = message.chat.id
+        _sender_set(user_id, chat_id, mode="copy")
+        await message.edit_text("✅ حالت ارسال: **کپی**")
+        return
+
+    if cmd in (".سندر وضعیت", "سندر وضعیت"):
+        chat_id = message.chat.id
+        cfg = _sender_get(user_id, chat_id)
+        st = "روشن ✅" if cfg.get("enabled") else "خاموش ❌"
+        has_banner = "✅" if cfg.get("banner_msg_id") else "❌"
+        text = (
+            f"📊 **وضعیت سندر | self MR**\n\n"
+            f"وضعیت: {st}\n"
+            f"بنر: {has_banner}\n"
+            f"حالت: `{cfg.get('mode', 'copy')}`\n"
+            f"تاخیر: `{cfg.get('delay', 60)}` ثانیه\n"
+            f"سهمیه ساعتی: `{cfg.get('hourly_limit', 100)}`\n"
+            f"ارسال این ساعت: `{cfg.get('sent_hour', 0)}`"
+        )
+        await message.edit_text(text)
+        return
+
+    if cmd in (".سندر حذف", "سندر حذف"):
+        chat_id = message.chat.id
+        uid = int(user_id)
+        cid = str(int(chat_id))
+        if uid in SENDER_CONFIG and cid in SENDER_CONFIG[uid]:
+            del SENDER_CONFIG[uid][cid]
+            try:
+                persist_all_user_settings(user_id)
+            except Exception:
+                pass
+        await message.edit_text("🗑 تنظیمات سندر این گروه حذف شد.")
         return
 
     # ========== کیفیت عکس ==========
@@ -5387,6 +5901,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         asyncio.create_task(update_profile_clock(client, user_id)),
         asyncio.create_task(rotate_profile_name_task(client, user_id)),
         asyncio.create_task(rotate_profile_music_task(client, user_id)),
+        asyncio.create_task(sender_loop_task(client, user_id)),
         asyncio.create_task(anti_login_task(client, user_id)),
         asyncio.create_task(status_action_task(client, user_id))
     ]
@@ -5476,6 +5991,7 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
+                _styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
@@ -5709,7 +6225,7 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33):
+    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -6298,7 +6814,35 @@ async def callback_panel_handler(client, callback):
                     except Exception:
                         pass
                     return
+                if page == 34:
+                    help_text = (
+                        "📣 سندر | self MR\n\n"
+                        "ارسال خودکار بنر داخل همین گروه با سقف ساعتی.\n\n"
+                        "دستورات:\n"
+                        "• `.تنظیم بنر سندر` → ریپلای روی بنر (کپی)\n"
+                        "• `.تنظیم بنر فور` → ریپلای روی بنر (فوروارد)\n"
+                        "• `.سندر روشن 100` → سهمیه ۵۰ تا ۲۰۰ در ساعت\n"
+                        "• `.سندر خاموش`\n"
+                        "• `.سندر تاخیر 60` → فاصله ارسال (ثانیه)\n"
+                        "• `.بنر فور` / `.بنر کپی`\n"
+                        "• `.سندر وضعیت`\n"
+                        "• `.سندر حذف` → پاک کردن این گروه\n\n"
+                        "⚠️ فقط در گروه‌هایی که عضو هستی."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 34))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 34))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 34)
+                    except Exception:
+                        pass
+                    return
                 if page == 24:
+
                     help_text = (
                         "🎰 تقلب | self MR\n\n"
                         "این ویژگی ایموجی بازی را آنقدر می‌فرستد تا بهترین نتیجه بیاید "

@@ -1022,64 +1022,168 @@ async def search_songs_list(query: str) -> list:
 
 
 async def download_song_audio(search_q: str) -> tuple:
-    """دانلود صوت آهنگ با yt-dlp — (path, title) یا (None, err)"""
+    """دانلود صوت واقعی از یوتیوب — برمی‌گرداند dict یا (None, err)"""
     search_q = (search_q or "").strip()
     if not search_q:
         return None, "کوئری خالی"
-    out_tmpl = f"{DOWNLOAD_PATH}/song_{int(time.time())}_{random.randint(100,999)}.%(ext)s"
+    uid = f"{int(time.time())}_{random.randint(100,999)}"
+    out_tmpl = f"{DOWNLOAD_PATH}/song_{uid}.%(ext)s"
     opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": out_tmpl,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "default_search": "ytsearch1",
-        "socket_timeout": 30,
-        "retries": 2,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
+        "socket_timeout": 45,
+        "retries": 3,
+        "writethumbnail": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            },
+            {"key": "FFmpegMetadata"},
+        ],
     }
     try:
         def _dl():
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(f"ytsearch1:{search_q}", download=True)
-                entries = info.get("entries") if info and "entries" in info else [info]
-                entry = None
-                for e in (entries or []):
-                    if e:
-                        entry = e
-                        break
-                title = (entry or {}).get("title") or search_q
-                # پیدا کردن فایل خروجی
+                if not info:
+                    return None, "نتیجه‌ای پیدا نشد"
+                if "entries" in info:
+                    entries = [e for e in (info.get("entries") or []) if e]
+                    entry = entries[0] if entries else None
+                else:
+                    entry = info
+                if not entry:
+                    return None, "آهنگ پیدا نشد"
+
+                title = (entry.get("track") or entry.get("title") or search_q)
+                artist = (entry.get("artist") or entry.get("uploader") or entry.get("channel") or "")
+                duration = entry.get("duration") or 0
+
+                # فایل صوت
                 path = None
-                base = out_tmpl.replace("%(ext)s", "")
+                base = f"{DOWNLOAD_PATH}/song_{uid}"
                 for ext in ("mp3", "m4a", "webm", "opus", "ogg"):
-                    cand = base + ext
-                    if os.path.exists(cand):
+                    cand = f"{base}.{ext}"
+                    if os.path.exists(cand) and os.path.getsize(cand) > 5000:
                         path = cand
                         break
                 if not path:
-                    # جستجو در پوشه
                     for f in os.listdir(DOWNLOAD_PATH):
-                        if f.startswith(os.path.basename(base)):
-                            path = os.path.join(DOWNLOAD_PATH, f)
-                            break
-                return path, title
+                        if f.startswith(f"song_{uid}") and not f.endswith((".jpg", ".png", ".webp", ".json")):
+                            fp = os.path.join(DOWNLOAD_PATH, f)
+                            if os.path.getsize(fp) > 5000:
+                                path = fp
+                                break
+                if not path:
+                    return None, "فایل صوت ساخته نشد (yt-dlp/ffmpeg را چک کن)"
 
-        path, title = await asyncio.to_thread(_dl)
-        if not path or not os.path.exists(path):
-            return None, "فایل صوت پیدا نشد"
-        return path, title
+                # کاور
+                thumb = None
+                for ext in ("jpg", "png", "webp"):
+                    cand = f"{base}.{ext}"
+                    if os.path.exists(cand):
+                        thumb = cand
+                        break
+                if not thumb:
+                    # thumbnail از info
+                    turl = entry.get("thumbnail")
+                    if not turl:
+                        ths = entry.get("thumbnails") or []
+                        if ths:
+                            turl = ths[-1].get("url")
+                    if turl and str(turl).startswith("http"):
+                        try:
+                            import urllib.request
+                            thumb = f"{base}_thumb.jpg"
+                            urllib.request.urlretrieve(turl, thumb)
+                            if not os.path.exists(thumb) or os.path.getsize(thumb) < 500:
+                                thumb = None
+                        except Exception:
+                            thumb = None
+
+                return {
+                    "path": path,
+                    "title": str(title)[:64],
+                    "artist": str(artist)[:64],
+                    "duration": int(duration) if duration else 0,
+                    "thumb": thumb,
+                }, None
+
+        result, err = await asyncio.to_thread(_dl)
+        if err:
+            return None, err
+        return result, None
     except Exception as e:
-        logging.warning(f"download_song_audio: {e}")
-        return None, str(e)
+        err = str(e)
+        logging.warning(f"download_song_audio: {err}")
+        # پیام‌های واضح
+        if "Sign in" in err or "bot" in err.lower():
+            return None, "یوتیوب محدود کرده؛ کمی بعد دوباره تلاش کن."
+        if "ffmpeg" in err.lower():
+            return None, "ffmpeg روی سرور نصب نیست."
+        return None, err[:180]
+
+
+async def send_downloaded_song(client, chat_id, result: dict, status_msg=None):
+    """ارسال آهنگ به صورت فایل صوتی تمیز (مثل ربات‌های موزیک)"""
+    path = result.get("path")
+    title = result.get("title") or "آهنگ"
+    artist = result.get("artist") or ""
+    duration = result.get("duration") or 0
+    thumb = result.get("thumb")
+    try:
+        kwargs = {
+            "chat_id": chat_id,
+            "audio": path,
+            "title": title,
+            "performer": artist,
+            "caption": f"🎵 {artist} — {title}\nself MR" if artist else f"🎵 {title}\nself MR",
+        }
+        if duration:
+            kwargs["duration"] = duration
+        if thumb and os.path.exists(thumb):
+            kwargs["thumb"] = thumb
+        await client.send_audio(**kwargs)
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        logging.error(f"send_downloaded_song: {e}")
+        try:
+            await client.send_document(chat_id, path, caption=f"🎵 {artist} — {title}")
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            return True
+        except Exception as e2:
+            if status_msg:
+                try:
+                    await status_msg.edit_text(f"❌ ارسال ناموفق: {e2}")
+                except Exception:
+                    pass
+            return False
+    finally:
+        for p in (path, thumb):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
 
 
 async def song_download_callback(client, callback: CallbackQuery):
-    """کلیک روی دکمه آهنگ → دانلود و ارسال صوت"""
+    """کلیک روی دکمه آهنگ (از manager_bot) → دانلود و ارسال صوت"""
     data = callback.data or ""
     if not data.startswith("song_dl_"):
         return
@@ -1116,61 +1220,24 @@ async def song_download_callback(client, callback: CallbackQuery):
     except Exception:
         pass
 
-    path, title_or_err = await download_song_audio(q)
-    if not path:
-        # یک بار دیگر با فقط عنوان
-        if title and title != q:
-            path, title_or_err = await download_song_audio(f"{title} {artist}".strip())
-    if not path:
-        msg = f"❌ دانلود ناموفق:\n{title_or_err}"
+    result, err = await download_song_audio(q)
+    if not result and title:
+        result, err = await download_song_audio(f"{title} {artist}".strip())
+    if not result:
         try:
             if status:
-                await status.edit_text(msg)
+                await status.edit_text(f"❌ دانلود ناموفق:\n{err}")
             else:
-                await client.send_message(callback.message.chat.id, msg)
+                await client.send_message(callback.message.chat.id, f"❌ دانلود ناموفق:\n{err}")
         except Exception:
             pass
         return
 
-    try:
-        await client.send_audio(
-            callback.message.chat.id,
-            path,
-            title=title,
-            performer=artist,
-            caption=f"🎵 {artist} — {title}\nself MR" if artist else f"🎵 {title}\nself MR",
-        )
-        if status:
-            try:
-                await status.delete()
-            except Exception:
-                pass
-    except Exception as e:
-        try:
-            await client.send_document(
-                callback.message.chat.id,
-                path,
-                caption=f"🎵 {artist} — {title}",
-            )
-            if status:
-                try:
-                    await status.delete()
-                except Exception:
-                    pass
-        except Exception as e2:
-            try:
-                if status:
-                    await status.edit_text(f"❌ ارسال ناموفق: {e2}")
-                else:
-                    await client.send_message(callback.message.chat.id, f"❌ ارسال ناموفق: {e2}")
-            except Exception:
-                pass
-    finally:
-        try:
-            if path and os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
+    if title:
+        result["title"] = title
+    if artist:
+        result["artist"] = artist
+    await send_downloaded_song(client, callback.message.chat.id, result, status_msg=status)
 
 
 async def search_songs_smart(query: str) -> str:
@@ -1820,6 +1887,7 @@ TTS_VOICE_STATUS = {}
 FIRST_COMMENT_STATUS = {}
 FIRST_COMMENT_TEXT = {}
 SONG_SEARCH_CACHE = {}  # user_id -> list[{artist, title, query}]
+PENDING_SONG_PICK = {}  # user_id -> True وقتی منتظر انتخاب شماره است
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
 ACTION_STATUS = {}
@@ -4619,78 +4687,112 @@ async def reply_based_controller(client, message):
         else:
             q = ""
         if not q:
-            await message.edit_text("❌ مثال:\n`.سرچ آهنگ شادمهر`\n`.سرچ آهنگ تکه از متن آهنگ`")
+            await message.edit_text("❌ مثال:\n`.سرچ آهنگ شادمهر`")
             return
         await message.edit_text("⏳ در حال سرچ آهنگ...")
         tracks = await search_songs_list(q)
         if not tracks:
             await message.edit_text(f"❌ آهنگی برای `{q}` پیدا نشد.")
             return
+        tracks = tracks[:10]
         SONG_SEARCH_CACHE[user_id] = tracks
-        # اکانت سلف نمی‌تواند اینلاین‌کیبورد بفرستد → از manager_bot می‌فرستیم
-        text = (
-            f"🎵 سرچ آهنگ | self MR\n\n"
-            f"🔎 `{q}`\n"
-            f"📌 {min(len(tracks), 12)} نتیجه\n"
-            f"روی دکمه بزن تا آهنگ دانلود و ارسال شود."
-        )
-        rows = []
-        for i, t in enumerate(tracks[:12]):
+        PENDING_SONG_PICK[user_id] = True
+
+        # ویرایش پیام خود کاربر — لیست + راهنما
+        lines = [f"🎵 **سرچ آهنگ | self MR**\n\n🔎 `{q}`\n"]
+        for i, t in enumerate(tracks, 1):
+            ar = t.get("artist") or ""
+            ti = t.get("title") or "آهنگ"
+            lines.append(f"**{i}.** {ar} — {ti}" if ar else f"**{i}.** {ti}")
+        lines.append("\n📌 شماره آهنگ را بفرست (مثلاً `1`) یا:\n`.آهنگ 1`")
+        text = "\n".join(lines)
+
+        # ReplyKeyboard — هر آهنگ یک دکمه جدا (روی اکانت سلف کار می‌کند)
+        kb_rows = []
+        for i, t in enumerate(tracks, 1):
             ar = (t.get("artist") or "").strip()
             ti = (t.get("title") or "آهنگ").strip()
-            if ar:
-                label = f"🎵 {ar[:20]} — {ti[:26]}"
-            else:
-                label = f"🎵 {ti[:48]}"
+            label = f"{i}️⃣ {ar} — {ti}" if ar else f"{i}️⃣ {ti}"
             label = label[:64]
-            # هر آهنگ = یک دکمه جدا در یک ردیف
-            rows.append([InlineKeyboardButton(label, callback_data=f"song_dl_{user_id}_{i}")])
+            kb_rows.append([KeyboardButton(label)])
+        kb_rows.append([KeyboardButton("❌ لغو سرچ")])
+        kb = ReplyKeyboardMarkup(kb_rows, resize_keyboard=True, one_time_keyboard=True)
 
-        sent_ok = False
-        # 1) تلاش ارسال در همان چت با ربات منیجر
         try:
-            await manager_bot.send_message(
+            await message.edit_text(text)
+        except Exception:
+            pass
+        try:
+            await client.send_message(
                 message.chat.id,
-                text,
-                reply_markup=InlineKeyboardMarkup(rows),
-                disable_web_page_preview=True,
+                "⬇️ روی دکمه آهنگ بزن یا شماره را بفرست:",
+                reply_markup=kb,
             )
-            sent_ok = True
         except Exception as e:
-            logging.warning(f"song search send to chat via bot: {e}")
-
-        # 2) اگر گروه ربات را نداشت → پیوی کاربر
-        if not sent_ok:
+            logging.warning(f"song kb: {e}")
             try:
-                await manager_bot.send_message(
-                    user_id,
-                    text + "\n\n_(در پیوی ارسال شد چون ربات داخل این چت نیست)_",
-                    reply_markup=InlineKeyboardMarkup(rows),
-                    disable_web_page_preview=True,
-                )
-                sent_ok = True
-            except Exception as e:
-                logging.warning(f"song search send to PM: {e}")
-
-        if sent_ok:
-            try:
-                await message.edit_text("✅ لیست آهنگ‌ها با دکمه ارسال شد.\nروی یکی بزن تا دانلود شود.")
-            except Exception:
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
-        else:
-            # fallback متنی + دستور شماره
-            lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {q}\n"]
-            for i, t in enumerate(tracks[:12], 1):
-                lines.append(f"{i}. {t.get('artist', '')} — {t.get('title', '')}")
-            lines.append("\nبرای دانلود بنویس:\n`.دانلودآهنگ 1`")
-            try:
-                await message.edit_text("\n".join(lines))
+                await message.edit_text(text + "\n\n(دکمه ارسال نشد؛ شماره را تایپ کن)")
             except Exception:
                 pass
         return
+
+    # انتخاب آهنگ با شماره یا دکمه کیبورد
+    if PENDING_SONG_PICK.get(user_id) and SONG_SEARCH_CACHE.get(user_id):
+        tracks = SONG_SEARCH_CACHE.get(user_id) or []
+        pick = None
+        raw = cmd.strip()
+        if raw in ("❌ لغو سرچ", "لغو سرچ", "لغو"):
+            PENDING_SONG_PICK[user_id] = False
+            try:
+                await message.edit_text("❌ سرچ لغو شد.", reply_markup=ReplyKeyboardRemove())
+            except Exception:
+                await client.send_message(message.chat.id, "❌ سرچ لغو شد.", reply_markup=ReplyKeyboardRemove())
+            return
+        # دکمه: "1️⃣ Artist — Title" یا فقط عدد
+        mnum = re.match(r"^(\d{1,2})\s*[️⃣.)\-]?\s*", raw)
+        if mnum:
+            pick = int(mnum.group(1)) - 1
+        if pick is None and (cmd.startswith(".آهنگ ") or cmd.startswith("آهنگ ")):
+            try:
+                pick = int(cmd.split(None, 1)[1].strip()) - 1
+            except Exception:
+                pick = None
+        if pick is not None and 0 <= pick < len(tracks):
+            track = tracks[pick]
+            PENDING_SONG_PICK[user_id] = False
+            q = (track.get("query") or f"{track.get('artist','')} {track.get('title','')}").strip()
+            try:
+                await message.edit_text(
+                    f"⏳ دانلود آهنگ...\n🎵 {track.get('artist','')} — {track.get('title','')}",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+            except Exception:
+                try:
+                    await client.send_message(message.chat.id, "⏳ دانلود...", reply_markup=ReplyKeyboardRemove())
+                except Exception:
+                    pass
+            result, err = await download_song_audio(q)
+            if not result:
+                # retry with title only
+                result, err = await download_song_audio(track.get("title") or q)
+            if not result:
+                try:
+                    await message.edit_text(f"❌ دانلود ناموفق:\n`{err}`")
+                except Exception:
+                    await client.send_message(message.chat.id, f"❌ دانلود ناموفق:\n{err}")
+                return
+            # عنوان را از سرچ نگه دار اگر بهتر بود
+            if track.get("title"):
+                result["title"] = track.get("title") or result.get("title")
+            if track.get("artist"):
+                result["artist"] = track.get("artist") or result.get("artist")
+            ok = await send_downloaded_song(client, message.chat.id, result, status_msg=message)
+            if not ok:
+                try:
+                    await message.edit_text("❌ ارسال آهنگ ناموفق بود.")
+                except Exception:
+                    pass
+            return
 
     # ========== عکس به PDF ==========
     if cmd in (".عکس به pdf", "عکس به pdf", ".عکس به PDF", "عکس به PDF", ".تبدیل عکس به pdf"):

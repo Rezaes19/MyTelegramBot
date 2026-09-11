@@ -4627,35 +4627,69 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ آهنگی برای `{q}` پیدا نشد.")
             return
         SONG_SEARCH_CACHE[user_id] = tracks
-        # فقط دکمه — بدون لیست متنی
+        # اکانت سلف نمی‌تواند اینلاین‌کیبورد بفرستد → از manager_bot می‌فرستیم
         text = (
             f"🎵 سرچ آهنگ | self MR\n\n"
             f"🔎 `{q}`\n"
-            f"📌 {min(len(tracks), 15)} نتیجه — روی دکمه بزن تا دانلود شود"
+            f"📌 {min(len(tracks), 12)} نتیجه\n"
+            f"روی دکمه بزن تا آهنگ دانلود و ارسال شود."
         )
         rows = []
-        for i, t in enumerate(tracks[:15]):
+        for i, t in enumerate(tracks[:12]):
             ar = (t.get("artist") or "").strip()
             ti = (t.get("title") or "آهنگ").strip()
             if ar:
-                label = f"🎵 {ar[:22]} — {ti[:28]}"
+                label = f"🎵 {ar[:20]} — {ti[:26]}"
             else:
-                label = f"🎵 {ti[:50]}"
+                label = f"🎵 {ti[:48]}"
             label = label[:64]
+            # هر آهنگ = یک دکمه جدا در یک ردیف
             rows.append([InlineKeyboardButton(label, callback_data=f"song_dl_{user_id}_{i}")])
+
+        sent_ok = False
+        # 1) تلاش ارسال در همان چت با ربات منیجر
         try:
-            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), disable_web_page_preview=True)
-        except Exception:
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            await client.send_message(
+            await manager_bot.send_message(
                 message.chat.id,
                 text,
                 reply_markup=InlineKeyboardMarkup(rows),
                 disable_web_page_preview=True,
             )
+            sent_ok = True
+        except Exception as e:
+            logging.warning(f"song search send to chat via bot: {e}")
+
+        # 2) اگر گروه ربات را نداشت → پیوی کاربر
+        if not sent_ok:
+            try:
+                await manager_bot.send_message(
+                    user_id,
+                    text + "\n\n_(در پیوی ارسال شد چون ربات داخل این چت نیست)_",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                    disable_web_page_preview=True,
+                )
+                sent_ok = True
+            except Exception as e:
+                logging.warning(f"song search send to PM: {e}")
+
+        if sent_ok:
+            try:
+                await message.edit_text("✅ لیست آهنگ‌ها با دکمه ارسال شد.\nروی یکی بزن تا دانلود شود.")
+            except Exception:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+        else:
+            # fallback متنی + دستور شماره
+            lines = [f"🎵 سرچ آهنگ | self MR\n\n🔎 {q}\n"]
+            for i, t in enumerate(tracks[:12], 1):
+                lines.append(f"{i}. {t.get('artist', '')} — {t.get('title', '')}")
+            lines.append("\nبرای دانلود بنویس:\n`.دانلودآهنگ 1`")
+            try:
+                await message.edit_text("\n".join(lines))
+            except Exception:
+                pass
         return
 
     # ========== عکس به PDF ==========
@@ -5586,7 +5620,12 @@ async def inline_panel_handler(client, query):
 
 @manager_bot.on_callback_query()
 async def callback_panel_handler(client, callback):
-    data = callback.data
+    data = callback.data or ""
+
+    # ===== دانلود آهنگ از سرچ (دکمه‌ها از manager_bot) =====
+    if data.startswith("song_dl_"):
+        await song_download_callback(client, callback)
+        return
 
     if data == "noop":
         await callback.answer()

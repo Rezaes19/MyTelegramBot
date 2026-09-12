@@ -87,6 +87,7 @@ GOD_ADMIN_IDS = [6691993264]
 FORCE_CHANNELS = [
     "@SELF_MR0"
 ]
+SUPPORT_USERNAME = "ALONE_88_R"  # بدون @
 
 async def force_subscribe_check(client, message) -> bool:
     """عضویت اجباری — ادمین‌ها مستثنی هستند"""
@@ -162,7 +163,7 @@ if not os.path.exists('database_users'):
 # =============================================
 SELF_PRICE = 50          # هزینه فعال‌سازی سلف
 HOURLY_COST = 2          # کسر ساعتی
-REFERRAL_REWARD = 25     # پاداش زیرمجموعه
+REFERRAL_REWARD = 75     # پاداش زیرمجموعه
 MIN_GAME_AMOUNT = 20     # حداقل مبلغ نبرد
 TRANSFER_TAX_PERCENT = 10
 GAME_TAX_PERCENT = 5
@@ -6343,6 +6344,188 @@ async def callback_panel_handler(client, callback):
         await song_download_callback(client, callback)
         return
 
+    
+    # ===== منوی اصلی منیجر =====
+    if data == "mm_home":
+        await callback.answer()
+        await send_main_menu(client, callback.message, callback.from_user.id, edit=True)
+        return
+
+    if data == "mm_self":
+        await callback.answer()
+        try:
+            await callback.message.edit_text(
+                "🤖 **مدیریت سلف | self MR**\n\n"
+                "برای فعال‌سازی سلف روی دکمه زیر بزنید.\n"
+                f"💎 هزینه: `{SELF_PRICE}` الماس\n"
+                f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس",
+                reply_markup=self_manage_keyboard()
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "mm_activate":
+        await callback.answer()
+        uid = callback.from_user.id
+        if is_banned(uid):
+            await callback.answer("مسدود هستید", show_alert=True)
+            return
+        bal = get_balance(uid)
+        if bal < SELF_PRICE:
+            await callback.message.edit_text(
+                f"❌ الماس کافی نیست\n💎 موجودی: `{bal:,}`\n💎 نیاز: `{SELF_PRICE}`\n\n"
+                f"از بخش **الماس رایگان** زیرمجموعه بیاورید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")]])
+            )
+            return
+        LOGIN_STATES[callback.message.chat.id] = {"step": "phone"}
+        await callback.message.edit_text(
+            "📱 **شماره تلفن را وارد کنید**\n\n"
+            "شماره را با کد کشور بفرستید\n"
+            "مثال: `+989123456789`\n\n"
+            "یا از دکمه زیر شماره را Share کنید.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")]
+            ])
+        )
+        # کیبورد درخواست مخاطب
+        try:
+            await client.send_message(
+                callback.message.chat.id,
+                "⬇️ یا شماره را Share کنید:",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("📱 ارسال شماره", request_contact=True)],
+                     [KeyboardButton("🔙 انصراف")]],
+                    resize_keyboard=True,
+                    one_time_keyboard=True
+                )
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "mm_free":
+        await callback.answer()
+        uid = callback.from_user.id
+        bot_username = (await client.get_me()).username
+        ref_link = f"https://t.me/{bot_username}?start={uid}"
+        # تعداد زیرمجموعه
+        try:
+            db = get_user_db(uid)
+            cur = db.cursor()
+            cur.execute('SELECT COUNT(*) FROM referrals WHERE referrer_id = ?', (uid,))
+            cnt = (cur.fetchone() or [0])[0]
+            db.close()
+        except Exception:
+            cnt = 0
+        await callback.message.edit_text(
+            f"💎 **الماس رایگان | self MR**\n\n"
+            f"با دعوت هر نفر `{REFERRAL_REWARD}` الماس بگیرید.\n\n"
+            f"🔗 لینک اختصاصی شما:\n`{ref_link}`\n\n"
+            f"👥 زیرمجموعه‌ها: `{cnt}`\n"
+            f"💎 موجودی: `{get_balance(uid):,}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")]])
+        )
+        return
+
+    if data == "mm_account":
+        await callback.answer()
+        uid = callback.from_user.id
+        session_info = get_session_by_user_id(uid)
+        has_self = "✅ فعال" if session_info else "❌ غیرفعال"
+        await callback.message.edit_text(
+            f"👤 **حساب کاربری | self MR**\n\n"
+            f"🆔 آیدی: `{uid}`\n"
+            f"💎 موجودی: `{get_balance(uid):,}` الماس\n"
+            f"🔐 سلف: {has_self}\n"
+            f"💰 هزینه فعال‌سازی: `{SELF_PRICE}`\n"
+            f"⏰ کسر ساعتی: `{HOURLY_COST}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")]])
+        )
+        return
+
+    if data == "mm_buy":
+        await callback.answer()
+        await callback.message.edit_text(
+            "🛒 **خرید الماس | self MR**\n\n"
+            f"برای خرید الماس با پشتیبانی در ارتباط باشید:\n"
+            f"@{SUPPORT_USERNAME}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")],
+            ])
+        )
+        return
+
+    # ===== کیبورد عددی کد لاگین =====
+    if data.startswith("login_d_") or data in ("login_del", "login_ok"):
+        chat_id = callback.message.chat.id
+        st = LOGIN_STATES.get(chat_id)
+        if not st or st.get("step") != "code":
+            await callback.answer("جلسه لاگین فعال نیست", show_alert=True)
+            return
+        digits = st.get("digits") or ""
+        if data.startswith("login_d_"):
+            d = data.split("_")[-1]
+            if len(digits) >= 10:
+                await callback.answer("کد کامل است")
+                return
+            digits += d
+            st["digits"] = digits
+            LOGIN_STATES[chat_id] = st
+            await callback.answer()
+            try:
+                await callback.message.edit_text(code_pad_text(digits), reply_markup=login_code_keyboard())
+            except Exception:
+                pass
+            return
+        if data == "login_del":
+            digits = digits[:-1]
+            st["digits"] = digits
+            LOGIN_STATES[chat_id] = st
+            await callback.answer("پاک شد")
+            try:
+                await callback.message.edit_text(code_pad_text(digits), reply_markup=login_code_keyboard())
+            except Exception:
+                pass
+            return
+        if data == "login_ok":
+            code = re.sub(r"\D+", "", digits)
+            if len(code) < 4:
+                await callback.answer("کد ناقص است", show_alert=True)
+                return
+            user_c = st.get("client")
+            if not user_c:
+                await callback.answer("نشست منقضی شده", show_alert=True)
+                return
+            await callback.answer("در حال بررسی...")
+            try:
+                await user_c.sign_in(st["phone"], st["hash"], code)
+                # ساخت یک message-like برای finalize
+                await callback.message.edit_text("⏳ در حال فعال‌سازی سلف...")
+                class _M:
+                    pass
+                fake = callback.message
+                await finalize(fake, user_c, st["phone"])
+            except SessionPasswordNeeded:
+                st["step"] = "password"
+                LOGIN_STATES[chat_id] = st
+                await callback.message.edit_text(
+                    "🔐 **رمز دو مرحله‌ای** را وارد کنید:\n\nرمز را به صورت متن بفرستید."
+                )
+            except Exception as e:
+                await callback.message.edit_text(
+                    f"❌ خطا: {e}\n\nدوباره از مدیریت سلف تلاش کنید.",
+                    reply_markup=self_manage_keyboard()
+                )
+                try:
+                    await user_c.disconnect()
+                except Exception:
+                    pass
+                LOGIN_STATES.pop(chat_id, None)
+            return
+
     if data == "noop":
         await callback.answer()
         return
@@ -7833,6 +8016,85 @@ async def upload_database_handler(client, message):
 # پایان بخش مدیریت دیتابیس
 # =============================================
 
+
+# =============================================
+# UI پنل اصلی منیجر (self MR)
+# =============================================
+def main_menu_keyboard():
+    ch = (FORCE_CHANNELS[0] if FORCE_CHANNELS else "@SELF_MR0").lstrip("@")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 مدیریت سلف", callback_data="mm_self")],
+        [
+            InlineKeyboardButton("💎 الماس رایگان", callback_data="mm_free"),
+            InlineKeyboardButton("👤 حساب کاربری", callback_data="mm_account"),
+        ],
+        [InlineKeyboardButton("🛒 خرید الماس", callback_data="mm_buy")],
+        [
+            InlineKeyboardButton("📢 چنل", url=f"https://t.me/{ch}"),
+            InlineKeyboardButton("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}"),
+        ],
+    ])
+
+
+def self_manage_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ فعال‌سازی", callback_data="mm_activate")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")],
+    ])
+
+
+def login_code_keyboard():
+    rows = []
+    for r in range(3):
+        row = []
+        for c in range(1, 4):
+            n = r * 3 + c
+            row.append(InlineKeyboardButton(str(n), callback_data=f"login_d_{n}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("0", callback_data="login_d_0")])
+    rows.append([
+        InlineKeyboardButton("❌ پاک", callback_data="login_del"),
+        InlineKeyboardButton("✅ تایید", callback_data="login_ok"),
+    ])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")])
+    return InlineKeyboardMarkup(rows)
+
+
+def code_pad_text(digits: str) -> str:
+    shown = digits if digits else "—"
+    return (
+        "🔐 **کد خود را وارد کنید:**\n"
+        f"کد وارد شده: `{shown}`\n\n"
+        "کد تلگرام را با دکمه‌ها وارد کنید سپس **تایید** را بزنید."
+    )
+
+
+async def send_main_menu(client, message_or_chat, user_id: int, edit=False):
+    balance = get_balance(user_id)
+    text = (
+        f"✨ **پنل اصلی Self MR**\n\n"
+        f"💎 موجودی: `{balance:,}` الماس\n"
+        f"💰 فعال‌سازی سلف: `{SELF_PRICE}` الماس\n"
+        f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس\n\n"
+        f"از منوی زیر بخش مورد نظر را انتخاب کنید."
+    )
+    kb = main_menu_keyboard()
+    try:
+        if edit and hasattr(message_or_chat, "edit_text"):
+            await message_or_chat.edit_text(text, reply_markup=kb)
+        elif hasattr(message_or_chat, "reply_text"):
+            await message_or_chat.reply_text(text, reply_markup=kb)
+        else:
+            await client.send_message(message_or_chat, text, reply_markup=kb)
+    except Exception:
+        try:
+            chat_id = getattr(message_or_chat, "chat", None)
+            chat_id = chat_id.id if chat_id else message_or_chat
+            await client.send_message(chat_id, text, reply_markup=kb)
+        except Exception as e:
+            logging.error(f"send_main_menu: {e}")
+
+
 @manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     user_id = message.from_user.id
@@ -7841,76 +8103,71 @@ async def start_login(client, message):
     if not await force_subscribe_check(client, message):
         return
 
-    # ====== سیستم زیرمجموعه ======
+    # ====== سیستم زیرمجموعه (۷۵ الماس) ======
     args = message.command
     if len(args) > 1:
         try:
             referrer_id = int(args[1])
             if referrer_id != user_id:
-                # چک کن قبلاً ثبت نشده باشه
+                init_user_db(referrer_id)
                 db = get_user_db(user_id)
                 cursor = db.cursor()
                 cursor.execute('SELECT invited_by FROM users WHERE user_id = ?', (user_id,))
                 row = cursor.fetchone()
-                already_invited = row and row[0] and row[0] != 0
+                already_invited = bool(row and row[0] and int(row[0]) != 0)
+
+                cursor.execute('SELECT reward_claimed FROM referrals WHERE referred_id = ?', (user_id,))
+                ref_row = cursor.fetchone()
+                already_rewarded = bool(ref_row and ref_row[0])
                 db.close()
 
-                if not already_invited:
-                    # ثبت زیرمجموعه
+                if not already_invited and not already_rewarded:
                     db = get_user_db(user_id)
                     cursor = db.cursor()
                     cursor.execute('UPDATE users SET invited_by = ? WHERE user_id = ?', (referrer_id, user_id))
-                    cursor.execute('INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 0)', (referrer_id, user_id))
+                    cursor.execute(
+                        'INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 0)',
+                        (referrer_id, user_id)
+                    )
+                    cursor.execute(
+                        'UPDATE referrals SET reward_claimed = 1 WHERE referred_id = ? AND referrer_id = ?',
+                        (user_id, referrer_id)
+                    )
                     db.commit()
                     db.close()
 
-                    # پاداش به معرف
                     add_balance(referrer_id, REFERRAL_REWARD)
+                    uname = message.from_user.first_name or str(user_id)
                     try:
                         await manager_bot.send_message(
                             referrer_id,
                             f"🎉 **زیرمجموعه جدید | self MR**\n\n"
-                            f"یک نفر با لینک شما وارد شد.\n"
+                            f"👤 {uname} با لینک شما وارد شد.\n"
                             f"💎 `{REFERRAL_REWARD}` الماس به حساب شما اضافه شد.\n"
-                            f"موجودی جدید: `{get_balance(referrer_id):,}` الماس"
+                            f"✨ موجودی جدید: `{get_balance(referrer_id):,}` الماس"
                         )
-                    except:
+                    except Exception:
                         pass
-        except:
+        except Exception as e:
+            logging.warning(f"referral start: {e}")
+
+    # کیبورد ادمین (اختیاری پایین)
+    if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
+        admin_kb = ReplyKeyboardMarkup(
+            [
+                [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
+                [KeyboardButton("💎 پنل الماس"), KeyboardButton("🛠 پنل ادمین")],
+                [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")],
+            ],
+            resize_keyboard=True
+        )
+        try:
+            await message.reply_text("🛠 منوی ادمین فعال است.", reply_markup=admin_kb)
+        except Exception:
             pass
 
-    balance = get_balance(user_id)
-    bot_username = (await client.get_me()).username
-    ref_link = f"https://t.me/{bot_username}?start={user_id}"
+    await send_main_menu(client, message, user_id, edit=False)
 
-    welcome_text = (
-        f"👋 **خوش آمدید به self MR**\n\n"
-        f"💎 موجودی شما: `{balance:,}` الماس\n"
-        f"💰 هزینه فعال‌سازی سلف: `{SELF_PRICE}` الماس\n"
-        f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس\n\n"
-        f"🔗 **لینک دعوت شما:**\n`{ref_link}`\n"
-        f"با دعوت هر نفر `{REFERRAL_REWARD}` الماس دریافت می‌کنید.\n\n"
-        f"برای فعال‌سازی سلف یکی از دکمه‌های زیر را بزنید:"
-    )
-
-    buttons = [[KeyboardButton("📱 شماره و شروع", request_contact=True)]]
-
-    if message.from_user and message.from_user.id in GOD_ADMIN_IDS:
-        buttons.append([
-            KeyboardButton("📊 وضعیت ربات"),
-            KeyboardButton("📢 پیام همگانی")
-        ])
-        buttons.append([
-            KeyboardButton("💎 پنل الماس"),
-            KeyboardButton("🛠 پنل ادمین")
-        ])
-        buttons.append([
-            KeyboardButton("📥 دانلود دیتابیس"),
-            KeyboardButton("📤 آپلود دیتابیس")
-        ])
-
-    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=False)
-    await message.reply_text(welcome_text, reply_markup=kb)
 
 @manager_bot.on_message(filters.private, group=-1)
 async def admin_broadcast_sender(client, message):
@@ -8086,10 +8343,22 @@ async def contact_handler(client, message):
 
     try:
         sent_code = await user_client.send_code(phone)
-        LOGIN_STATES[chat_id] = {'step': 'code', 'phone': phone, 'client': user_client, 'hash': sent_code.phone_code_hash}
-        await message.reply_text("✅ کد را بفرستید (مثلاً `1 1 1 1 1 با فاصله`)")
+        LOGIN_STATES[chat_id] = {
+            'step': 'code',
+            'phone': phone,
+            'client': user_client,
+            'hash': sent_code.phone_code_hash,
+            'digits': '',
+        }
+        await message.reply_text(
+            code_pad_text(""),
+            reply_markup=login_code_keyboard()
+        )
     except Exception as e:
-        await user_client.disconnect()
+        try:
+            await user_client.disconnect()
+        except Exception:
+            pass
         await message.reply_text(f"❌ خطا: {e}")
 
 
@@ -8100,6 +8369,52 @@ async def contact_handler(client, message):
 async def private_handler(client, message):
     user_id = message.from_user.id
     text = message.text or ""
+
+
+    # ورود شماره متنی (مدیریت سلف)
+    st_login = LOGIN_STATES.get(message.chat.id)
+    if st_login and st_login.get("step") == "phone":
+        phone = re.sub(r"[^\d+]", "", text.strip())
+        if text.strip() in ("لغو", "بازگشت", "/start"):
+            LOGIN_STATES.pop(message.chat.id, None)
+            await send_main_menu(client, message, user_id)
+            return
+        if len(phone) < 8:
+            await message.reply_text("❌ شماره نامعتبر است. مثال: `+98912...`")
+            return
+        balance = get_balance(user_id)
+        if balance < SELF_PRICE:
+            await message.reply_text(
+                f"❌ الماس کافی ندارید!\n💎 موجودی: {balance:,}\n💎 نیاز: {SELF_PRICE:,}"
+            )
+            LOGIN_STATES.pop(message.chat.id, None)
+            return
+        if is_banned(user_id):
+            await message.reply_text("🚫 شما مسدود شده‌اید.")
+            LOGIN_STATES.pop(message.chat.id, None)
+            return
+        await message.reply_text("⏳ در حال ارسال کد...")
+        user_client = Client(f"login_{message.chat.id}", api_id=API_ID, api_hash=API_HASH, in_memory=True, no_updates=True)
+        try:
+            await user_client.connect()
+            sent_code = await user_client.send_code(phone)
+            LOGIN_STATES[message.chat.id] = {
+                "step": "code",
+                "phone": phone,
+                "client": user_client,
+                "hash": sent_code.phone_code_hash,
+                "digits": "",
+            }
+            await message.reply_text(code_pad_text(""), reply_markup=login_code_keyboard())
+        except Exception as e:
+            try:
+                await user_client.disconnect()
+            except Exception:
+                pass
+            LOGIN_STATES.pop(message.chat.id, None)
+            await message.reply_text(f"❌ خطا: {e}")
+        return
+
 
     # =============================================
     # پنل ادمین - افزودن الماس (قبل از عضویت اجباری)
@@ -8381,6 +8696,15 @@ async def private_handler(client, message):
             os.remove(filename)
         except Exception as e:
             await status_msg.edit_text(f"❌ خطا: {str(e)}")
+        return
+
+    if text in ("🔙 انصراف", "انصراف"):
+        LOGIN_STATES.pop(message.chat.id, None)
+        try:
+            await message.reply_text("لغو شد.", reply_markup=ReplyKeyboardRemove())
+        except Exception:
+            pass
+        await send_main_menu(client, message, user_id)
         return
 
     if text == "راهنما":

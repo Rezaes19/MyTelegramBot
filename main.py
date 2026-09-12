@@ -1945,6 +1945,8 @@ ROTATING_MUSIC = {}          # user_id -> list[{file_id, title}]
 ROTATING_MUSIC_INTERVAL = {} # ساعت
 ROTATING_MUSIC_STATUS = {}
 ROTATING_MUSIC_INDEX = {}
+# میو خودکار: user_id -> set/list of chat_id هایی که میو روشن است
+MEOW_CHATS = {}
 
 # سندر بنر گروهی: user_id -> { chat_id(str) -> config }
 # config: enabled, mode(copy/forward), banner_chat_id, banner_msg_id, delay, hourly_limit, sent_hour, hour_ts
@@ -2012,6 +2014,11 @@ def load_all_states():
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
         try:
+            mc = settings.get("meow_chats") or []
+            MEOW_CHATS[user_id] = set(int(x) for x in mc) if isinstance(mc, (list, set, tuple)) else set()
+        except Exception:
+            MEOW_CHATS[user_id] = set()
+        try:
             sc = settings.get("sender_config") or {}
             # keys must be str for JSON
             SENDER_CONFIG[user_id] = {str(k): v for k, v in sc.items()} if isinstance(sc, dict) else {}
@@ -2061,6 +2068,11 @@ def apply_user_settings_from_db(user_id: int):
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
         try:
+            mc = settings.get("meow_chats") or []
+            MEOW_CHATS[user_id] = set(int(x) for x in mc) if isinstance(mc, (list, set, tuple)) else set()
+        except Exception:
+            MEOW_CHATS[user_id] = set()
+        try:
             sc = settings.get("sender_config") or {}
             # keys must be str for JSON
             SENDER_CONFIG[user_id] = {str(k): v for k, v in sc.items()} if isinstance(sc, dict) else {}
@@ -2109,6 +2121,7 @@ def persist_all_user_settings(user_id: int):
             "rotating_music": list(ROTATING_MUSIC.get(user_id) or []),
             "rotating_music_interval": int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1),
             "rotating_music_on": bool(ROTATING_MUSIC_STATUS.get(user_id, False)),
+            "meow_chats": list(MEOW_CHATS.get(user_id) or []),
             "sender_config": SENDER_CONFIG.get(user_id) or {},
             "first_comment": bool(FIRST_COMMENT_STATUS.get(user_id, False)),
             "first_comment_text": FIRST_COMMENT_TEXT.get(user_id, "🔥") or "🔥",
@@ -4406,6 +4419,38 @@ async def mass_forward_banner(client: Client, user_id: int, banner_chat_id: int,
         pass
 
 
+
+async def meow_loop_task(client: Client, user_id: int):
+    """هر ۵ دقیقه در گپ‌هایی که .میو روشن شده، «میو» می‌فرستد — فقط همان گپ‌ها + ضدفلود"""
+    await asyncio.sleep(15)
+    while True:
+        try:
+            if user_id not in ACTIVE_BOTS:
+                break
+            chats = list(MEOW_CHATS.get(user_id) or [])
+            if not chats:
+                await asyncio.sleep(20)
+                continue
+            for chat_id in chats:
+                if user_id not in ACTIVE_BOTS:
+                    break
+                if chat_id not in (MEOW_CHATS.get(user_id) or set()):
+                    continue
+                try:
+                    await client.send_message(int(chat_id), "میو")
+                except Exception as e:
+                    logging.warning(f"meow send uid={user_id} chat={chat_id}: {e}")
+                # فاصله کوتاه بین چند گپ (اگر چند گپ روشن باشد)
+                await asyncio.sleep(random.uniform(2.0, 5.0))
+            # ۵ دقیقه + کمی جیتتر ضد ریپورت
+            await asyncio.sleep(300 + random.uniform(5, 40))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"meow_loop_task: {e}")
+            await asyncio.sleep(30)
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
@@ -5272,6 +5317,44 @@ async def reply_based_controller(client, message):
         await message.edit_text("🗑 تنظیمات سندر این گروه حذف شد.")
         return
 
+
+    # ========== میو خودکار ==========
+    if cmd in (".میو روشن", "میو روشن"):
+        chat_id = message.chat.id
+        ctype = str(getattr(message.chat, "type", "")).lower()
+        if "private" in ctype:
+            await message.edit_text("❌ میو خودکار فقط داخل **گپ** کار می‌کند.")
+            return
+        s = MEOW_CHATS.get(user_id) or set()
+        if not isinstance(s, set):
+            try:
+                s = set(int(x) for x in s)
+            except Exception:
+                s = set()
+        s.add(int(chat_id))
+        MEOW_CHATS[user_id] = s
+        persist_all_user_settings(user_id)
+        await message.edit_text(
+            "✅ **میو خودکار روشن شد | self MR**\n\n"
+            "هر ۵ دقیقه در **همین گپ** پیام «میو» ارسال می‌شود.\n"
+            "خاموش: `.میو خاموش`"
+        )
+        return
+
+    if cmd in (".میو خاموش", "میو خاموش"):
+        chat_id = message.chat.id
+        s = MEOW_CHATS.get(user_id) or set()
+        if not isinstance(s, set):
+            try:
+                s = set(int(x) for x in s)
+            except Exception:
+                s = set()
+        s.discard(int(chat_id))
+        MEOW_CHATS[user_id] = s
+        persist_all_user_settings(user_id)
+        await message.edit_text("❌ میو خودکار در **همین گپ** خاموش شد.")
+        return
+
     # ========== کیفیت عکس ==========
     if cmd in (".کیفیت عکس", "کیفیت عکس", ".بهبود عکس", "بهبود عکس", ".افزایش کیفیت", "افزایش کیفیت"):
         await enhance_photo_quality(client, message)
@@ -5911,6 +5994,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         asyncio.create_task(rotate_profile_name_task(client, user_id)),
         asyncio.create_task(rotate_profile_music_task(client, user_id)),
         asyncio.create_task(sender_loop_task(client, user_id)),
+        asyncio.create_task(meow_loop_task(client, user_id)),
         asyncio.create_task(anti_login_task(client, user_id)),
         asyncio.create_task(status_action_task(client, user_id))
     ]
@@ -6001,6 +6085,7 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
                 _styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
+                _styled_btn("🐱 میو", f"panel_page_35_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
@@ -6234,6 +6319,17 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
+    elif page == 35:
+        return [
+            [_styled_btn("🐱 میو خودکار", f"panel_page_36_{user_id}", style="primary")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+    elif page == 36:
+        return [
+            [_styled_btn(".میو روشن", "noop", style="success")],
+            [_styled_btn(".میو خاموش", "noop", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_35_{user_id}", style="danger")],
+        ]
     elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34):
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
@@ -6458,71 +6554,131 @@ async def callback_panel_handler(client, callback):
         return
 
     # ===== کیبورد عددی کد لاگین =====
-    if data.startswith("login_d_") or data in ("login_del", "login_ok"):
+    if data.startswith("login_d_") or data in ("login_del", "login_ok", "login_resend"):
         chat_id = callback.message.chat.id
         st = LOGIN_STATES.get(chat_id)
         if not st or st.get("step") != "code":
-            await callback.answer("جلسه لاگین فعال نیست", show_alert=True)
+            await callback.answer("جلسه لاگین فعال نیست — دوباره فعال‌سازی را بزن", show_alert=True)
             return
         digits = st.get("digits") or ""
+
         if data.startswith("login_d_"):
             d = data.split("_")[-1]
-            if len(digits) >= 10:
-                await callback.answer("کد کامل است")
+            if not d.isdigit():
+                await callback.answer()
+                return
+            if len(digits) >= 6:
+                await callback.answer("کد کامل است — تایید را بزن")
                 return
             digits += d
             st["digits"] = digits
             LOGIN_STATES[chat_id] = st
             await callback.answer()
-            try:
-                await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
-            except Exception:
-                pass
+            await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
             return
+
         if data == "login_del":
             digits = digits[:-1]
             st["digits"] = digits
             LOGIN_STATES[chat_id] = st
             await callback.answer("پاک شد")
-            try:
-                await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
-            except Exception:
-                pass
+            await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
             return
-        if data == "login_ok":
-            code = re.sub(r"\D+", "", digits)
-            if len(code) < 4:
-                await callback.answer("کد ناقص است", show_alert=True)
-                return
+
+        if data == "login_resend":
+            await callback.answer("در حال ارسال مجدد...")
             user_c = st.get("client")
-            if not user_c:
-                await callback.answer("نشست منقضی شده", show_alert=True)
+            phone = normalize_phone(st.get("phone") or "")
+            if not user_c or not phone:
+                await callback.answer("نشست منقضی — دوباره شروع کن", show_alert=True)
                 return
-            await callback.answer("در حال بررسی...")
             try:
-                await user_c.sign_in(st["phone"], st["hash"], code)
-                # ساخت یک message-like برای finalize
-                await callback.message.edit_text("⏳ در حال فعال‌سازی سلف...")
-                class _M:
-                    pass
-                fake = callback.message
-                await finalize(fake, user_c, st["phone"])
-            except SessionPasswordNeeded:
-                st["step"] = "password"
+                sent_code = await user_c.send_code(phone)
+                st["hash"] = sent_code.phone_code_hash
+                st["digits"] = ""
+                st["phone"] = phone
                 LOGIN_STATES[chat_id] = st
-                await callback.message.edit_text(
-                    "🔐 **رمز دو مرحله‌ای** را وارد کنید:\n\nرمز را به صورت متن بفرستید."
+                await mm_edit(
+                    callback,
+                    "🔄 کد جدید ارسال شد.\n\n" + code_pad_text(""),
+                    login_code_keyboard(),
                 )
             except Exception as e:
-                await callback.message.edit_text(
-                    f"❌ خطا: {e}\n\nدوباره از مدیریت سلف تلاش کنید.",
-                    reply_markup=self_manage_keyboard()
-                )
+                await callback.answer(str(e)[:80], show_alert=True)
+            return
+
+        if data == "login_ok":
+            code = re.sub(r"\D+", "", digits or "")
+            if len(code) < 5:
+                await callback.answer("کد باید حداقل ۵ رقم باشد", show_alert=True)
+                return
+            user_c = st.get("client")
+            phone = normalize_phone(st.get("phone") or "")
+            phash = st.get("hash")
+            if not user_c or not phone or not phash:
+                await callback.answer("نشست منقضی شده — دوباره فعال‌سازی کنید", show_alert=True)
+                return
+            if st.get("busy"):
+                await callback.answer("صبر کن...")
+                return
+            st["busy"] = True
+            LOGIN_STATES[chat_id] = st
+            await callback.answer("در حال بررسی کد...")
+            try:
+                await user_c.sign_in(phone, phash, code)
+                # جلوگیری از دوبار sign_in توسط هندلر متنی
+                st["step"] = "done"
+                st["busy"] = True
+                LOGIN_STATES[chat_id] = st
                 try:
-                    await user_c.disconnect()
+                    await callback.message.edit_text("⏳ در حال فعال‌سازی سلف...")
                 except Exception:
                     pass
-                LOGIN_STATES.pop(chat_id, None)
+                await finalize(callback.message, user_c, phone)
+            except SessionPasswordNeeded:
+                st["step"] = "password"
+                st["busy"] = False
+                st["digits"] = ""
+                LOGIN_STATES[chat_id] = st
+                try:
+                    await callback.message.edit_text(
+                        "🔐 **رمز دو مرحله‌ای** را وارد کنید:\n\nرمز را به صورت متن بفرستید."
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                err = str(e)
+                logging.error(f"login sign_in: {err}")
+                st["busy"] = False
+                st["digits"] = ""
+                LOGIN_STATES[chat_id] = st
+                # کد اشتباه → پاک کردن و اجازه تلاش دوباره بدون قطع نشست
+                if "PHONE_CODE_INVALID" in err or "code is invalid" in err.lower():
+                    await mm_edit(
+                        callback,
+                        "❌ **کد اشتباه است**\n\n"
+                        "کد جدید تلگرام را دقیق وارد کن.\n"
+                        "اگر منقضی شده «ارسال مجدد کد» را بزن.\n\n"
+                        + code_pad_text(""),
+                        login_code_keyboard(),
+                    )
+                elif "PHONE_CODE_EXPIRED" in err or "expired" in err.lower():
+                    await mm_edit(
+                        callback,
+                        "⏰ **کد منقضی شد**\n\nروی «ارسال مجدد کد» بزن.",
+                        login_code_keyboard(),
+                    )
+                else:
+                    try:
+                        await user_c.disconnect()
+                    except Exception:
+                        pass
+                    LOGIN_STATES.pop(chat_id, None)
+                    await mm_edit(
+                        callback,
+                        f"❌ خطا در ورود:\n`{err[:120]}`\n\nدوباره از مدیریت سلف تلاش کنید.",
+                        self_manage_keyboard(),
+                    )
             return
 
     if data == "noop":
@@ -7001,6 +7157,43 @@ async def callback_panel_handler(client, callback):
                         pass
                     try:
                         await edit_panel_colored(callback, target_user_id, 23)
+                    except Exception:
+                        pass
+                    return
+                if page == 36:
+                    help_text = (
+                        "🐱 میو خودکار | self MR\n\n"
+                        "دستورات:\n"
+                        "• `.میو روشن`\n"
+                        "• `.میو خاموش`\n\n"
+                        "هر ۵ دقیقه فقط در گپی که روشن کردی «میو» می‌فرستد."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 36))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 36))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 36)
+                    except Exception:
+                        pass
+                    return
+                if page == 35:
+                    help_text = (
+                        "🐱 میو | self MR\n\n"
+                        "از دکمه میو خودکار برای دیدن دستورات استفاده کن."
+                    )
+                    try:
+                        if callback.inline_message_id:
+                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 35))
+                        else:
+                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 35))
+                    except Exception:
+                        pass
+                    try:
+                        await edit_panel_colored(callback, target_user_id, 35)
                     except Exception:
                         pass
                     return
@@ -8019,6 +8212,13 @@ async def upload_database_handler(client, message):
 # =============================================
 # UI پنل اصلی منیجر (self MR) — دکمه‌های رنگی Bot API
 # =============================================
+def normalize_phone(phone: str) -> str:
+    phone = re.sub(r"[^\d+]", "", (phone or "").strip())
+    if phone and not phone.startswith("+"):
+        phone = "+" + phone
+    return phone
+
+
 def _mm_btn(text, callback_data=None, url=None, style=None):
     """دکمه دیکشنری با رنگ: primary=آبی/بنفش ، success=سبز ، danger=قرمز"""
     b = {"text": text}
@@ -8058,8 +8258,7 @@ def login_code_keyboard():
     rows = []
     for r in range(3):
         row = []
-        for c in range(1, 4):
-            n = r * 3 + c
+        for n in range(r * 3 + 1, r * 3 + 4):
             row.append(_mm_btn(str(n), callback_data=f"login_d_{n}", style="primary"))
         rows.append(row)
     rows.append([_mm_btn("0", callback_data="login_d_0", style="primary")])
@@ -8067,6 +8266,7 @@ def login_code_keyboard():
         _mm_btn("❌ پاک", callback_data="login_del", style="danger"),
         _mm_btn("✅ تایید", callback_data="login_ok", style="success"),
     ])
+    rows.append([_mm_btn("🔄 ارسال مجدد کد", callback_data="login_resend", style="primary")])
     rows.append([_mm_btn("🔙 بازگشت", callback_data="mm_self", style="danger")])
     return rows
 
@@ -8413,7 +8613,7 @@ async def contact_handler(client, message):
         return
 
     chat_id = message.chat.id
-    phone = message.contact.phone_number
+    phone = normalize_phone(message.contact.phone_number)
 
     await message.reply_text("⏳ در حال اتصال...", reply_markup=ReplyKeyboardRemove())
 
@@ -8428,6 +8628,7 @@ async def contact_handler(client, message):
             'client': user_client,
             'hash': sent_code.phone_code_hash,
             'digits': '',
+            'busy': False,
         }
         ok, _ = await bot_api_send_or_edit(message.chat.id, code_pad_text(""), login_code_keyboard())
         if not ok:
@@ -8452,7 +8653,7 @@ async def private_handler(client, message):
     # ورود شماره متنی (مدیریت سلف)
     st_login = LOGIN_STATES.get(message.chat.id)
     if st_login and st_login.get("step") == "phone":
-        phone = re.sub(r"[^\d+]", "", text.strip())
+        phone = normalize_phone(text.strip())
         if text.strip() in ("لغو", "بازگشت", "/start"):
             LOGIN_STATES.pop(message.chat.id, None)
             await send_main_menu(client, message, user_id)
@@ -8803,15 +9004,39 @@ async def private_handler(client, message):
         return
 
     if state['step'] == 'code':
-        code = re.sub(r"\D+", "", message.text)
+        # اگر از روی کیبورد عددی در حال پردازش است، پیام متنی را نادیده بگیر
+        if state.get('busy'):
+            return
+        code = re.sub(r"\D+", "", message.text or "")
+        if len(code) < 5:
+            await message.reply_text("❌ کد ناقص است. حداقل ۵ رقم بفرست یا از دکمه‌ها استفاده کن.")
+            return
+        phone = normalize_phone(state.get('phone') or "")
+        state['busy'] = True
+        LOGIN_STATES[chat_id] = state
         try:
-            await user_c.sign_in(state['phone'], state['hash'], code)
-            await finalize(message, user_c, state['phone'])
+            await user_c.sign_in(phone, state['hash'], code)
+            await finalize(message, user_c, phone)
         except SessionPasswordNeeded:
             state['step'] = 'password'
+            state['phone'] = phone
+            state['busy'] = False
+            LOGIN_STATES[chat_id] = state
             await message.reply_text("🔐 رمز دو مرحله‌ای را وارد کنید:")
         except Exception as e:
-            await message.reply_text(f"❌ خطا: {e}")
+            err = str(e)
+            state['busy'] = False
+            LOGIN_STATES[chat_id] = state
+            # اگر کد قبلاً با موفقیت مصرف شده، پیام الکی نده
+            if "PHONE_CODE_INVALID" in err or "PHONE_CODE_EXPIRED" in err:
+                # فقط اگر هنوز سشن لاگین فعال است هشدار بده
+                if LOGIN_STATES.get(chat_id) and LOGIN_STATES[chat_id].get('step') == 'code':
+                    await message.reply_text(
+                        "❌ کد اشتباه یا منقضی است.\n"
+                        "از دکمه‌های صفحه کد یا «ارسال مجدد کد» استفاده کن."
+                    )
+            else:
+                await message.reply_text(f"❌ خطا: {err[:150]}")
 
     elif state['step'] == 'password':
         try:

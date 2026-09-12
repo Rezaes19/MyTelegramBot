@@ -6353,16 +6353,14 @@ async def callback_panel_handler(client, callback):
 
     if data == "mm_self":
         await callback.answer()
-        try:
-            await callback.message.edit_text(
-                "🤖 **مدیریت سلف | self MR**\n\n"
-                "برای فعال‌سازی سلف روی دکمه زیر بزنید.\n"
-                f"💎 هزینه: `{SELF_PRICE}` الماس\n"
-                f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس",
-                reply_markup=self_manage_keyboard()
-            )
-        except Exception:
-            pass
+        await mm_edit(
+            callback,
+            f"🤖 **مدیریت سلف | self MR**\n\n"
+            f"برای فعال‌سازی سلف روی دکمه زیر بزنید.\n"
+            f"💎 هزینه: `{SELF_PRICE}` الماس\n"
+            f"⏰ کسر ساعتی: `{HOURLY_COST}` الماس",
+            self_manage_keyboard(),
+        )
         return
 
     if data == "mm_activate":
@@ -6373,23 +6371,22 @@ async def callback_panel_handler(client, callback):
             return
         bal = get_balance(uid)
         if bal < SELF_PRICE:
-            await callback.message.edit_text(
+            await mm_edit(
+                callback,
                 f"❌ الماس کافی نیست\n💎 موجودی: `{bal:,}`\n💎 نیاز: `{SELF_PRICE}`\n\n"
                 f"از بخش **الماس رایگان** زیرمجموعه بیاورید.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")]])
+                [[_mm_btn("🔙 بازگشت", callback_data="mm_self", style="danger")]],
             )
             return
         LOGIN_STATES[callback.message.chat.id] = {"step": "phone"}
-        await callback.message.edit_text(
+        await mm_edit(
+            callback,
             "📱 **شماره تلفن را وارد کنید**\n\n"
             "شماره را با کد کشور بفرستید\n"
             "مثال: `+989123456789`\n\n"
             "یا از دکمه زیر شماره را Share کنید.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")]
-            ])
+            [[_mm_btn("🔙 بازگشت", callback_data="mm_self", style="danger")]],
         )
-        # کیبورد درخواست مخاطب
         try:
             await client.send_message(
                 callback.message.chat.id,
@@ -6410,7 +6407,6 @@ async def callback_panel_handler(client, callback):
         uid = callback.from_user.id
         bot_username = (await client.get_me()).username
         ref_link = f"https://t.me/{bot_username}?start={uid}"
-        # تعداد زیرمجموعه
         try:
             db = get_user_db(uid)
             cur = db.cursor()
@@ -6419,13 +6415,14 @@ async def callback_panel_handler(client, callback):
             db.close()
         except Exception:
             cnt = 0
-        await callback.message.edit_text(
+        await mm_edit(
+            callback,
             f"💎 **الماس رایگان | self MR**\n\n"
             f"با دعوت هر نفر `{REFERRAL_REWARD}` الماس بگیرید.\n\n"
             f"🔗 لینک اختصاصی شما:\n`{ref_link}`\n\n"
             f"👥 زیرمجموعه‌ها: `{cnt}`\n"
             f"💎 موجودی: `{get_balance(uid):,}`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")]])
+            [[_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")]],
         )
         return
 
@@ -6434,27 +6431,29 @@ async def callback_panel_handler(client, callback):
         uid = callback.from_user.id
         session_info = get_session_by_user_id(uid)
         has_self = "✅ فعال" if session_info else "❌ غیرفعال"
-        await callback.message.edit_text(
+        await mm_edit(
+            callback,
             f"👤 **حساب کاربری | self MR**\n\n"
             f"🆔 آیدی: `{uid}`\n"
             f"💎 موجودی: `{get_balance(uid):,}` الماس\n"
             f"🔐 سلف: {has_self}\n"
             f"💰 هزینه فعال‌سازی: `{SELF_PRICE}`\n"
             f"⏰ کسر ساعتی: `{HOURLY_COST}`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")]])
+            [[_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")]],
         )
         return
 
     if data == "mm_buy":
         await callback.answer()
-        await callback.message.edit_text(
-            "🛒 **خرید الماس | self MR**\n\n"
+        await mm_edit(
+            callback,
+            f"🛒 **خرید الماس | self MR**\n\n"
             f"برای خرید الماس با پشتیبانی در ارتباط باشید:\n"
             f"@{SUPPORT_USERNAME}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")],
-            ])
+            [
+                [_mm_btn("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}", style="primary")],
+                [_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")],
+            ],
         )
         return
 
@@ -6476,7 +6475,7 @@ async def callback_panel_handler(client, callback):
             LOGIN_STATES[chat_id] = st
             await callback.answer()
             try:
-                await callback.message.edit_text(code_pad_text(digits), reply_markup=login_code_keyboard())
+                await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
             except Exception:
                 pass
             return
@@ -6486,7 +6485,7 @@ async def callback_panel_handler(client, callback):
             LOGIN_STATES[chat_id] = st
             await callback.answer("پاک شد")
             try:
-                await callback.message.edit_text(code_pad_text(digits), reply_markup=login_code_keyboard())
+                await mm_edit(callback, code_pad_text(digits), login_code_keyboard())
             except Exception:
                 pass
             return
@@ -8018,29 +8017,41 @@ async def upload_database_handler(client, message):
 
 
 # =============================================
-# UI پنل اصلی منیجر (self MR)
+# UI پنل اصلی منیجر (self MR) — دکمه‌های رنگی Bot API
 # =============================================
+def _mm_btn(text, callback_data=None, url=None, style=None):
+    """دکمه دیکشنری با رنگ: primary=آبی/بنفش ، success=سبز ، danger=قرمز"""
+    b = {"text": text}
+    if callback_data:
+        b["callback_data"] = callback_data
+    if url:
+        b["url"] = url
+    if style in ("primary", "success", "danger"):
+        b["style"] = style
+    return b
+
+
 def main_menu_keyboard():
     ch = (FORCE_CHANNELS[0] if FORCE_CHANNELS else "@SELF_MR0").lstrip("@")
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤖 مدیریت سلف", callback_data="mm_self")],
+    return [
+        [_mm_btn("🤖 مدیریت سلف", callback_data="mm_self", style="success")],
         [
-            InlineKeyboardButton("💎 الماس رایگان", callback_data="mm_free"),
-            InlineKeyboardButton("👤 حساب کاربری", callback_data="mm_account"),
+            _mm_btn("💎 الماس رایگان", callback_data="mm_free", style="primary"),
+            _mm_btn("👤 حساب کاربری", callback_data="mm_account", style="success"),
         ],
-        [InlineKeyboardButton("🛒 خرید الماس", callback_data="mm_buy")],
+        [_mm_btn("🛒 خرید الماس", callback_data="mm_buy", style="success")],
         [
-            InlineKeyboardButton("📢 چنل", url=f"https://t.me/{ch}"),
-            InlineKeyboardButton("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}"),
+            _mm_btn("📢 چنل", url=f"https://t.me/{ch}", style="danger"),
+            _mm_btn("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}", style="danger"),
         ],
-    ])
+    ]
 
 
 def self_manage_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ فعال‌سازی", callback_data="mm_activate")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="mm_home")],
-    ])
+    return [
+        [_mm_btn("✅ فعال‌سازی", callback_data="mm_activate", style="success")],
+        [_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")],
+    ]
 
 
 def login_code_keyboard():
@@ -8049,15 +8060,15 @@ def login_code_keyboard():
         row = []
         for c in range(1, 4):
             n = r * 3 + c
-            row.append(InlineKeyboardButton(str(n), callback_data=f"login_d_{n}"))
+            row.append(_mm_btn(str(n), callback_data=f"login_d_{n}", style="primary"))
         rows.append(row)
-    rows.append([InlineKeyboardButton("0", callback_data="login_d_0")])
+    rows.append([_mm_btn("0", callback_data="login_d_0", style="primary")])
     rows.append([
-        InlineKeyboardButton("❌ پاک", callback_data="login_del"),
-        InlineKeyboardButton("✅ تایید", callback_data="login_ok"),
+        _mm_btn("❌ پاک", callback_data="login_del", style="danger"),
+        _mm_btn("✅ تایید", callback_data="login_ok", style="success"),
     ])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="mm_self")])
-    return InlineKeyboardMarkup(rows)
+    rows.append([_mm_btn("🔙 بازگشت", callback_data="mm_self", style="danger")])
+    return rows
 
 
 def code_pad_text(digits: str) -> str:
@@ -8067,6 +8078,48 @@ def code_pad_text(digits: str) -> str:
         f"کد وارد شده: `{shown}`\n\n"
         "کد تلگرام را با دکمه‌ها وارد کنید سپس **تایید** را بزنید."
     )
+
+
+def _fallback_markup(keyboard):
+    """اگر استایل رنگی پشتیبانی نشد، دکمه معمولی Pyrogram"""
+    rows = []
+    for row in keyboard:
+        r = []
+        for b in row:
+            if b.get("url"):
+                r.append(InlineKeyboardButton(b["text"], url=b["url"]))
+            else:
+                r.append(InlineKeyboardButton(b["text"], callback_data=b.get("callback_data") or "noop"))
+        rows.append(r)
+    return InlineKeyboardMarkup(rows)
+
+
+async def bot_api_send_or_edit(chat_id, text, keyboard, message_id=None, parse_mode="Markdown"):
+    """ارسال/ویرایش پیام با دکمه‌های رنگی واقعی"""
+    payload = {
+        "text": text,
+        "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+        "parse_mode": parse_mode,
+        "disable_web_page_preview": True,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            if message_id:
+                payload["chat_id"] = chat_id
+                payload["message_id"] = message_id
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+            else:
+                payload["chat_id"] = chat_id
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            async with session.post(url, data=payload) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    return True, data
+                logging.warning(f"bot_api_send_or_edit: {data}")
+                return False, data
+    except Exception as e:
+        logging.error(f"bot_api_send_or_edit: {e}")
+        return False, None
 
 
 async def send_main_menu(client, message_or_chat, user_id: int, edit=False):
@@ -8079,20 +8132,46 @@ async def send_main_menu(client, message_or_chat, user_id: int, edit=False):
         f"از منوی زیر بخش مورد نظر را انتخاب کنید."
     )
     kb = main_menu_keyboard()
+    chat_id = None
+    message_id = None
     try:
-        if edit and hasattr(message_or_chat, "edit_text"):
-            await message_or_chat.edit_text(text, reply_markup=kb)
-        elif hasattr(message_or_chat, "reply_text"):
-            await message_or_chat.reply_text(text, reply_markup=kb)
+        if edit and hasattr(message_or_chat, "chat"):
+            chat_id = message_or_chat.chat.id
+            message_id = message_or_chat.id
+        elif hasattr(message_or_chat, "chat"):
+            chat_id = message_or_chat.chat.id
         else:
-            await client.send_message(message_or_chat, text, reply_markup=kb)
+            chat_id = int(message_or_chat)
     except Exception:
-        try:
-            chat_id = getattr(message_or_chat, "chat", None)
-            chat_id = chat_id.id if chat_id else message_or_chat
-            await client.send_message(chat_id, text, reply_markup=kb)
-        except Exception as e:
-            logging.error(f"send_main_menu: {e}")
+        chat_id = user_id
+
+    ok, _ = await bot_api_send_or_edit(chat_id, text, kb, message_id if edit else None)
+    if ok:
+        return
+    # فال‌بک بدون رنگ
+    try:
+        markup = _fallback_markup(kb)
+        if edit and hasattr(message_or_chat, "edit_text"):
+            await message_or_chat.edit_text(text, reply_markup=markup)
+        elif hasattr(message_or_chat, "reply_text"):
+            await message_or_chat.reply_text(text, reply_markup=markup)
+        else:
+            await client.send_message(chat_id, text, reply_markup=markup)
+    except Exception as e:
+        logging.error(f"send_main_menu fallback: {e}")
+
+
+async def mm_edit(callback, text, keyboard):
+    """ویرایش پیام کالبک با دکمه‌های رنگی"""
+    chat_id = callback.message.chat.id
+    message_id = callback.message.id
+    ok, _ = await bot_api_send_or_edit(chat_id, text, keyboard, message_id)
+    if ok:
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=_fallback_markup(keyboard))
+    except Exception as e:
+        logging.warning(f"mm_edit fallback: {e}")
 
 
 @manager_bot.on_message(filters.command("start"))
@@ -8350,10 +8429,9 @@ async def contact_handler(client, message):
             'hash': sent_code.phone_code_hash,
             'digits': '',
         }
-        await message.reply_text(
-            code_pad_text(""),
-            reply_markup=login_code_keyboard()
-        )
+        ok, _ = await bot_api_send_or_edit(message.chat.id, code_pad_text(""), login_code_keyboard())
+        if not ok:
+            await message.reply_text(code_pad_text(""), reply_markup=_fallback_markup(login_code_keyboard()))
     except Exception as e:
         try:
             await user_client.disconnect()
@@ -8405,7 +8483,9 @@ async def private_handler(client, message):
                 "hash": sent_code.phone_code_hash,
                 "digits": "",
             }
-            await message.reply_text(code_pad_text(""), reply_markup=login_code_keyboard())
+            ok, _ = await bot_api_send_or_edit(message.chat.id, code_pad_text(""), login_code_keyboard())
+            if not ok:
+                await message.reply_text(code_pad_text(""), reply_markup=_fallback_markup(login_code_keyboard()))
         except Exception as e:
             try:
                 await user_client.disconnect()

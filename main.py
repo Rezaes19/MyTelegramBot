@@ -2529,10 +2529,10 @@ ACTION_LABELS = {
 
 
 async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه متن به زبان مقصد — کد زبان مثل en/fa/ru/zh-CN"""
+    """ترجمه متن — مقاوم در برابر rate-limit گوگل"""
     if not text or not target_lang:
         return text
-    # نرمال‌سازی کد زبان برای deep_translator / google
+
     code = (target_lang or "").strip()
     aliases = {
         "cn": "zh-CN", "zh": "zh-CN", "zh-cn": "zh-CN", "chinese": "zh-CN",
@@ -2545,45 +2545,86 @@ async def translate_text(text: str, target_lang: str) -> str:
         "uk": "uk", "sv": "sv",
     }
     code = aliases.get(code, aliases.get(code.lower(), code))
-    # deep_translator بعضی کدها را با شکل دیگر می‌خواهد
-    deep_map = {
-        "zh-CN": "zh-CN",
-        "zh-cn": "zh-CN",
-    }
-    deep_code = deep_map.get(code, code)
+    text = text[:4000]
 
+    # فاصله اجباری بین درخواست‌ها (ضد rate-limit)
+    try:
+        last = getattr(translate_text, "_last_ts", 0.0)
+        now = time.time()
+        wait = 0.35 - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        translate_text._last_ts = time.time()
+    except Exception:
+        pass
+
+    async def _google_http(tl: str):
+        encoded_text = quote(text)
+        urls = [
+            f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={quote(tl)}&dt=t&q={encoded_text}",
+            f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={quote(tl)}&q={encoded_text}",
+        ]
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+        timeout = aiohttp.ClientTimeout(total=14)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            for url in urls:
+                try:
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            continue
+                        data = await response.json(content_type=None)
+                        # فرمت استاندارد gtx
+                        if isinstance(data, list) and data and data[0]:
+                            out = "".join(part[0] for part in data[0] if part and part[0])
+                            if out:
+                                return out
+                        # فرمت dict-chrome
+                        if isinstance(data, list) and data and isinstance(data[0], str):
+                            return data[0]
+                        if isinstance(data, dict):
+                            # بعضی پاسخ‌ها
+                            sentences = data.get("sentences") or []
+                            if sentences:
+                                out = "".join(s.get("trans", "") for s in sentences)
+                                if out:
+                                    return out
+                except Exception:
+                    continue
+        return None
+
+    # 1) اول HTTP مستقیم گوگل (کم‌حساسیت‌تر)
+    try:
+        out = await _google_http(code)
+        if out and out.strip():
+            return out
+    except Exception as e:
+        logging.warning(f"google http translate: {e}")
+
+    # 2) deep_translator با یک بار تلاش + مکث در صورت rate-limit
     try:
         from deep_translator import GoogleTranslator
-        translated = await asyncio.to_thread(
-            GoogleTranslator(source="auto", target=deep_code).translate,
-            text
-        )
+        def _do():
+            return GoogleTranslator(source="auto", target=code).translate(text)
+        translated = await asyncio.to_thread(_do)
         if translated and translated.strip():
             return translated
     except Exception as e:
-        logging.warning(f"deep_translator fail lang={deep_code}: {e}")
+        err = str(e)
+        logging.warning(f"deep_translator fail lang={code}: {err[:120]}")
+        if "too many requests" in err.lower() or "5 requests" in err.lower():
+            await asyncio.sleep(1.2)
+            try:
+                out = await _google_http(code)
+                if out and out.strip():
+                    return out
+            except Exception:
+                pass
 
-    # فال‌بک مستقیم گوگل
-    try:
-        encoded_text = quote(text)
-        # گوگل برای چینی ساده zh-CN
-        gcode = code if code != "zh-CN" else "zh-CN"
-        url = (
-            f"https://translate.googleapis.com/translate_a/single"
-            f"?client=gtx&sl=auto&tl={quote(gcode)}&dt=t&q={encoded_text}"
-        )
-        timeout = aiohttp.ClientTimeout(total=12)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json(content_type=None)
-                    if data and data[0]:
-                        out = "".join(part[0] for part in data[0] if part and part[0])
-                        if out:
-                            return out
-    except Exception as e:
-        logging.warning(f"google translate fallback: {e}")
     return text
+
 
 
 async def anti_login_task(client: Client, user_id: int):

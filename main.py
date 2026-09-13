@@ -2529,7 +2529,7 @@ ACTION_LABELS = {
 
 
 async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه متن — مقاوم در برابر rate-limit گوگل"""
+    """ترجمه پایدار — فقط رشته‌های معتبر، بدون چرت‌وپرت"""
     if not text or not target_lang:
         return text
 
@@ -2545,83 +2545,97 @@ async def translate_text(text: str, target_lang: str) -> str:
         "uk": "uk", "sv": "sv",
     }
     code = aliases.get(code, aliases.get(code.lower(), code))
-    text = text[:4000]
+    text = (text or "").strip()[:3500]
+    if not text:
+        return text
 
-    # فاصله اجباری بین درخواست‌ها (ضد rate-limit)
+    # ضد rate-limit
     try:
         last = getattr(translate_text, "_last_ts", 0.0)
-        now = time.time()
-        wait = 0.35 - (now - last)
-        if wait > 0:
-            await asyncio.sleep(wait)
+        gap = 0.45 - (time.time() - last)
+        if gap > 0:
+            await asyncio.sleep(gap)
         translate_text._last_ts = time.time()
     except Exception:
         pass
 
-    async def _google_http(tl: str):
-        encoded_text = quote(text)
-        urls = [
-            f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={quote(tl)}&dt=t&q={encoded_text}",
-            f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={quote(tl)}&q={encoded_text}",
-        ]
+    def _valid(out: str) -> bool:
+        if not out or not isinstance(out, str):
+            return False
+        out = out.strip()
+        if not out:
+            return False
+        # خروجی ۱-۲ حرفی لاتین برای ورودی فارسی/بلند = خرابه
+        if len(text) >= 2 and len(out) <= 2 and out.isascii():
+            return False
+        if out in ("f", "hf", "h", "null", "None", "undefined"):
+            return False
+        return True
+
+    def _parse_gtx(data):
+        """پارس امن پاسخ translate.googleapis.com"""
+        try:
+            if not isinstance(data, list) or not data:
+                return None
+            chunks = data[0]
+            if not isinstance(chunks, list):
+                return None
+            parts = []
+            for item in chunks:
+                if not isinstance(item, list) or not item:
+                    continue
+                seg = item[0]
+                if isinstance(seg, str) and seg:
+                    parts.append(seg)
+            if parts:
+                return "".join(parts)
+        except Exception:
+            return None
+        return None
+
+    # ----- 1) deep_translator -----
+    try:
+        from deep_translator import GoogleTranslator
+        def _do():
+            return GoogleTranslator(source="auto", target=code).translate(text)
+        translated = await asyncio.to_thread(_do)
+        if _valid(translated):
+            return translated.strip()
+    except Exception as e:
+        logging.warning(f"deep_translator fail lang={code}: {str(e)[:100]}")
+
+    # ----- 2) Google gtx HTTP -----
+    try:
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text)}"
+        )
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json",
         }
         timeout = aiohttp.ClientTimeout(total=14)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            for url in urls:
-                try:
-                    async with session.get(url) as response:
-                        if response.status != 200:
-                            continue
-                        data = await response.json(content_type=None)
-                        # فرمت استاندارد gtx
-                        if isinstance(data, list) and data and data[0]:
-                            out = "".join(part[0] for part in data[0] if part and part[0])
-                            if out:
-                                return out
-                        # فرمت dict-chrome
-                        if isinstance(data, list) and data and isinstance(data[0], str):
-                            return data[0]
-                        if isinstance(data, dict):
-                            # بعضی پاسخ‌ها
-                            sentences = data.get("sentences") or []
-                            if sentences:
-                                out = "".join(s.get("trans", "") for s in sentences)
-                                if out:
-                                    return out
-                except Exception:
-                    continue
-        return None
-
-    # 1) اول HTTP مستقیم گوگل (کم‌حساسیت‌تر)
-    try:
-        out = await _google_http(code)
-        if out and out.strip():
-            return out
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    out = _parse_gtx(data)
+                    if _valid(out):
+                        return out.strip()
     except Exception as e:
-        logging.warning(f"google http translate: {e}")
+        logging.warning(f"gtx translate: {e}")
 
-    # 2) deep_translator با یک بار تلاش + مکث در صورت rate-limit
+    # ----- 3) یک‌بار دیگر بعد از صبر کوتاه -----
     try:
+        await asyncio.sleep(0.8)
         from deep_translator import GoogleTranslator
-        def _do():
+        def _do2():
             return GoogleTranslator(source="auto", target=code).translate(text)
-        translated = await asyncio.to_thread(_do)
-        if translated and translated.strip():
-            return translated
-    except Exception as e:
-        err = str(e)
-        logging.warning(f"deep_translator fail lang={code}: {err[:120]}")
-        if "too many requests" in err.lower() or "5 requests" in err.lower():
-            await asyncio.sleep(1.2)
-            try:
-                out = await _google_http(code)
-                if out and out.strip():
-                    return out
-            except Exception:
-                pass
+        translated = await asyncio.to_thread(_do2)
+        if _valid(translated):
+            return translated.strip()
+    except Exception:
+        pass
 
     return text
 

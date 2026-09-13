@@ -267,6 +267,24 @@ def deduct_balance(user_id, amount):
     db.close()
     return True
 
+def force_deduct_balance(user_id, amount):
+    """کسر اجباری توسط ادمین — موجودی منفی نمی‌شود"""
+    init_user_db(user_id)
+    db = get_user_db(user_id)
+    cursor = db.cursor()
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    balance = result[0] if result else 0
+    amount = int(amount)
+    if amount < 0:
+        amount = 0
+    new_bal = max(0, int(balance) - amount)
+    actual = int(balance) - new_bal
+    cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_bal, user_id))
+    db.commit()
+    db.close()
+    return actual, new_bal
+
 def is_banned(user_id):
     init_user_db(user_id)
     db = get_user_db(user_id)
@@ -2535,7 +2553,7 @@ _TRANSLATE_LAST = 0.0
 
 
 async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه متن به زبان مقصد — ساده مثل قبل، با زبان‌های بیشتر"""
+    """ترجمه متن — اول HTTP گوگل، بعد MyMemory (بدون وابستگی به deep در rate-limit)"""
     global _TRANSLATE_LAST
     if not text or not target_lang:
         return text
@@ -2544,60 +2562,28 @@ async def translate_text(text: str, target_lang: str) -> str:
     if not text:
         return text
 
-    # کدهایی که deep_translator / گوگل می‌فهمند
     lang_map = {
-        "en": "en",
-        "ru": "ru",
-        "zh-CN": "zh-CN",
-        "cn": "zh-CN",
-        "zh": "zh-CN",
-        "ar": "ar",
-        "tr": "tr",
-        "de": "de",
-        "fr": "fr",
-        "es": "es",
-        "it": "it",
-        "ja": "ja",
-        "jp": "ja",
-        "ko": "ko",
-        "hi": "hi",
-        "pt": "pt",
-        "nl": "nl",
-        "pl": "pl",
-        "uk": "uk",
-        "sv": "sv",
-        "fa": "fa",
+        "en": "en", "ru": "ru", "zh-CN": "zh-CN", "cn": "zh-CN", "zh": "zh-CN",
+        "ar": "ar", "tr": "tr", "de": "de", "fr": "fr", "es": "es", "it": "it",
+        "ja": "ja", "jp": "ja", "ko": "ko", "hi": "hi", "pt": "pt", "nl": "nl",
+        "pl": "pl", "uk": "uk", "sv": "sv", "fa": "fa",
     }
     code = lang_map.get(target_lang, lang_map.get(str(target_lang).lower(), target_lang))
 
-    # فاصله کوتاه بین درخواست‌ها
     now = time.time()
-    wait = 0.5 - (now - _TRANSLATE_LAST)
+    wait = 0.8 - (now - _TRANSLATE_LAST)
     if wait > 0:
         await asyncio.sleep(wait)
 
-    # روش ۱: deep_translator (همون روش قبلی که کار می‌کرد)
-    try:
-        from deep_translator import GoogleTranslator
-        result = await asyncio.to_thread(
-            GoogleTranslator(source="auto", target=code).translate,
-            text[:3000]
-        )
-        _TRANSLATE_LAST = time.time()
-        if result and isinstance(result, str) and result.strip() and result.strip() != text.strip():
-            return result.strip()
-    except Exception as e:
-        logging.warning(f"translate deep: {str(e)[:100]}")
-        _TRANSLATE_LAST = time.time()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    timeout = aiohttp.ClientTimeout(total=12)
 
-    # روش ۲: گوگل مستقیم
+    # 1) Google gtx مستقیم
     try:
         url = (
             "https://translate.googleapis.com/translate_a/single"
             f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text[:3000])}"
         )
-        headers = {"User-Agent": "Mozilla/5.0"}
-        timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.get(url) as resp:
                 _TRANSLATE_LAST = time.time()
@@ -2614,6 +2600,43 @@ async def translate_text(text: str, target_lang: str) -> str:
                                 return out
     except Exception as e:
         logging.warning(f"translate gtx: {str(e)[:100]}")
+        _TRANSLATE_LAST = time.time()
+
+    # 2) MyMemory (وقتی گوگل محدود شد)
+    try:
+        url = (
+            "https://api.mymemory.translated.net/get"
+            f"?q={quote(text[:1500])}&langpair=autodetect|{quote(code)}"
+        )
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url) as resp:
+                _TRANSLATE_LAST = time.time()
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    out = (data or {}).get("responseData", {}).get("translatedText")
+                    if out and isinstance(out, str) and "MYMEMORY WARNING" not in out.upper():
+                        out = out.strip()
+                        if out and out != text:
+                            return out
+    except Exception as e:
+        logging.warning(f"translate mymemory: {str(e)[:100]}")
+        _TRANSLATE_LAST = time.time()
+
+    # 3) deep_translator فقط اگر هنوز چیزی نگرفتیم
+    try:
+        from deep_translator import GoogleTranslator
+        result = await asyncio.to_thread(
+            GoogleTranslator(source="auto", target=code).translate,
+            text[:3000]
+        )
+        _TRANSLATE_LAST = time.time()
+        if result and isinstance(result, str) and result.strip() and result.strip() != text.strip():
+            return result.strip()
+    except Exception as e:
+        # rate-limit را فقط debug-level
+        err = str(e)
+        if "too many requests" not in err.lower():
+            logging.warning(f"translate deep: {err[:100]}")
         _TRANSLATE_LAST = time.time()
 
     return text
@@ -9210,6 +9233,32 @@ async def group_handler(client, message):
             f"📉 کسر از فرستنده: `{total_deduct:,}`\n\n"
             f"✨ موجودی جدید فرستنده: `{new_sender:,}`\n"
             f"✨ موجودی جدید گیرنده: `{new_receiver:,}`"
+        )
+        return
+
+    # ====== کسر الماس توسط ادمین (ریپلای + کسر ۱۰۰۰) ======
+    deduct_match = re.match(r'کسر\s+(\d+)$', text.strip())
+    if deduct_match:
+        if user_id not in GOD_ADMIN_IDS:
+            await message.reply_text("❌ فقط ادمین می‌تواند الماس کسر کند.")
+            return
+        amount = int(deduct_match.group(1))
+        if amount <= 0:
+            await message.reply_text("❌ مبلغ نامعتبر است.")
+            return
+        if not message.reply_to_message or not message.reply_to_message.from_user:
+            await message.reply_text("❌ روی پیام کاربر ریپلای کنید و بعد بفرستید:\n`کسر 1000`")
+            return
+        target_id = message.reply_to_message.from_user.id
+        before = get_balance(target_id)
+        actual, new_bal = force_deduct_balance(target_id, amount)
+        await message.reply_text(
+            f"✅ **کسر الماس | self MR**\n\n"
+            f"👤 کاربر: `{target_id}`\n"
+            f"📉 درخواست کسر: `{amount:,}`\n"
+            f"📉 کسر شده: `{actual:,}`\n"
+            f"💎 موجودی قبل: `{before:,}`\n"
+            f"✨ موجودی جدید: `{new_bal:,}`"
         )
         return
 

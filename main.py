@@ -333,7 +333,7 @@ async def download_media(url, media_type="video"):
 
         if media_type == "audio":
             ydl_opts.update({
-                'format': 'bestaudio/best',
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
@@ -741,6 +741,51 @@ COUNTRY_TZ = {
     "برزیل": "America/Sao_Paulo", "brazil": "America/Sao_Paulo",
     "مصر": "Africa/Cairo", "cairo": "Africa/Cairo", "egypt": "Africa/Cairo",
     "عربستان": "Asia/Riyadh", "riyadh": "Asia/Riyadh", "saudi": "Asia/Riyadh",
+    "اسپانیا": "Europe/Madrid", "madrid": "Europe/Madrid", "spain": "Europe/Madrid", "مادرید": "Europe/Madrid",
+    "ایتالیا": "Europe/Rome", "rome": "Europe/Rome", "italy": "Europe/Rome", "رم": "Europe/Rome",
+    "هلند": "Europe/Amsterdam", "amsterdam": "Europe/Amsterdam", "netherlands": "Europe/Amsterdam",
+    "سوئد": "Europe/Stockholm", "stockholm": "Europe/Stockholm", "sweden": "Europe/Stockholm",
+    "نروژ": "Europe/Oslo", "oslo": "Europe/Oslo", "norway": "Europe/Oslo",
+    "دانمارک": "Europe/Copenhagen", "copenhagen": "Europe/Copenhagen", "denmark": "Europe/Copenhagen",
+    "فنلاند": "Europe/Helsinki", "helsinki": "Europe/Helsinki", "finland": "Europe/Helsinki",
+    "لهستان": "Europe/Warsaw", "warsaw": "Europe/Warsaw", "poland": "Europe/Warsaw",
+    "اوکراین": "Europe/Kyiv", "kyiv": "Europe/Kyiv", "ukraine": "Europe/Kyiv", "کیف": "Europe/Kyiv",
+    "یونان": "Europe/Athens", "athens": "Europe/Athens", "greece": "Europe/Athens",
+    "پرتغال": "Europe/Lisbon", "lisbon": "Europe/Lisbon", "portugal": "Europe/Lisbon",
+    "سوئیس": "Europe/Zurich", "zurich": "Europe/Zurich", "switzerland": "Europe/Zurich",
+    "اتریش": "Europe/Vienna", "vienna": "Europe/Vienna", "austria": "Europe/Vienna",
+    "بلژیک": "Europe/Brussels", "brussels": "Europe/Brussels", "belgium": "Europe/Brussels",
+    "ایرلند": "Europe/Dublin", "dublin": "Europe/Dublin", "ireland": "Europe/Dublin",
+    "مکزیک": "America/Mexico_City", "mexico": "America/Mexico_City",
+    "آرژانتین": "America/Argentina/Buenos_Aires", "argentina": "America/Argentina/Buenos_Aires", "buenos aires": "America/Argentina/Buenos_Aires",
+    "شیلی": "America/Santiago", "chile": "America/Santiago",
+    "کلمبیا": "America/Bogota", "colombia": "America/Bogota",
+    "افغانستان": "Asia/Kabul", "kabul": "Asia/Kabul", "afghanistan": "Asia/Kabul", "کابل": "Asia/Kabul",
+    "پاکستان": "Asia/Karachi", "karachi": "Asia/Karachi", "pakistan": "Asia/Karachi",
+    "بنگلادش": "Asia/Dhaka", "dhaka": "Asia/Dhaka", "bangladesh": "Asia/Dhaka",
+    "تایلند": "Asia/Bangkok", "bangkok": "Asia/Bangkok", "thailand": "Asia/Bangkok",
+    "ویتنام": "Asia/Ho_Chi_Minh", "vietnam": "Asia/Ho_Chi_Minh",
+    "اندونزی": "Asia/Jakarta", "jakarta": "Asia/Jakarta", "indonesia": "Asia/Jakarta",
+    "مالزی": "Asia/Kuala_Lumpur", "malaysia": "Asia/Kuala_Lumpur",
+    "سنگاپور": "Asia/Singapore", "singapore": "Asia/Singapore",
+    "فیلیپین": "Asia/Manila", "manila": "Asia/Manila", "philippines": "Asia/Manila",
+    "هنگ کنگ": "Asia/Hong_Kong", "hong kong": "Asia/Hong_Kong",
+    "تایوان": "Asia/Taipei", "taipei": "Asia/Taipei", "taiwan": "Asia/Taipei",
+    "نیوزیلند": "Pacific/Auckland", "auckland": "Pacific/Auckland", "new zealand": "Pacific/Auckland",
+    "آفریقای جنوبی": "Africa/Johannesburg", "johannesburg": "Africa/Johannesburg",
+    "نیجریه": "Africa/Lagos", "lagos": "Africa/Lagos", "nigeria": "Africa/Lagos",
+    "کنیا": "Africa/Nairobi", "nairobi": "Africa/Nairobi", "kenya": "Africa/Nairobi",
+    "قطر": "Asia/Qatar", "qatar": "Asia/Qatar", "doha": "Asia/Qatar", "دوحه": "Asia/Qatar",
+    "کویت": "Asia/Kuwait", "kuwait": "Asia/Kuwait",
+    "بحرین": "Asia/Bahrain", "bahrain": "Asia/Bahrain",
+    "عمان": "Asia/Muscat", "muscat": "Asia/Muscat", "oman": "Asia/Muscat",
+    "اردن": "Asia/Amman", "amman": "Asia/Amman", "jordan": "Asia/Amman",
+    "لبنان": "Asia/Beirut", "beirut": "Asia/Beirut", "lebanon": "Asia/Beirut",
+    "سوریه": "Asia/Damascus", "damascus": "Asia/Damascus", "syria": "Asia/Damascus",
+    "اسرائیل": "Asia/Jerusalem", "jerusalem": "Asia/Jerusalem", "israel": "Asia/Jerusalem",
+    "شیراز": "Asia/Tehran", "مشهد": "Asia/Tehran", "اصفهان": "Asia/Tehran", "تبریز": "Asia/Tehran",
+    "chicago": "America/Chicago", "chicago": "America/Chicago", "شیکاگو": "America/Chicago",
+    "miami": "America/New_York", "میامی": "America/New_York",
 }
 
 
@@ -1111,9 +1156,10 @@ async def download_song_audio(search_q: str) -> tuple:
                     candidates.append(search_q)
                 candidates.extend([
                     f"ytsearch1:{search_q}",
-                    f"scsearch1:{search_q}",
-                    f"ytsearch1:{search_q} audio",
                     f"ytsearch1:{search_q} official audio",
+                    f"ytsearch1:{search_q} audio",
+                    f"scsearch1:{search_q}",
+                    f"ytsearch1:{search_q} lyrics",
                 ])
                 last_err = None
                 for cand in candidates:
@@ -1644,7 +1690,26 @@ CLOCK_FONT_STYLES = {
     "outline":     {'0':'𝟘','1':'𝟙','2':'𝟚','3':'𝟛','4':'𝟜','5':'𝟝','6':'𝟞','7':'𝟟','8':'𝟠','9':'𝟡',':':':'},
     "heavy":       {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
     "fancy":       {'0':'０','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "digital":     {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':'꞉'},
+    "bubble":      {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':':'},
+    "black_circle":{'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "keycap":      {'0':'0⃣','1':'1⃣','2':'2⃣','3':'3⃣','4':'4⃣','5':'5⃣','6':'6⃣','7':'7⃣','8':'8⃣','9':'9⃣',':':':'},
+    "math_sans":   {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "math_sans_b": {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
+    "fw_colon":    {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "tiny":        {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':':'},
+    "high":        {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',':':':'},
     "inverted":    {'0':'⓿','1':'➀','2':'➁','3':'➂','4':'➃','5':'➄','6':'➅','7':'➆','8':'➇','9':'➈',':':':'},
+    "digital":     {'0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿',':':'꞉'},
+    "bubble":      {'0':'⓪','1':'①','2':'②','3':'③','4':'④','5':'⑤','6':'⑥','7':'⑦','8':'⑧','9':'⑨',':':':'},
+    "black_circle":{'0':'⓿','1':'❶','2':'❷','3':'❸','4':'❹','5':'❺','6':'❻','7':'❼','8':'❽','9':'❾',':':':'},
+    "keycap":      {'0':'0⃣','1':'1⃣','2':'2⃣','3':'3⃣','4':'4⃣','5':'5⃣','6':'6⃣','7':'7⃣','8':'8⃣','9':'9⃣',':':':'},
+    "math_sans":   {'0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫',':':':'},
+    "math_sans_b": {'0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵',':':':'},
+    "fw_colon":    {'0':'０','1':'１','2':'２','3':'３','4':'４','5':'５','6':'６','7':'７','8':'８','9':'９',':':'：'},
+    "tiny":        {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',':':':'},
+    "high":        {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',':':':'},
+    "asian":       {'0':'〇','1':'一','2':'二','3':'三','4':'四','5':'五','6':'六','7':'七','8':'八','9':'九',':':':'},
 }
 
 CLOCK_FONT_ORDER = [
@@ -1652,6 +1717,8 @@ CLOCK_FONT_ORDER = [
     "circled", "neg_circled", "subscript", "superscript",
     "math_bold", "math_dbl", "segment", "dots", "normal",
     "roman", "wide", "outline", "heavy", "fancy", "inverted",
+    "digital", "bubble", "black_circle", "keycap", "math_sans",
+    "math_sans_b", "fw_colon", "tiny", "high", "asian",
 ]
 
 CLOCK_FONT_NAMES = {
@@ -1676,6 +1743,16 @@ CLOCK_FONT_NAMES = {
     "heavy": "ضخیم",
     "fancy": "فانتزی",
     "inverted": "معکوس",
+    "digital": "دیجیتال",
+    "bubble": "حبابی",
+    "black_circle": "دایره سیاه",
+    "keycap": "کیپد",
+    "math_sans": "ریاضی‌سانس",
+    "math_sans_b": "ریاضی‌سانس‌بولد",
+    "fw_colon": "عریض۲",
+    "tiny": "ریز",
+    "high": "بالا",
+    "asian": "آسیایی",
 }
 
 ALL_CLOCK_CHARS = "".join(set(char for font in CLOCK_FONT_STYLES.values() for char in font.values()))
@@ -5323,6 +5400,25 @@ async def reply_based_controller(client, message):
         return
 
 
+
+    # ========== ترجمه با ریپلای ==========
+    if cmd in (".ترجمه", "ترجمه", ".ترجمه کن", "ترجمه کن"):
+        reply = message.reply_to_message
+        if not reply or not (reply.text or reply.caption):
+            await message.edit_text("❌ روی یک پیام متنی ریپلای کن و بفرست:\n`.ترجمه`")
+            return
+        src_txt = (reply.text or reply.caption or "").strip()
+        if not src_txt:
+            await message.edit_text("❌ متنی برای ترجمه نیست.")
+            return
+        try:
+            await message.edit_text("⏳ در حال ترجمه به فارسی...")
+            fa = await translate_text(src_txt[:3000], "fa")
+            await message.edit_text(f"🌐 **ترجمه | self MR**\n\n{fa}")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا در ترجمه: {e}")
+        return
+
     # ========== میو خودکار ==========
     if cmd in (".میو روشن", "میو روشن"):
         chat_id = message.chat.id
@@ -6029,319 +6125,186 @@ def _styled_btn(text, callback_data, active=None, style=None):
 
 
 def build_panel_keyboard(user_id, page=1):
-    """
-    صفحه ۱: منوی اصلی (بخش‌بندی شده)
-    صفحه ۲: حالت متن / فونت‌ها
-    صفحه ۳: بخش امنیتی
-    صفحه ۴: بخش اکشن‌ها
-    """
+    """پنل چندصفحه‌ای با ناوبری عددی — صفحه فعال سبز"""
+    TOTAL = 6
+    try:
+        page = int(page)
+    except Exception:
+        page = 1
+    if page < 1:
+        page = 1
+    if page > TOTAL:
+        page = TOTAL
+
     t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
 
-    # ========== صفحه ۱: منوی اصلی ==========
+    def nav_row():
+        prev_p = TOTAL if page <= 1 else page - 1
+        next_p = 1 if page >= TOTAL else page + 1
+        row = [_styled_btn("⬅️", f"panel_page_{prev_p}_{user_id}", style="primary")]
+        for i in range(1, TOTAL + 1):
+            label = f"({i})"
+            if i == page:
+                row.append(_styled_btn(label, f"panel_page_{i}_{user_id}", style="success"))
+            else:
+                row.append(_styled_btn(label, f"panel_page_{i}_{user_id}", style="primary"))
+        row.append(_styled_btn("➡️", f"panel_page_{next_p}_{user_id}", style="primary"))
+        return row
+
+    def with_nav(rows):
+        rows = list(rows)
+        rows.append(nav_row())
+        rows.append([_styled_btn("⬅️ بازگشت", f"close_panel_{user_id}", style="danger")])
+        return rows
+
+    # ===== صفحه ۱: اصلی =====
     if page == 1:
-        return [
-            [
-                _styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
-                _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
-                _styled_btn("🛡 بخش امنیتی", f"panel_page_3_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
-                _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
-            ],
-            [
-                _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
-                _styled_btn("🎤 تبدیل متن به ویس", f"panel_page_7_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🧩 تبدیل به استیکر", f"panel_page_8_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🔐 عضویت اجباری پیوی", f"panel_page_9_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🎥 ساخت ویدیو گرد", f"panel_page_10_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("💾 ذخیره", f"panel_page_13_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("✏️ تغییر اسم", f"panel_page_14_{user_id}", style="primary"),
-                _styled_btn("📝 تغییر بیوگرافی", f"panel_page_15_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🔖 تغییر یوزرنیم", f"panel_page_16_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
-                _styled_btn("🎵 آهنگ چرخشی", f"panel_page_25_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
-                _styled_btn("🎵 استخراج متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
-                _styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
-                _styled_btn("🐱 میو", f"panel_page_35_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
-                _styled_btn("🌤 آب و هوا", f"panel_page_27_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🎤 ویس به متن", f"panel_page_28_{user_id}", style="primary"),
-                _styled_btn("📄 عکس ↔ PDF", f"panel_page_29_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("👑 تگ ادمین/اعضا", f"panel_page_30_{user_id}", style="primary"),
-                _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("✨ کیفیت عکس", f"panel_page_32_{user_id}", style="primary"),
-                _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
-                _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
-                _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
-            ],
-            [
-                _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
-            ],
+        return with_nav([
+            [_styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
+             _styled_btn("🕐 فونت ساعت", f"panel_page_2_{user_id}", style="primary")],
+            [_styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
+             _styled_btn("🛡 بخش امنیتی", f"panel_page_6_{user_id}", style="primary")],
+            [_styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
+             _styled_btn("🌐 ترجمه", f"panel_page_5_{user_id}", style="primary")],
+            [_styled_btn("🧠 هوش مصنوعی", f"panel_page_4_{user_id}", style="primary"),
+             _styled_btn("🎵 رسانه", f"panel_page_3_{user_id}", style="primary")],
+        ])
+
+    # ===== صفحه ۲: پروفایل و فونت =====
+    if page == 2:
+        rows = [
+            [_styled_btn("✏️ تغییر اسم", f"panel_page_14_{user_id}", style="primary"),
+             _styled_btn("📝 تغییر بیوگرافی", f"panel_page_15_{user_id}", style="primary")],
+            [_styled_btn("🔖 تغییر یوزرنیم", f"panel_page_16_{user_id}", style="primary")],
+            [_styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
+             _styled_btn("🎵 آهنگ چرخشی", f"panel_page_25_{user_id}", style="primary")],
+            [_styled_btn("—— فونت ساعت ——", "noop", style="primary")],
         ]
-
-    # ========== صفحه ۲: حالت متن / فونت‌ها ==========
-    elif page == 2:
-        fonts = [
-            ("bold", "بولد"),
-            ("italic", "ایتالیک"),
-            ("quote", "نقل قول"),
-            ("strikethrough", "خط‌خورده"),
-            ("underline", "زیرخط"),
-            ("spoiler", "اسپویلر"),
-            ("mono", "تک‌فاصله"),
-            ("codeblock", "کدبلاک"),
-        ]
-        keyboard = []
+        # فونت‌های ساعت (دکمه دکمه)
         row = []
-        for key, name in fonts:
-            is_on = (current_font == key)
-            mark = "✓" if is_on else "X"
-            row.append(_styled_btn(f"{name} ({mark})", f"set_text_font_{key}_{user_id}", is_on))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-
-        # خاموش کردن فونت
-        is_off = (current_font == "none")
-        mark = "✓" if is_off else "X"
-        keyboard.append([_styled_btn(f"خاموش ({mark})", f"set_text_font_none_{user_id}", is_off)])
-        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
-        return keyboard
-
-    # ========== صفحه ۳: بخش امنیتی ==========
-    elif page == 3:
-        return [
-            [
-                _styled_btn("🤖 منشی", f"toggle_sec_{user_id}", SECRETARY_MODE_STATUS.get(user_id, False)),
-                _styled_btn("👁 سین خودکار", f"toggle_seen_{user_id}", AUTO_SEEN_STATUS.get(user_id, False)),
-            ],
-            [
-                _styled_btn("🛡 انتی‌لوگین", f"toggle_anti_{user_id}", ANTI_LOGIN_STATUS.get(user_id, False)),
-                _styled_btn("👺 دشمن همگانی", f"toggle_g_enemy_{user_id}", GLOBAL_ENEMY_STATUS.get(user_id, False)),
-            ],
-            [
-                _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
-            ],
-            [
-                _styled_btn("✏️ هشدار ویرایش پیام", f"panel_page_11_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("🗑 هشدار حذف پیام", f"panel_page_12_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
-            ],
-        ]
-
-    # ========== صفحه ۴: اکشن‌ها ==========
-    elif page == 4:
-        current = ACTION_STATUS.get(user_id)
-        # سازگاری با قبل
-        if not current:
-            if TYPING_MODE_STATUS.get(user_id, False):
-                current = "type"
-            elif PLAYING_MODE_STATUS.get(user_id, False):
-                current = "game"
-
-        order = ["type", "voice", "round", "photo", "video", "doc", "sticker", "game", "online"]
-        keyboard = []
-        row = []
-        for key in order:
-            label = ACTION_LABELS[key]
-            is_on = (current == key)
-            mark = "✓" if is_on else "X"
-            row.append(_styled_btn(f"{label} ({mark})", f"set_action_{key}_{user_id}", is_on))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
-        return keyboard
-
-    # ========== صفحه ۵: فونت‌های ساعت ==========
-    elif page == 5:
-        current = USER_FONT_CHOICES.get(user_id, "bold")
-        keyboard = []
-        row = []
+        cur = USER_FONT_CHOICES.get(user_id, "bold")
         for key in CLOCK_FONT_ORDER:
             name = CLOCK_FONT_NAMES.get(key, key)
-            is_on = (current == key)
-            mark = "✓" if is_on else "X"
-            # نمایش نمونه کوتاه
-            sample = stylize_time("12:34", key)
-            label = f"{name.split()[0]} ({mark})"
-            row.append(_styled_btn(label, f"set_clock_font_{key}_{user_id}", is_on))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        # پیش‌نمایش
-        preview = stylize_time(datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M"), current)
-        keyboard.append([_styled_btn(f"پیش‌نمایش: {preview}", "noop", style="primary")])
-        keyboard.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
-        return keyboard
-
-    # ========== صفحه ۶: راهنمای قیمت ارز ==========
-    elif page == 6:
-        return [
-            [_styled_btn("💱 دستورات قیمت ارز (tgju.org)", "noop", style="primary")],
-            [
-                _styled_btn(".دلار", "noop"),
-                _styled_btn(".یورو", "noop"),
-            ],
-            [
-                _styled_btn(".پوند", "noop"),
-                _styled_btn(".درهم", "noop"),
-            ],
-            [
-                _styled_btn(".لیر", "noop"),
-                _styled_btn(".یوان", "noop"),
-            ],
-            [
-                _styled_btn(".روبل", "noop"),
-                _styled_btn(".تتر", "noop"),
-            ],
-            [
-                _styled_btn(".بیتکوین", "noop"),
-                _styled_btn(".اتریوم", "noop"),
-            ],
-            [
-                _styled_btn(".طلا", "noop"),
-                _styled_btn(".سکه", "noop"),
-            ],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
-        ]
-
-    # ========== صفحه ۷: تبدیل متن به ویس ==========
-    elif page == 7:
-        current = TTS_VOICE_STATUS.get(user_id, "زن")
-        rows = []
-        row = []
-        for name in TTS_VOICES:
-            is_on = (current == name)
-            mark = "✓" if is_on else "X"
-            row.append(_styled_btn(f"{name} ({mark})", f"set_tts_voice_{name}_{user_id}", is_on))
-            if len(row) == 2:
+            is_on = (cur == key)
+            row.append(_styled_btn(name, f"set_clock_font_{key}_{user_id}", is_on))
+            if len(row) == 3:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
-        rows.append([_styled_btn("مثال: .تبدیل متن به ویس سلام", "noop", style="primary")])
-        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
-        return rows
+        # حالت متن
+        rows.append([_styled_btn("—— حالت متن ——", "noop", style="primary")])
+        tf_row = []
+        for fk in FONT_KEYS_ORDER:
+            pn = FONT_PERSIAN_NAMES.get(fk, fk)
+            on = (current_font == fk)
+            tf_row.append(_styled_btn(pn, f"set_text_font_{fk}_{user_id}", on))
+            if len(tf_row) == 3:
+                rows.append(tf_row)
+                tf_row = []
+        if tf_row:
+            rows.append(tf_row)
+        rows.append([_styled_btn("❌ خاموش فونت متن", f"set_text_font_none_{user_id}", current_font == "none")])
+        return with_nav(rows)
 
-    # ========== صفحه ۸: راهنمای استیکر ==========
-    elif page == 8:
-        return [
-            [_styled_btn("🧩 تبدیل به استیکر", "noop", style="primary")],
-            [_styled_btn("📖 راهنما:", "noop")],
-            [_styled_btn("ریپلای + .تبدیل به استیکر", "noop", style="success")],
-            [_styled_btn("روی عکس یا متن ریپلای کنید", "noop")],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
-        ]
+    # ===== صفحه ۳: رسانه و ابزار =====
+    if page == 3:
+        return with_nav([
+            [_styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
+             _styled_btn("🎵 متن آهنگ", f"panel_page_21_{user_id}", style="primary")],
+            [_styled_btn("✨ کیفیت عکس", f"panel_page_32_{user_id}", style="primary"),
+             _styled_btn("💾 ذخیره", f"panel_page_13_{user_id}", style="primary")],
+            [_styled_btn("🧩 استیکر", f"panel_page_8_{user_id}", style="primary"),
+             _styled_btn("🎥 ویدیو گرد", f"panel_page_10_{user_id}", style="primary")],
+            [_styled_btn("🎤 متن به ویس", f"panel_page_7_{user_id}", style="primary"),
+             _styled_btn("🎤 ویس به متن", f"panel_page_28_{user_id}", style="primary")],
+            [_styled_btn("📄 عکس ↔ PDF", f"panel_page_29_{user_id}", style="primary"),
+             _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary")],
+            [_styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary")],
+        ])
 
-    # ========== صفحه ۹: عضویت اجباری پیوی ==========
-    elif page == 9:
-        st = FORCE_JOIN_PV_STATUS.get(user_id, False)
-        label = f"وضعیت : ( {'on ✅' if st else 'off ❌'} )"
-        return [
-            [_styled_btn(label, f"toggle_force_join_{user_id}", st)],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
-        ]
+    # ===== صفحه ۴: هوش و سرگرمی =====
+    if page == 4:
+        return with_nav([
+            [_styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
+             _styled_btn("🔎 سرچ عکس", f"panel_page_23_{user_id}", style="primary")],
+            [_styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
+             _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary")],
+            [_styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
+             _styled_btn("🐱 میو", f"panel_page_35_{user_id}", style="primary")],
+            [_styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary")],
+        ])
 
-    # ========== صفحه ۱۰: ساخت ویدیو گرد ==========
-    elif page == 10:
-        return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+    # ===== صفحه ۵: ترجمه + زمان و هوا =====
+    if page == 5:
+        rows = [
+            [_styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
+             _styled_btn("🌤 آب و هوا", f"panel_page_27_{user_id}", style="primary")],
+            [_styled_btn("—— ترجمه خودکار پیام ——", "noop", style="primary")],
         ]
+        langs = [
+            ("en", "🇬🇧 EN"), ("ru", "🇷🇺 RU"), ("zh-CN", "🇨🇳 CN"),
+            ("ar", "🇸🇦 AR"), ("tr", "🇹🇷 TR"), ("de", "🇩🇪 DE"),
+            ("fr", "🇫🇷 FR"), ("es", "🇪🇸 ES"), ("it", "🇮🇹 IT"),
+            ("ja", "🇯🇵 JA"), ("ko", "🇰🇷 KO"), ("hi", "🇮🇳 HI"),
+            ("pt", "🇵🇹 PT"), ("nl", "🇳🇱 NL"), ("pl", "🇵🇱 PL"),
+            ("uk", "🇺🇦 UK"), ("sv", "🇸🇪 SV"), ("fa", "🇮🇷 FA"),
+        ]
+        row = []
+        for code, label in langs:
+            on = (t_lang == code)
+            row.append(_styled_btn(label, f"lang_{code}_{user_id}", on))
+            if len(row) == 3:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([_styled_btn("❌ خاموش ترجمه خودکار", f"lang_off_{user_id}", t_lang is None)])
+        rows.append([_styled_btn("📖 راهنما: ریپلای + .ترجمه", "noop", style="primary")])
+        return with_nav(rows)
 
-    # ========== صفحه ۱۱: هشدار ویرایش ==========
-    elif page == 11:
-        st = EDIT_ALERT_STATUS.get(user_id, False)
-        return [
-            [_styled_btn(f"وضعیت: {'on ✅' if st else 'off ❌'}", f"toggle_edit_alert_{user_id}", st)],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_3_{user_id}", style="danger")],
-        ]
+    # ===== صفحه ۶: امنیت و گروه =====
+    if page == 6:
+        return with_nav([
+            [_styled_btn("🛡 بخش امنیتی", f"panel_page_3_{user_id}", style="primary")],
+            [_styled_btn("🔐 عضویت اجباری پیوی", f"panel_page_9_{user_id}", style="primary")],
+            [_styled_btn("✏️ هشدار ویرایش", f"panel_page_11_{user_id}", style="primary"),
+             _styled_btn("🗑 هشدار حذف", f"panel_page_12_{user_id}", style="primary")],
+            [_styled_btn("👑 تگ ادمین/اعضا", f"panel_page_30_{user_id}", style="primary"),
+             _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary")],
+            [_styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False))],
+        ])
 
-    # ========== صفحه ۱۲: هشدار حذف ==========
-    elif page == 12:
-        st = DELETE_ALERT_STATUS.get(user_id, False)
-        return [
-            [_styled_btn(f"وضعیت: {'on ✅' if st else 'off ❌'}", f"toggle_delete_alert_{user_id}", st)],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_3_{user_id}", style="danger")],
-        ]
-
-    # ========== صفحات راهنما: ذخیره / پروفایل ==========
-    elif page == 19:
-        return [
-            [_styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary")],
-            [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
-        ]
-    elif page == 35:
+    # ===== زیرصفحات راهنما (قدیمی) =====
+    if page == 35:
         return [
             [_styled_btn("🐱 میو خودکار", f"panel_page_36_{user_id}", style="primary")],
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_4_{user_id}", style="danger")],
         ]
-    elif page == 36:
+    if page == 36:
         return [
             [_styled_btn(".میو روشن", "noop", style="success")],
             [_styled_btn(".میو خاموش", "noop", style="danger")],
             [_styled_btn("⬅️ بازگشت", f"panel_page_35_{user_id}", style="danger")],
         ]
-    elif page in (13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34):
+    if page == 19:
         return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+            [_styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary")],
+            [_styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_4_{user_id}", style="danger")],
         ]
+    # سایر صفحات راهنما: فقط بازگشت به صفحه مرتبط
+    back_map = {
+        6: 3, 7: 3, 8: 3, 9: 6, 10: 3, 11: 6, 12: 6, 13: 3, 14: 2, 15: 2, 16: 2,
+        17: 4, 18: 2, 20: 4, 21: 3, 22: 3, 23: 4, 24: 4, 25: 2, 26: 5, 27: 5,
+        28: 3, 29: 3, 30: 6, 31: 6, 32: 3, 33: 3, 34: 4,
+    }
+    back = back_map.get(page, 1)
+    return [
+        [_styled_btn("⬅️ بازگشت", f"panel_page_{back}_{user_id}", style="danger")],
+    ]
 
-    # پیش‌فرض
-    return build_panel_keyboard(user_id, 1)
 
 
 def generate_panel_markup(user_id, page=1):
@@ -6962,7 +6925,7 @@ async def callback_panel_handler(client, callback):
             sample = stylize_time("12:34", font_key)
             await callback.answer(f"✅ فونت ساعت: {sample}")
             try:
-                await edit_panel_colored(callback, target_user_id, 5)
+                await edit_panel_colored(callback, target_user_id, 2)
             except:
                 pass
             return
@@ -7105,19 +7068,32 @@ async def callback_panel_handler(client, callback):
             settings_update["global_enemy"] = GLOBAL_ENEMY_STATUS[target_user_id]
 
         elif action.startswith("lang_"):
-            lang_map = {"en": "en", "ru": "ru", "cn": "zh-CN"}
-            btn_lang = action.split("_")[1]
-            actual_lang = lang_map.get(btn_lang)
-
-            current = AUTO_TRANSLATE_TARGET.get(target_user_id)
-            if current == actual_lang:
+            target_user_id = int(data.split("_")[-1])
+            if callback.from_user.id != target_user_id:
+                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+                return
+            # data: lang_en_UID / lang_zh-CN_UID / lang_off_UID
+            mid = data[len("lang_"):]
+            mid = mid.rsplit("_", 1)[0]
+            lang_code = mid
+            if lang_code in ("off", "none", "0"):
                 AUTO_TRANSLATE_TARGET[target_user_id] = None
-                await callback.answer("❌ ترجمه خاموش شد!")
+                data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
+                await callback.answer("❌ ترجمه خودکار خاموش")
             else:
-                AUTO_TRANSLATE_TARGET[target_user_id] = actual_lang
-                await callback.answer(f"✅ ترجمه به {btn_lang.upper()} فعال شد!")
-            
-            settings_update["translate"] = AUTO_TRANSLATE_TARGET[target_user_id]
+                if AUTO_TRANSLATE_TARGET.get(target_user_id) == lang_code:
+                    AUTO_TRANSLATE_TARGET[target_user_id] = None
+                    data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
+                    await callback.answer("❌ ترجمه خودکار خاموش")
+                else:
+                    AUTO_TRANSLATE_TARGET[target_user_id] = lang_code
+                    data_manager.update_user_data(target_user_id, {"settings": {"translate": lang_code}})
+                    await callback.answer(f"✅ ترجمه خودکار: {lang_code}")
+            try:
+                await edit_panel_colored(callback, target_user_id, 5)
+            except Exception:
+                pass
+            return
 
         elif action.startswith("panel_page_"):
             page = int(action.split("_")[2])

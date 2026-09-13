@@ -2767,29 +2767,38 @@ async def outgoing_message_modifier(client, message):
                 logging.info(f"✅ FONT entities OK uid={user_id} font={text_font}")
                 return
         except Exception as e:
-            logging.error(f"FONT entities fail: {e}")
+            err = str(e)
+            if "MESSAGE_NOT_MODIFIED" not in err and "not modified" not in err.lower():
+                logging.warning(f"FONT entities fail: {err[:120]}")
 
         # --- روش ۲: HTML ---
         try:
             styled = apply_telegram_style(body, text_font)
-            await client.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=message.id,
-                text=styled,
-                parse_mode=ParseMode.HTML,
-            )
-            logging.info(f"✅ FONT html OK uid={user_id} font={text_font}")
-            return
+            if styled and styled != body:
+                await client.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=message.id,
+                    text=styled,
+                    parse_mode=ParseMode.HTML,
+                )
+                logging.info(f"✅ FONT html OK uid={user_id} font={text_font}")
+                return
+            # اگر استایل متن را عوض نکرد، با entities همین متن را امتحان کردیم
         except Exception as e:
-            logging.error(f"FONT html fail: {e}")
+            err = str(e)
+            if "MESSAGE_NOT_MODIFIED" not in err and "not modified" not in err.lower():
+                logging.warning(f"FONT html fail: {err[:120]}")
 
         # --- روش ۳: message.edit_text ---
         try:
             styled = apply_telegram_style(body, text_font)
-            await message.edit_text(styled, parse_mode=ParseMode.HTML)
-            logging.info(f"✅ FONT message.edit OK uid={user_id}")
+            if styled and styled != text:
+                await message.edit_text(styled, parse_mode=ParseMode.HTML)
+                logging.info(f"✅ FONT message.edit OK uid={user_id}")
         except Exception as e:
-            logging.error(f"FONT message.edit fail: {e}")
+            err = str(e)
+            if "MESSAGE_NOT_MODIFIED" not in err and "not modified" not in err.lower():
+                logging.warning(f"FONT message.edit fail: {err[:120]}")
     except Exception as e:
         logging.error(f"outgoing_message_modifier: {e}")
 

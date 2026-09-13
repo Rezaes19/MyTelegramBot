@@ -2529,29 +2529,60 @@ ACTION_LABELS = {
 
 
 async def translate_text(text: str, target_lang: str) -> str:
+    """ترجمه متن به زبان مقصد — کد زبان مثل en/fa/ru/zh-CN"""
     if not text or not target_lang:
         return text
-    lang_map = {"en": "english", "ru": "russian", "zh-CN": "chinese (simplified)"}
-    actual_lang = lang_map.get(target_lang, "english")
+    # نرمال‌سازی کد زبان برای deep_translator / google
+    code = (target_lang or "").strip()
+    aliases = {
+        "cn": "zh-CN", "zh": "zh-CN", "zh-cn": "zh-CN", "chinese": "zh-CN",
+        "jp": "ja", "japanese": "ja",
+        "kr": "ko", "korean": "ko",
+        "fa": "fa", "per": "fa", "persian": "fa",
+        "en": "en", "ru": "ru", "ar": "ar", "tr": "tr",
+        "de": "de", "fr": "fr", "es": "es", "it": "it",
+        "hi": "hi", "pt": "pt", "nl": "nl", "pl": "pl",
+        "uk": "uk", "sv": "sv",
+    }
+    code = aliases.get(code, aliases.get(code.lower(), code))
+    # deep_translator بعضی کدها را با شکل دیگر می‌خواهد
+    deep_map = {
+        "zh-CN": "zh-CN",
+        "zh-cn": "zh-CN",
+    }
+    deep_code = deep_map.get(code, code)
+
     try:
         from deep_translator import GoogleTranslator
         translated = await asyncio.to_thread(
-            GoogleTranslator(source='auto', target=actual_lang).translate,
+            GoogleTranslator(source="auto", target=deep_code).translate,
             text
         )
-        return translated or text
-    except Exception:
-        try:
-            encoded_text = quote(text)
-            url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q={encoded_text}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data and data[0]:
-                            return ''.join(part[0] for part in data[0] if part[0]) or text
-        except Exception:
-            pass
+        if translated and translated.strip():
+            return translated
+    except Exception as e:
+        logging.warning(f"deep_translator fail lang={deep_code}: {e}")
+
+    # فال‌بک مستقیم گوگل
+    try:
+        encoded_text = quote(text)
+        # گوگل برای چینی ساده zh-CN
+        gcode = code if code != "zh-CN" else "zh-CN"
+        url = (
+            f"https://translate.googleapis.com/translate_a/single"
+            f"?client=gtx&sl=auto&tl={quote(gcode)}&dt=t&q={encoded_text}"
+        )
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json(content_type=None)
+                    if data and data[0]:
+                        out = "".join(part[0] for part in data[0] if part and part[0])
+                        if out:
+                            return out
+    except Exception as e:
+        logging.warning(f"google translate fallback: {e}")
     return text
 
 
@@ -6125,7 +6156,10 @@ def _styled_btn(text, callback_data, active=None, style=None):
 
 
 def build_panel_keyboard(user_id, page=1):
-    """پنل چندصفحه‌ای با ناوبری عددی — صفحه فعال سبز"""
+    """پنل چندصفحه‌ای با ناوبری عددی — صفحه فعال سبز
+    صفحات ۱ تا ۶ = منوی اصلی
+    صفحات بالاتر = فقط راهنمای همان بخش (بدون قاطی شدن با منو)
+    """
     TOTAL = 6
     try:
         page = int(page)
@@ -6133,28 +6167,30 @@ def build_panel_keyboard(user_id, page=1):
         page = 1
     if page < 1:
         page = 1
-    if page > TOTAL:
-        page = TOTAL
+    # مهم: صفحات راهنما (۷+) را به ۶ محدود نکن
 
     t_lang = AUTO_TRANSLATE_TARGET.get(user_id)
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
 
-    def nav_row():
-        prev_p = TOTAL if page <= 1 else page - 1
-        next_p = 1 if page >= TOTAL else page + 1
+    def nav_row(active_page):
+        # ناوبری فقط برای صفحات ۱..۶
+        ap = active_page if 1 <= active_page <= TOTAL else 1
+        prev_p = TOTAL if ap <= 1 else ap - 1
+        next_p = 1 if ap >= TOTAL else ap + 1
         row = [_styled_btn("⬅️", f"panel_page_{prev_p}_{user_id}", style="primary")]
         for i in range(1, TOTAL + 1):
             label = f"({i})"
-            if i == page:
+            if i == ap:
                 row.append(_styled_btn(label, f"panel_page_{i}_{user_id}", style="success"))
             else:
                 row.append(_styled_btn(label, f"panel_page_{i}_{user_id}", style="primary"))
         row.append(_styled_btn("➡️", f"panel_page_{next_p}_{user_id}", style="primary"))
         return row
 
-    def with_nav(rows):
+    def with_nav(rows, active_page=None):
         rows = list(rows)
-        rows.append(nav_row())
+        ap = active_page if active_page is not None else page
+        rows.append(nav_row(ap))
         rows.append([_styled_btn("⬅️ بازگشت", f"close_panel_{user_id}", style="danger")])
         return rows
 
@@ -6267,7 +6303,6 @@ def build_panel_keyboard(user_id, page=1):
     # ===== صفحه ۶: امنیت و گروه =====
     if page == 6:
         return with_nav([
-            [_styled_btn("🛡 بخش امنیتی", f"panel_page_3_{user_id}", style="primary")],
             [_styled_btn("🔐 عضویت اجباری پیوی", f"panel_page_9_{user_id}", style="primary")],
             [_styled_btn("✏️ هشدار ویرایش", f"panel_page_11_{user_id}", style="primary"),
              _styled_btn("🗑 هشدار حذف", f"panel_page_12_{user_id}", style="primary")],
@@ -7078,16 +7113,25 @@ async def callback_panel_handler(client, callback):
             lang_code = mid
             if lang_code in ("off", "none", "0"):
                 AUTO_TRANSLATE_TARGET[target_user_id] = None
-                data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
+                try:
+                    persist_all_user_settings(target_user_id)
+                except Exception:
+                    data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
                 await callback.answer("❌ ترجمه خودکار خاموش")
             else:
                 if AUTO_TRANSLATE_TARGET.get(target_user_id) == lang_code:
                     AUTO_TRANSLATE_TARGET[target_user_id] = None
-                    data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
+                    try:
+                        persist_all_user_settings(target_user_id)
+                    except Exception:
+                        data_manager.update_user_data(target_user_id, {"settings": {"translate": None}})
                     await callback.answer("❌ ترجمه خودکار خاموش")
                 else:
                     AUTO_TRANSLATE_TARGET[target_user_id] = lang_code
-                    data_manager.update_user_data(target_user_id, {"settings": {"translate": lang_code}})
+                    try:
+                        persist_all_user_settings(target_user_id)
+                    except Exception:
+                        data_manager.update_user_data(target_user_id, {"settings": {"translate": lang_code}})
                     await callback.answer(f"✅ ترجمه خودکار: {lang_code}")
             try:
                 await edit_panel_colored(callback, target_user_id, 5)

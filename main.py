@@ -2793,11 +2793,20 @@ async def outgoing_message_modifier(client, message):
             if target_lang:
                 try:
                     tr = await translate_text(text, target_lang)
-                    if tr and tr != text:
+                    if tr and tr.strip() and tr.strip() != text.strip():
                         await asyncio.sleep(0.25)
-                        await message.edit_text(tr)
+                        try:
+                            await message.edit_text(tr.strip())
+                        except Exception as e:
+                            err = str(e)
+                            if "MESSAGE_NOT_MODIFIED" in err or "not modified" in err.lower():
+                                pass
+                            else:
+                                logging.warning(f"translate edit: {err[:120]}")
                 except Exception as e:
-                    logging.error(f"translate edit: {e}")
+                    err = str(e)
+                    if "MESSAGE_NOT_MODIFIED" not in err:
+                        logging.warning(f"translate edit: {err[:120]}")
             return
 
         body = text
@@ -2805,8 +2814,8 @@ async def outgoing_message_modifier(client, message):
         if target_lang:
             try:
                 tr = await translate_text(body, target_lang)
-                if tr:
-                    body = tr
+                if tr and tr.strip() and tr.strip() != body.strip():
+                    body = tr.strip()
             except Exception:
                 pass
 

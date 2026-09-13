@@ -2528,8 +2528,14 @@ ACTION_LABELS = {
 }
 
 
+# کش ترجمه (کوتاه‌مدت) برای کم کردن درخواست به گوگل
+_TRANSLATE_CACHE = {}
+_TRANSLATE_LOCK_TS = 0.0
+
+
 async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه پایدار — فقط رشته‌های معتبر، بدون چرت‌وپرت"""
+    """ترجمه فقط با HTTP گوگل + کش — بدون deep_translator تا rate-limit نخورد"""
+    global _TRANSLATE_LOCK_TS
     if not text or not target_lang:
         return text
 
@@ -2549,15 +2555,10 @@ async def translate_text(text: str, target_lang: str) -> str:
     if not text:
         return text
 
-    # ضد rate-limit
-    try:
-        last = getattr(translate_text, "_last_ts", 0.0)
-        gap = 0.45 - (time.time() - last)
-        if gap > 0:
-            await asyncio.sleep(gap)
-        translate_text._last_ts = time.time()
-    except Exception:
-        pass
+    cache_key = f"{code}::{text}"
+    cached = _TRANSLATE_CACHE.get(cache_key)
+    if cached:
+        return cached
 
     def _valid(out: str) -> bool:
         if not out or not isinstance(out, str):
@@ -2565,15 +2566,13 @@ async def translate_text(text: str, target_lang: str) -> str:
         out = out.strip()
         if not out:
             return False
-        # خروجی ۱-۲ حرفی لاتین برای ورودی فارسی/بلند = خرابه
         if len(text) >= 2 and len(out) <= 2 and out.isascii():
             return False
-        if out in ("f", "hf", "h", "null", "None", "undefined"):
+        if out.lower() in ("f", "hf", "h", "null", "none", "undefined"):
             return False
         return True
 
     def _parse_gtx(data):
-        """پارس امن پاسخ translate.googleapis.com"""
         try:
             if not isinstance(data, list) or not data:
                 return None
@@ -2582,60 +2581,61 @@ async def translate_text(text: str, target_lang: str) -> str:
                 return None
             parts = []
             for item in chunks:
-                if not isinstance(item, list) or not item:
-                    continue
-                seg = item[0]
-                if isinstance(seg, str) and seg:
-                    parts.append(seg)
+                if isinstance(item, list) and item and isinstance(item[0], str) and item[0]:
+                    parts.append(item[0])
             if parts:
                 return "".join(parts)
         except Exception:
             return None
         return None
 
-    # ----- 1) deep_translator -----
-    try:
-        from deep_translator import GoogleTranslator
-        def _do():
-            return GoogleTranslator(source="auto", target=code).translate(text)
-        translated = await asyncio.to_thread(_do)
-        if _valid(translated):
-            return translated.strip()
-    except Exception as e:
-        logging.warning(f"deep_translator fail lang={code}: {str(e)[:100]}")
+    # فاصله حداقل ۰.۶ ثانیه بین درخواست‌ها
+    now = time.time()
+    wait = 0.6 - (now - _TRANSLATE_LOCK_TS)
+    if wait > 0:
+        await asyncio.sleep(wait)
 
-    # ----- 2) Google gtx HTTP -----
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    url = (
+        "https://translate.googleapis.com/translate_a/single"
+        f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text)}"
+    )
+
+    out = None
     try:
-        url = (
-            "https://translate.googleapis.com/translate_a/single"
-            f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text)}"
-        )
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-        timeout = aiohttp.ClientTimeout(total=14)
+        timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.get(url) as resp:
+                _TRANSLATE_LOCK_TS = time.time()
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
                     out = _parse_gtx(data)
-                    if _valid(out):
-                        return out.strip()
+                elif resp.status in (429, 503):
+                    logging.warning(f"translate rate limit HTTP {resp.status}")
+                    await asyncio.sleep(1.5)
+                    async with session.get(url) as resp2:
+                        _TRANSLATE_LOCK_TS = time.time()
+                        if resp2.status == 200:
+                            data = await resp2.json(content_type=None)
+                            out = _parse_gtx(data)
     except Exception as e:
         logging.warning(f"gtx translate: {e}")
+        _TRANSLATE_LOCK_TS = time.time()
 
-    # ----- 3) یک‌بار دیگر بعد از صبر کوتاه -----
-    try:
-        await asyncio.sleep(0.8)
-        from deep_translator import GoogleTranslator
-        def _do2():
-            return GoogleTranslator(source="auto", target=code).translate(text)
-        translated = await asyncio.to_thread(_do2)
-        if _valid(translated):
-            return translated.strip()
-    except Exception:
-        pass
+    if _valid(out):
+        out = out.strip()
+        _TRANSLATE_CACHE[cache_key] = out
+        # محدود کردن اندازه کش
+        if len(_TRANSLATE_CACHE) > 300:
+            try:
+                for k in list(_TRANSLATE_CACHE.keys())[:80]:
+                    _TRANSLATE_CACHE.pop(k, None)
+            except Exception:
+                _TRANSLATE_CACHE.clear()
+        return out
 
     return text
 

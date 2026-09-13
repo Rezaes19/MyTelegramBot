@@ -2570,6 +2570,78 @@ ACTION_LABELS = {
 _TRANSLATE_LAST = 0.0
 
 
+
+def track_profile_snoop(owner_id: int, user) -> None:
+    """ثبت تعامل پیوی به‌عنوان فضول پروفایل"""
+    try:
+        if not user or not getattr(user, "id", None):
+            return
+        vid = int(user.id)
+        if vid == int(owner_id):
+            return
+        if getattr(user, "is_bot", False):
+            return
+        bucket = PROFILE_SNOOPS.get(owner_id) or {}
+        first = getattr(user, "first_name", None) or ""
+        last = getattr(user, "last_name", None) or ""
+        name = (first + (" " + last if last else "")).strip() or str(vid)
+        uname = getattr(user, "username", None) or ""
+        prev = bucket.get(vid) or {}
+        bucket[vid] = {
+            "name": name,
+            "username": uname,
+            "count": int(prev.get("count") or 0) + 1,
+            "last": int(time.time()),
+        }
+        if len(bucket) > 200:
+            ordered = sorted(bucket.items(), key=lambda x: int((x[1] or {}).get("last") or 0))
+            for k, _ in ordered[: max(0, len(bucket) - 200)]:
+                bucket.pop(k, None)
+        PROFILE_SNOOPS[owner_id] = bucket
+        try:
+            persist_all_user_settings(owner_id)
+        except Exception:
+            pass
+    except Exception as e:
+        logging.warning(f"track_profile_snoop: {e}")
+
+
+def format_profile_snoops(owner_id: int) -> str:
+    bucket = PROFILE_SNOOPS.get(owner_id) or {}
+    if not bucket:
+        return (
+            "👁 **فضول پروفایل | self MR**\n\n"
+            "هنوز کسی ثبت نشده.\n"
+            "افرادی که به پیوی شما پیام بدهند اینجا لیست می‌شوند."
+        )
+    items = sorted(
+        bucket.items(),
+        key=lambda x: int((x[1] or {}).get("last") or 0),
+        reverse=True,
+    )
+    lines = [
+        "👁 **فضول پروفایل | self MR**\n",
+        f"👥 تعداد: `{len(items)}`\n",
+    ]
+    for i, (vid, info) in enumerate(items[:50], 1):
+        info = info or {}
+        name = info.get("name") or str(vid)
+        uname = info.get("username") or ""
+        cnt = info.get("count") or 1
+        last = info.get("last") or 0
+        try:
+            tstr = datetime.fromtimestamp(int(last), TEHRAN_TIMEZONE).strftime("%m/%d %H:%M")
+        except Exception:
+            tstr = "-"
+        u = f"@{uname}" if uname else "—"
+        lines.append(
+            f"{i}. **{name}** | {u}\n   🆔 `{vid}` | 🔁 {cnt} | ⏰ {tstr}"
+        )
+    if len(items) > 50:
+        lines.append(f"\n… و `{len(items) - 50}` نفر دیگر")
+    return "\n".join(lines)
+
+
 async def translate_text(text: str, target_lang: str) -> str:
     """ترجمه متن — اول HTTP گوگل، بعد MyMemory (بدون وابستگی به deep در rate-limit)"""
     global _TRANSLATE_LAST

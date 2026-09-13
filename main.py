@@ -2528,181 +2528,94 @@ ACTION_LABELS = {
 }
 
 
-# ترجمه: صف سراسری + چند سرویس (ضد 429)
-_TRANSLATE_CACHE = {}
-_TRANSLATE_LOCK = None  # asyncio.Lock — lazy init
-_TRANSLATE_LAST_TS = 0.0
-
-
-def _get_translate_lock():
-    global _TRANSLATE_LOCK
-    if _TRANSLATE_LOCK is None:
-        _TRANSLATE_LOCK = asyncio.Lock()
-    return _TRANSLATE_LOCK
+# =============================================
+# ترجمه خودکار (ساده و پایدار — مثل نسخه ۳ زبانه)
+# =============================================
+_TRANSLATE_LAST = 0.0
 
 
 async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه پایدار با صف و چند provider — کمتر گرفتار 429 می‌شود"""
-    global _TRANSLATE_LAST_TS
+    """ترجمه متن به زبان مقصد — ساده مثل قبل، با زبان‌های بیشتر"""
+    global _TRANSLATE_LAST
     if not text or not target_lang:
         return text
 
-    code = (target_lang or "").strip()
-    aliases = {
-        "cn": "zh-CN", "zh": "zh-CN", "zh-cn": "zh-CN", "chinese": "zh-CN",
-        "jp": "ja", "japanese": "ja",
-        "kr": "ko", "korean": "ko",
-        "fa": "fa", "per": "fa", "persian": "fa",
-        "en": "en", "ru": "ru", "ar": "ar", "tr": "tr",
-        "de": "de", "fr": "fr", "es": "es", "it": "it",
-        "hi": "hi", "pt": "pt", "nl": "nl", "pl": "pl",
-        "uk": "uk", "sv": "sv",
-    }
-    code = aliases.get(code, aliases.get(code.lower(), code))
-    # MyMemory بعضی کدها را فرق دارد
-    mm_code = {"zh-CN": "zh-CN", "zh": "zh-CN"}.get(code, code)
-
-    text = (text or "").strip()[:3000]
+    text = text.strip()
     if not text:
         return text
 
-    cache_key = f"{code}::{text}"
-    if cache_key in _TRANSLATE_CACHE:
-        return _TRANSLATE_CACHE[cache_key]
+    # کدهایی که deep_translator / گوگل می‌فهمند
+    lang_map = {
+        "en": "en",
+        "ru": "ru",
+        "zh-CN": "zh-CN",
+        "cn": "zh-CN",
+        "zh": "zh-CN",
+        "ar": "ar",
+        "tr": "tr",
+        "de": "de",
+        "fr": "fr",
+        "es": "es",
+        "it": "it",
+        "ja": "ja",
+        "jp": "ja",
+        "ko": "ko",
+        "hi": "hi",
+        "pt": "pt",
+        "nl": "nl",
+        "pl": "pl",
+        "uk": "uk",
+        "sv": "sv",
+        "fa": "fa",
+    }
+    code = lang_map.get(target_lang, lang_map.get(str(target_lang).lower(), target_lang))
 
-    def _valid(out: str) -> bool:
-        if not out or not isinstance(out, str):
-            return False
-        out = out.strip()
-        if not out:
-            return False
-        if len(text) >= 2 and len(out) <= 2 and out.isascii():
-            return False
-        if out.lower() in ("f", "hf", "h", "null", "none", "undefined", "error"):
-            return False
-        # اگر عین متن مبدأ بود و زبان مقصد فارسی نیست، شاید fail باشد — ولی گاهی loanword است
-        return True
+    # فاصله کوتاه بین درخواست‌ها
+    now = time.time()
+    wait = 0.5 - (now - _TRANSLATE_LAST)
+    if wait > 0:
+        await asyncio.sleep(wait)
 
-    def _parse_gtx(data):
-        try:
-            if not isinstance(data, list) or not data:
-                return None
-            chunks = data[0]
-            if not isinstance(chunks, list):
-                return None
-            parts = []
-            for item in chunks:
-                if isinstance(item, list) and item and isinstance(item[0], str) and item[0]:
-                    parts.append(item[0])
-            return "".join(parts) if parts else None
-        except Exception:
-            return None
+    # روش ۱: deep_translator (همون روش قبلی که کار می‌کرد)
+    try:
+        from deep_translator import GoogleTranslator
+        result = await asyncio.to_thread(
+            GoogleTranslator(source="auto", target=code).translate,
+            text[:3000]
+        )
+        _TRANSLATE_LAST = time.time()
+        if result and isinstance(result, str) and result.strip() and result.strip() != text.strip():
+            return result.strip()
+    except Exception as e:
+        logging.warning(f"translate deep: {str(e)[:100]}")
+        _TRANSLATE_LAST = time.time()
 
-    async def _via_google(session):
+    # روش ۲: گوگل مستقیم
+    try:
         url = (
             "https://translate.googleapis.com/translate_a/single"
-            f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text)}"
+            f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text[:3000])}"
         )
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json(content_type=None)
-                return _parse_gtx(data)
-            if resp.status == 429:
-                logging.warning("translate google 429")
-            return None
-
-    async def _via_mymemory(session):
-        # langpair: auto|en  — بهتر است مبدأ مشخص باشد؛ auto پشتیبانی محدود دارد
-        # از fa|en استفاده می‌کنیم اگر کد مقصد مشخص باشد
-        url = (
-            "https://api.mymemory.translated.net/get"
-            f"?q={quote(text)}&langpair=autodetect|{quote(mm_code)}"
-        )
-        try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             async with session.get(url) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json(content_type=None)
-                out = (data or {}).get("responseData", {}).get("translatedText")
-                if out and "MYMEMORY WARNING" in str(out).upper():
-                    return None
-                return out
-        except Exception:
-            return None
-
-    async def _via_libre(session):
-        # چند نمونه عمومی LibreTranslate
-        endpoints = [
-            "https://libretranslate.com/translate",
-            "https://translate.crisscross.co.uk/translate",
-        ]
-        payload = {"q": text, "source": "auto", "target": code if code != "zh-CN" else "zh", "format": "text"}
-        for ep in endpoints:
-            try:
-                async with session.post(ep, json=payload) as resp:
-                    if resp.status != 200:
-                        continue
+                _TRANSLATE_LAST = time.time()
+                if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    out = (data or {}).get("translatedText")
-                    if out:
-                        return out
-            except Exception:
-                continue
-        return None
+                    if isinstance(data, list) and data and isinstance(data[0], list):
+                        parts = []
+                        for item in data[0]:
+                            if isinstance(item, list) and item and isinstance(item[0], str):
+                                parts.append(item[0])
+                        if parts:
+                            out = "".join(parts).strip()
+                            if out:
+                                return out
+    except Exception as e:
+        logging.warning(f"translate gtx: {str(e)[:100]}")
+        _TRANSLATE_LAST = time.time()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json,text/plain,*/*",
-    }
-
-    async with _get_translate_lock():
-        # فاصله اجباری بین هر ترجمه
-        gap = 1.1 - (time.time() - _TRANSLATE_LAST_TS)
-        if gap > 0:
-            await asyncio.sleep(gap)
-
-        out = None
-        timeout = aiohttp.ClientTimeout(total=16)
-        try:
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                # 1) Google
-                out = await _via_google(session)
-                if not _valid(out):
-                    out = None
-                # 2) اگر 429 یا fail → صبر و MyMemory
-                if not out:
-                    await asyncio.sleep(0.8)
-                    out = await _via_mymemory(session)
-                    if not _valid(out):
-                        out = None
-                # 3) LibreTranslate
-                if not out:
-                    out = await _via_libre(session)
-                    if not _valid(out):
-                        out = None
-                # 4) یک‌بار دیگر Google بعد از صبر
-                if not out:
-                    await asyncio.sleep(1.5)
-                    out = await _via_google(session)
-                    if not _valid(out):
-                        out = None
-        except Exception as e:
-            logging.warning(f"translate_text error: {e}")
-        finally:
-            _TRANSLATE_LAST_TS = time.time()
-
-    if _valid(out):
-        out = out.strip()
-        _TRANSLATE_CACHE[cache_key] = out
-        if len(_TRANSLATE_CACHE) > 400:
-            try:
-                for k in list(_TRANSLATE_CACHE.keys())[:100]:
-                    _TRANSLATE_CACHE.pop(k, None)
-            except Exception:
-                _TRANSLATE_CACHE.clear()
-        return out
-
-    # در صورت شکست، متن اصلی (نه چرت)
     return text
 
 

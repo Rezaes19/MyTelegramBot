@@ -2053,6 +2053,7 @@ TEXT_FONT_STATUS = {}
 AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
+PROFILE_SNOOPS = {}  # owner_id -> {viewer_id: info}
 ANTI_LOGIN_STATUS = {}
 COPY_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
@@ -2097,6 +2098,14 @@ def load_all_states():
         GLOBAL_ENEMY_STATUS[user_id] = settings.get("global_enemy", False)
         COPY_MODE_STATUS[user_id] = settings.get("copy_mode", False)
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
+        try:
+            raw = settings.get("profile_snoops") or {}
+            if isinstance(raw, dict):
+                PROFILE_SNOOPS[user_id] = {int(k): v for k, v in raw.items()}
+            else:
+                PROFILE_SNOOPS[user_id] = {}
+        except Exception:
+            PROFILE_SNOOPS[user_id] = {}
         FORCE_JOIN_PV_STATUS[user_id] = settings.get("force_join_pv", False)
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
         EDIT_ALERT_STATUS[user_id] = settings.get("edit_alert", False)
@@ -2150,6 +2159,14 @@ def apply_user_settings_from_db(user_id: int):
         GLOBAL_ENEMY_STATUS[user_id] = bool(settings.get("global_enemy", False))
         COPY_MODE_STATUS[user_id] = bool(settings.get("copy_mode", False))
         AUTO_TRANSLATE_TARGET[user_id] = settings.get("translate", None)
+        try:
+            raw = settings.get("profile_snoops") or {}
+            if isinstance(raw, dict):
+                PROFILE_SNOOPS[user_id] = {int(k): v for k, v in raw.items()}
+            else:
+                PROFILE_SNOOPS[user_id] = {}
+        except Exception:
+            PROFILE_SNOOPS[user_id] = {}
         FORCE_JOIN_PV_STATUS[user_id] = bool(settings.get("force_join_pv", False))
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
         EDIT_ALERT_STATUS[user_id] = bool(settings.get("edit_alert", False))
@@ -2206,6 +2223,7 @@ def persist_all_user_settings(user_id: int):
             "global_enemy": GLOBAL_ENEMY_STATUS.get(user_id, False),
             "copy_mode": COPY_MODE_STATUS.get(user_id, False),
             "translate": AUTO_TRANSLATE_TARGET.get(user_id),
+            "profile_snoops": PROFILE_SNOOPS.get(user_id) or {},
             "force_join_pv": FORCE_JOIN_PV_STATUS.get(user_id, False),
             "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
             "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
@@ -2862,6 +2880,15 @@ async def incoming_message_manager(client, message):
     if not message.from_user:
         return
     user_id = client.me.id
+
+    # فضول پروفایل: ثبت تعامل پیوی
+    try:
+        if message.chat and getattr(message.chat, "type", None) is not None:
+            ctype = str(message.chat.type).lower()
+            if "private" in ctype:
+                track_profile_snoop(user_id, message.from_user)
+    except Exception:
+        pass
 
     reactions = AUTO_REACTION_TARGETS.get(user_id, {})
     if emoji := reactions.get(str(message.from_user.id)):
@@ -5525,6 +5552,14 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ خطا در ترجمه: {e}")
         return
 
+
+    # ========== فضول پروفایل ==========
+    if cmd in (".فضول ها", "فضول ها", ".فضول‌ها", "فضول‌ها"):
+        try:
+            await message.edit_text(format_profile_snoops(user_id))
+        except Exception as e:
+            await message.edit_text(f"❌ خطا: {e}")
+        return
     # ========== میو خودکار ==========
     if cmd in (".میو روشن", "میو روشن"):
         chat_id = message.chat.id
@@ -6307,6 +6342,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
             ],
             [
+                _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -6324,10 +6362,8 @@ def build_panel_keyboard(user_id, page=1):
                 row = []
         if row:
             rows.append(row)
-        rows.append([
-            _styled_btn("❌ خاموش", f"set_text_font_none_{user_id}", current_font == "none"),
-            _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
-        ])
+        rows.append([_styled_btn("❌ خاموش", f"set_text_font_none_{user_id}", current_font == "none")])
+        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return rows
 
     # ========== صفحه ۳: امنیتی ==========
@@ -6340,6 +6376,8 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
+            ],
+            [
                 _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
             ],
         ]
@@ -6363,8 +6401,8 @@ def build_panel_keyboard(user_id, page=1):
         rows.append([
             _styled_btn("⌨️ تایپ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
             _styled_btn("🎮 بازی", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
-            _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
         ])
+        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
         return rows
 
     # ========== صفحه ۵: فونت ساعت ==========
@@ -6410,11 +6448,18 @@ def build_panel_keyboard(user_id, page=1):
             ],
         ]
 
+    # ========== فضول پروفایل ==========
+    if page == 37:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     # ========== سایر صفحات راهنما: فقط بازگشت ==========
+
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1,
     }
     back = back_map.get(page, 1)
     return [

@@ -4427,14 +4427,19 @@ async def meow_loop_task(client: Client, user_id: int):
         try:
             if user_id not in ACTIVE_BOTS:
                 break
-            chats = list(MEOW_CHATS.get(user_id) or [])
+            raw = MEOW_CHATS.get(user_id) or set()
+            try:
+                chats = list(set(int(x) for x in raw))
+            except Exception:
+                chats = []
+            MEOW_CHATS[user_id] = set(chats)
             if not chats:
                 await asyncio.sleep(20)
                 continue
             for chat_id in chats:
                 if user_id not in ACTIVE_BOTS:
                     break
-                if chat_id not in (MEOW_CHATS.get(user_id) or set()):
+                if int(chat_id) not in (MEOW_CHATS.get(user_id) or set()):
                     continue
                 try:
                     await client.send_message(int(chat_id), "میو")
@@ -9258,7 +9263,7 @@ async def finalize(message, user_c, phone):
     # کسر هزینه فعال‌سازی
     if not deduct_balance(user_id, SELF_PRICE):
         await message.reply_text("❌ خطا در کسر الماس. موجودی کافی نیست.")
-        del LOGIN_STATES[message.chat.id]
+        LOGIN_STATES.pop(message.chat.id, None)
         return
 
     save_session_to_db(phone, s_str, user_id, me.first_name or "", me.username or "")
@@ -9269,7 +9274,7 @@ async def finalize(message, user_c, phone):
     
     asyncio.create_task(start_bot_instance(s_str, phone, user_id, 'bold'))
     
-    del LOGIN_STATES[message.chat.id]
+    LOGIN_STATES.pop(message.chat.id, None)
     
     new_balance = get_balance(user_id)
     await message.reply_text(

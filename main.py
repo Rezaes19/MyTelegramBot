@@ -2054,6 +2054,34 @@ AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
 PROFILE_SNOOPS = {}  # owner_id -> {viewer_id: info}
+PREMIUM_EMOJI_MAP = {}  # user_id -> {name: custom_emoji_id}
+# چند ایموجی پیش‌فرض رایج (custom_emoji_id)
+EMOJI_PREMIUM_CONVERT = {}  # user_id -> bool: تبدیل خودکار ایموجی عادی به پریمیوم
+EMOJI_CHAR_TO_PREMIUM = {}  # user_id -> {emoji_char: custom_emoji_id}
+DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
+    "❤": 5386650613544205592,
+    "❤️": 5386650613544205592,
+    "👍": 5408900743127339898,
+    "🔥": 5409141755087678642,
+    "⭐": 5417916264542682953,
+    "😂": 5431896702279886413,
+    "💰": 5411227513668973897,
+    "👑": 5440661526033634830,
+    "✅": 5411225752743381226,
+    "✔": 5411225752743381226,
+    "♥️": 5386650613544205592,
+}
+DEFAULT_PREMIUM_EMOJIS = {
+    "قلب": 5386650613544205592,
+    "لایک": 5408900743127339898,
+    "آتش": 5409141755087678642,
+    "ستاره": 5417916264542682953,
+    "خنده": 5431896702279886413,
+    "پول": 5411227513668973897,
+    "تاج": 5440661526033634830,
+    "چک": 5411225752743381226,
+}
+
 ANTI_LOGIN_STATUS = {}
 COPY_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
@@ -2115,6 +2143,21 @@ def load_all_states():
         ROTATING_NAME_STATUS[user_id] = bool(settings.get("rotating_name", False))
         ROTATING_NAME_INDEX[user_id] = 0
         ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
+        try:
+            EMOJI_PREMIUM_CONVERT[user_id] = bool(settings.get("emoji_premium_convert", False))
+            ecm = settings.get("emoji_char_map") or {}
+            if isinstance(ecm, dict):
+                EMOJI_CHAR_TO_PREMIUM[user_id] = {str(k): int(v) for k, v in ecm.items()}
+        except Exception:
+            pass
+
+        try:
+            pe = settings.get("premium_emojis") or {}
+            if isinstance(pe, dict):
+                PREMIUM_EMOJI_MAP[user_id] = {str(k): int(v) for k, v in pe.items()}
+        except Exception:
+            PREMIUM_EMOJI_MAP[user_id] = {}
+
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
         try:
@@ -2177,6 +2220,21 @@ def apply_user_settings_from_db(user_id: int):
         if user_id not in ROTATING_NAME_INDEX:
             ROTATING_NAME_INDEX[user_id] = 0
         ROTATING_MUSIC[user_id] = list(settings.get("rotating_music") or [])
+        try:
+            EMOJI_PREMIUM_CONVERT[user_id] = bool(settings.get("emoji_premium_convert", False))
+            ecm = settings.get("emoji_char_map") or {}
+            if isinstance(ecm, dict):
+                EMOJI_CHAR_TO_PREMIUM[user_id] = {str(k): int(v) for k, v in ecm.items()}
+        except Exception:
+            pass
+
+        try:
+            pe = settings.get("premium_emojis") or {}
+            if isinstance(pe, dict):
+                PREMIUM_EMOJI_MAP[user_id] = {str(k): int(v) for k, v in pe.items()}
+        except Exception:
+            PREMIUM_EMOJI_MAP[user_id] = {}
+
         ROTATING_MUSIC_INTERVAL[user_id] = int(settings.get("rotating_music_interval") or 1)
         ROTATING_MUSIC_STATUS[user_id] = bool(settings.get("rotating_music_on", False))
         try:
@@ -2224,6 +2282,9 @@ def persist_all_user_settings(user_id: int):
             "copy_mode": COPY_MODE_STATUS.get(user_id, False),
             "translate": AUTO_TRANSLATE_TARGET.get(user_id),
             "profile_snoops": PROFILE_SNOOPS.get(user_id) or {},
+            "premium_emojis": PREMIUM_EMOJI_MAP.get(user_id) or {},
+            "emoji_premium_convert": bool(EMOJI_PREMIUM_CONVERT.get(user_id, False)),
+            "emoji_char_map": EMOJI_CHAR_TO_PREMIUM.get(user_id) or {},
             "force_join_pv": FORCE_JOIN_PV_STATUS.get(user_id, False),
             "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
             "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
@@ -2832,6 +2893,150 @@ async def qr_image_to_text(image_path: str) -> str:
     return ""
 
 
+
+def _user_premium_emojis(user_id: int) -> dict:
+    """دیکشنری نام -> custom_emoji_id برای کاربر"""
+    base = dict(DEFAULT_PREMIUM_EMOJIS)
+    custom = PREMIUM_EMOJI_MAP.get(user_id) or {}
+    for k, v in custom.items():
+        try:
+            base[str(k)] = int(v)
+        except Exception:
+            pass
+    return base
+
+
+def _extract_custom_emoji_ids(message) -> list:
+    """استخراج custom_emoji_id از پیام (entities / caption_entities)"""
+    ids = []
+    try:
+        for ent_src in (getattr(message, "entities", None) or [], getattr(message, "caption_entities", None) or []):
+            for ent in ent_src or []:
+                cid = getattr(ent, "custom_emoji_id", None)
+                if cid:
+                    ids.append(int(cid))
+                # pyrogram enum type check
+                t = str(getattr(ent, "type", "")).lower()
+                if "custom" in t and cid:
+                    ids.append(int(cid))
+    except Exception as e:
+        logging.warning(f"extract custom emoji: {e}")
+    # unique preserve order
+    out = []
+    for i in ids:
+        if i not in out:
+            out.append(i)
+    return out
+
+
+async def send_premium_emoji(client, chat_id, custom_emoji_id: int, placeholder: str = "⭐"):
+    """ارسال یک ایموجی پریمیوم/کاستوم"""
+    from pyrogram.enums import MessageEntityType
+    from pyrogram.types import MessageEntity
+    text = placeholder
+    # طول UTF-16
+    length = len(text.encode("utf-16-le")) // 2
+    entity = MessageEntity(
+        type=MessageEntityType.CUSTOM_EMOJI,
+        offset=0,
+        length=length,
+        custom_emoji_id=int(custom_emoji_id),
+    )
+    return await client.send_message(chat_id, text, entities=[entity])
+
+
+
+MAX_PREMIUM_EMOJI_SLOTS = 5
+
+
+def _emoji_map_for_user(user_id: int) -> dict:
+    """فقط ایموجی‌های ثبت‌شده توسط کاربر (حداکثر ۵)"""
+    custom = EMOJI_CHAR_TO_PREMIUM.get(user_id) or {}
+    m = {}
+    for k, v in custom.items():
+        try:
+            m[str(k)] = int(v)
+        except Exception:
+            pass
+    return m
+
+
+def format_emoji_premium_panel(user_id: int) -> str:
+    st = EMOJI_PREMIUM_CONVERT.get(user_id, False)
+    st_txt = "(✓ on)" if st else "(✗ off)"
+    m = _emoji_map_for_user(user_id)
+    lines = [
+        "⭐ ایموجی پریمیوم | self MR",
+        f"وضعیت: {st_txt}",
+        "",
+        "ثبت ایموجی:",
+        "`.ثبت ایموجی` + ایموجی‌پریمیوم + ایموجی عادی",
+        "",
+        "مثال:",
+        "`.ثبت ایموجی` ⭐ ❤",
+        "",
+        f"تعداد ثبت‌شده: {len(m)}/{MAX_PREMIUM_EMOJI_SLOTS}",
+        "",
+        "لیست ایموجی‌های شما:",
+    ]
+    if not m:
+        lines.append("خالی است.")
+    else:
+        for i, (normal, cid) in enumerate(m.items(), 1):
+            lines.append(f"ایموجی {i}: {normal} / id:{cid}")
+    return "\n".join(lines)
+
+
+def convert_normal_emoji_to_premium_entities(text: str, user_id: int):
+    """
+    متن را می‌گیرد؛ ایموجی‌های عادی را با entity کاستوم جایگزین منطقی می‌کند.
+    خروجی: (text, entities_list یا None)
+    """
+    if not text:
+        return text, None
+    mapping = _emoji_map_for_user(user_id)
+    if not mapping:
+        return text, None
+    # مرتب‌سازی بر اساس طول برای match طولانی‌تر اول (❤️ قبل از ❤)
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+    from pyrogram.enums import MessageEntityType
+    from pyrogram.types import MessageEntity
+
+    entities = []
+    i = 0
+    # پیمایش بر اساس کاراکترهای پایتون؛ offset تلگرام UTF-16 است
+    utf16_pos = 0
+    n = len(text)
+    found = False
+    while i < n:
+        matched = None
+        for k in keys:
+            if text.startswith(k, i):
+                matched = k
+                break
+        if matched:
+            cid = mapping[matched]
+            length_utf16 = len(matched.encode("utf-16-le")) // 2
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.CUSTOM_EMOJI,
+                    offset=utf16_pos,
+                    length=length_utf16,
+                    custom_emoji_id=int(cid),
+                )
+            )
+            found = True
+            utf16_pos += length_utf16
+            i += len(matched)
+        else:
+            ch = text[i]
+            utf16_pos += len(ch.encode("utf-16-le")) // 2
+            i += 1
+    if not found:
+        return text, None
+    return text, entities
+
+
 async def translate_text(text: str, target_lang: str) -> str:
     """ترجمه متن — اول HTTP گوگل، بعد MyMemory (بدون وابستگی به deep در rate-limit)"""
     global _TRANSLATE_LAST
@@ -2999,6 +3204,28 @@ async def outgoing_message_modifier(client, message):
                 return
         except Exception:
             pass
+
+        # تبدیل ایموجی عادی → پریمیوم
+        if EMOJI_PREMIUM_CONVERT.get(user_id, False):
+            try:
+                conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
+                if conv_ents:
+                    await asyncio.sleep(0.2)
+                    try:
+                        await client.edit_message_text(
+                            chat_id=message.chat.id,
+                            message_id=message.id,
+                            text=conv_text,
+                            entities=conv_ents,
+                        )
+                        logging.info(f"premium emoji convert uid={user_id} ents={len(conv_ents)}")
+                        return
+                    except Exception as e:
+                        err = str(e)
+                        if "MESSAGE_NOT_MODIFIED" not in err:
+                            logging.warning(f"premium emoji edit: {err[:120]}")
+            except Exception as e:
+                logging.warning(f"premium emoji convert: {e}")
 
         text_font = TEXT_FONT_STATUS.get(user_id, "none")
         logging.info(f"FONT-HANDLER uid={user_id} font={text_font!r} chat={message.chat.id} mid={message.id} text={stripped[:40]!r}")
@@ -5852,6 +6079,186 @@ async def reply_based_controller(client, message):
                 pass
         return
 
+
+
+
+    # ========== تبدیل ایموجی عادی به پریمیوم (سبک VTR) ==========
+    if cmd in (".تبدیل ایموجی روشن", "تبدیل ایموجی روشن", ".ایموجی پریمیوم روشن"):
+        EMOJI_PREMIUM_CONVERT[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text(format_emoji_premium_panel(user_id))
+        return
+
+    if cmd in (".تبدیل ایموجی خاموش", "تبدیل ایموجی خاموش", ".ایموجی پریمیوم خاموش"):
+        EMOJI_PREMIUM_CONVERT[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text(format_emoji_premium_panel(user_id))
+        return
+
+    if cmd in (".پاکسازی لیست ایموجی", "پاکسازی لیست ایموجی", ".پاکسازی ایموجی"):
+        EMOJI_CHAR_TO_PREMIUM[user_id] = {}
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text("✅ لیست ایموجی پاک شد.\n\n" + format_emoji_premium_panel(user_id))
+        return
+
+    if cmd in (".لیست ایموجی پریمیوم", "لیست ایموجی پریمیوم") or cmd in (".وضعیت ایموجی", "وضعیت ایموجی"):
+        await message.edit_text(format_emoji_premium_panel(user_id))
+        return
+
+    # .ثبت ایموجی + پریمیوم + عادی  (همه در یک پیام)
+    if cmd.startswith(".ثبت ایموجی") or cmd.startswith("ثبت ایموجی"):
+        # استخراج custom emoji از entities همین پیام
+        ids = _extract_custom_emoji_ids(message)
+        # متن بدون دستور
+        body = message.text or message.caption or ""
+        for p in (".ثبت ایموجی", "ثبت ایموجی"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                break
+        # حذف surrogate/placeholder مربوط به کاستوم — باقی‌مانده = ایموجی عادی
+        # کاراکترهای باقی‌مانده غیر فاصله
+        normal = "".join(ch for ch in body if not ch.isspace())
+        # اگر entity کاستوم جای کاراکتر گرفته، ممکن است ⭐ یا � باشد — نرمال را از انتهای متن بگیر
+        if not ids and message.reply_to_message:
+            ids = _extract_custom_emoji_ids(message.reply_to_message)
+        if not ids:
+            await message.edit_text(
+                "❌ فرمت:\n"
+                "`.ثبت ایموجی` + ایموجی‌پریمیوم + ایموجی عادی\n\n"
+                "مثال: پیام را این‌طور بفرست که هم ایموجی پریمیوم داشته باشد هم عادی."
+            )
+            return
+        # تشخیص ایموجی عادی: از body کاراکترهایی که custom نیستند
+        # ساده: آخرین خوشه ایموجی غیرخالی
+        import re as _re
+        # همه emoji-like sequences
+        candidates = _re.findall(
+            r"[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]+|[\u2764\u2665\u2705\u274C\u2B50\u2763]",
+            body,
+        )
+        normal_emoji = candidates[-1] if candidates else normal[-2:] if normal else ""
+        if not normal_emoji:
+            await message.edit_text("❌ ایموجی عادی پیدا نشد. هر دو را در یک پیام بفرستید.")
+            return
+        cid = int(ids[0])
+        bucket = dict(EMOJI_CHAR_TO_PREMIUM.get(user_id) or {})
+        # اگر این عادی قبلاً نبود و ظرفیت پر است
+        if normal_emoji not in bucket and len(bucket) >= MAX_PREMIUM_EMOJI_SLOTS:
+            await message.edit_text(f"❌ حداکثر {MAX_PREMIUM_EMOJI_SLOTS} ایموجی می‌توانید ثبت کنید.\nاول `.پاکسازی لیست ایموجی`")
+            return
+        bucket[normal_emoji] = cid
+        if normal_emoji.endswith("\ufe0f") and len(normal_emoji) > 1:
+            bucket[normal_emoji[:-1]] = cid
+        EMOJI_CHAR_TO_PREMIUM[user_id] = bucket
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        # ذخیره در پیام‌های ذخیره‌شده
+        try:
+            await client.send_message(
+                "me",
+                f"⭐ ثبت ایموجی | self MR\nعادی: {normal_emoji}\nپریمیوم id: `{cid}`\nتعداد: {len(bucket)}/{MAX_PREMIUM_EMOJI_SLOTS}",
+            )
+        except Exception:
+            pass
+        await message.edit_text(
+            f"✅ ثبت شد: {normal_emoji} → پریمیوم\n\n" + format_emoji_premium_panel(user_id)
+        )
+        return
+
+    # ========== ایموجی پریمیوم ==========
+    if cmd in (".لیست ایموجی", "لیست ایموجی", ".ایموجی لیست", "ایموجی لیست"):
+        em = _user_premium_emojis(user_id)
+        lines = ["⭐ **ایموجی پریمیوم | self MR**\n"]
+        for name, cid in list(em.items())[:40]:
+            lines.append(f"• `{name}` → `{cid}`")
+        lines.append("\nارسال: `.ایموجی نام`\nمثال: `.ایموجی قلب`")
+        lines.append("افزودن: ریپلای روی پیام دارای ایموجی پریمیوم + `.افزودن ایموجی نام`")
+        await message.edit_text("\n".join(lines))
+        return
+
+    if cmd.startswith(".افزودن ایموجی ") or cmd.startswith("افزودن ایموجی "):
+        name = cmd.split(" ", 2)[-1].strip().lstrip(".")
+        if cmd.startswith(".افزودن ایموجی "):
+            name = cmd[len(".افزودن ایموجی "):].strip()
+        elif cmd.startswith("افزودن ایموجی "):
+            name = cmd[len("افزودن ایموجی "):].strip()
+        name = name.strip()
+        if not name:
+            await message.edit_text("❌ مثال:\n`.افزودن ایموجی قلب`\n(ریپلای روی پیام با ایموجی پریمیوم)")
+            return
+        cid = None
+        # اگر عدد داده باشد
+        parts = name.split()
+        if len(parts) >= 2 and parts[-1].isdigit():
+            cid = int(parts[-1])
+            name = " ".join(parts[:-1]).strip()
+        if cid is None:
+            if not message.reply_to_message:
+                await message.edit_text("❌ روی پیامی که ایموجی پریمیوم دارد ریپلای کن\nیا بنویس:\n`.افزودن ایموجی قلب 5386650613544205592`")
+                return
+            ids = _extract_custom_emoji_ids(message.reply_to_message)
+            if not ids:
+                await message.edit_text("❌ در پیام ریپلای‌شده ایموجی پریمیوم پیدا نشد.")
+                return
+            cid = ids[0]
+        bucket = PREMIUM_EMOJI_MAP.get(user_id) or {}
+        bucket[name] = int(cid)
+        PREMIUM_EMOJI_MAP[user_id] = bucket
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text(f"✅ ایموجی `{name}` ثبت شد\n🆔 `{cid}`")
+        return
+
+    if cmd.startswith(".ایموجی ") or cmd.startswith("ایموجی "):
+        name = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+        if not name:
+            await message.edit_text("❌ مثال: `.ایموجی قلب`\nلیست: `.لیست ایموجی`")
+            return
+        em = _user_premium_emojis(user_id)
+        # match exact or partial
+        cid = em.get(name)
+        if cid is None:
+            for k, v in em.items():
+                if k in name or name in k:
+                    cid = v
+                    name = k
+                    break
+        if cid is None and name.isdigit():
+            cid = int(name)
+        if cid is None:
+            await message.edit_text(f"❌ `{name}` پیدا نشد.\n`.لیست ایموجی`")
+            return
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        try:
+            await send_premium_emoji(client, message.chat.id, int(cid))
+        except Exception as e:
+            err = str(e)
+            if "PREMIUM" in err.upper() or "premium" in err.lower():
+                await client.send_message(
+                    message.chat.id,
+                    "❌ اکانت شما به ایموجی پریمیوم دسترسی ندارد.\n"
+                    "باید تلگرام Premium داشته باشد یا از ایموجی پک‌های مجاز استفاده کنید."
+                )
+            else:
+                await client.send_message(message.chat.id, f"❌ ارسال ایموجی: {err[:150]}")
+        return
+
     # ========== فضول پروفایل ==========
     if cmd in (".فضول ها", "فضول ها", ".فضول‌ها", "فضول‌ها"):
         try:
@@ -6642,6 +7049,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
                 _styled_btn("📱 QR", f"panel_page_39_{user_id}", style="primary"),
             ],
+            [
+                _styled_btn("⭐ ایموجی پریمیوم", f"panel_page_40_{user_id}", style="primary"),
+            ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
 
@@ -6746,10 +7156,19 @@ def build_panel_keyboard(user_id, page=1):
             [ _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger") ],
         ]
 
+
+    if page == 40:
+        on = EMOJI_PREMIUM_CONVERT.get(user_id, False)
+        return [
+            [_styled_btn(f"وضعیت: ({'on ✓' if on else 'off ✗'})", f"toggle_emoji_convert_{user_id}", on)],
+            [_styled_btn("🗑 پاکسازی لیست ایموجی", f"clear_emoji_map_{user_id}", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -7557,7 +7976,25 @@ async def callback_panel_handler(client, callback):
         elif action.startswith("panel_page_"):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
+            if page == 40:
+                help_text = format_emoji_premium_panel(target_user_id)
+                try:
+                    if callback.inline_message_id:
+                        await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+                    else:
+                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+                except Exception:
+                    try:
+                        await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+                    except Exception:
+                        pass
+                try:
+                    await edit_panel_colored(callback, target_user_id, 40)
+                except Exception:
+                    pass
+                return
             HELP_TEXTS = {
+
                 6: (
                     "💱 قیمت ارز | self MR\n\n"
                     "دستورات:\n"
@@ -7782,6 +8219,21 @@ async def callback_panel_handler(client, callback):
                     "دستورات:\n"
                     ".متن به QR + متن\n"
                     ".QR به متن + ریپلای روی QR"
+                ),
+                                40: (
+                    "⭐ ایموجی پریمیوم | self MR\n\n"
+                    "دستورات:\n"
+                    ".ایموجی قلب\n"
+                    ".لیست ایموجی\n"
+                    ".افزودن ایموجی نام\n"
+                    "(ریپلای روی پیام دارای ایموجی پریمیوم)\n\n"
+                    "اعضای عادی هم می‌توانند استفاده کنند\n"
+                    "اگر اکانت سلف به آن ایموجی دسترسی داشته باشد.\n\n"
+                    "تبدیل خودکار:\n"
+                    ".تبدیل ایموجی روشن\n"
+                    ".تبدیل ایموجی خاموش\n"
+                    ".تنظیم تبدیل ایموجی ❤\n"
+                    "(ریپلای روی ایموجی پریمیوم)"
                 ),
             }
             try:

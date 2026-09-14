@@ -3207,7 +3207,7 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم (گپ + پیوی) اینلاین اول
+        # تبدیل ایموجی عادی → پریمیوم (گپ + پیوی) — اولویت با اینلاین
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
                 mapping = _emoji_map_for_user(user_id)
@@ -3215,17 +3215,22 @@ async def outgoing_message_modifier(client, message):
                 matched_slot = -1
                 if mapping:
                     keys = list(mapping.keys())
-                    for k in sorted(keys, key=len, reverse=True):
-                        if k and k in text:
+                    stripped = text.strip()
+                    for i, k in enumerate(keys):
+                        if k and stripped == k.strip():
                             matched_key = k
-                            try:
-                                matched_slot = keys.index(k)
-                            except Exception:
-                                matched_slot = 0
+                            matched_slot = i
                             break
-                if matched_key and text.strip() == matched_key.strip():
+                    if not matched_key:
+                        for i, k in enumerate(sorted(keys, key=len, reverse=True)):
+                            if k and k in text:
+                                matched_key = k
+                                matched_slot = keys.index(k) if k in keys else i
+                                break
+
+                if matched_key:
                     cid = int(mapping[matched_key])
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(0.12)
                     ok = False
                     chat_id = message.chat.id
 
@@ -3238,7 +3243,7 @@ async def outgoing_message_modifier(client, message):
                             except Exception:
                                 pass
 
-                    # 1) اینلاین
+                    # ---------- ۱) اینلاین بات (بدون نیاز به پریمیوم) ----------
                     try:
                         bot_un = MANAGER_BOT_USERNAME
                         if not bot_un:
@@ -3248,12 +3253,14 @@ async def outgoing_message_modifier(client, message):
                                 globals()["MANAGER_BOT_USERNAME"] = bot_un
                             except Exception as e:
                                 logging.warning("bot username: %s", e)
+
                         if bot_un:
                             queries = [f"pe|{user_id}|i|{matched_slot}"]
                             try:
                                 queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
                             except Exception:
                                 pass
+
                             for qtry in queries:
                                 try:
                                     results = await client.get_inline_bot_results(bot_un, qtry)
@@ -3269,11 +3276,11 @@ async def outgoing_message_modifier(client, message):
                                     logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
                                     break
                                 except Exception as e_one:
-                                    logging.warning("inline try: %s", e_one)
+                                    logging.warning("inline try q=%r: %s", qtry, e_one)
                     except Exception as e_inl:
                         logging.warning("premium inline: %s", e_inl)
 
-                    # 2) ویرایش با entity
+                    # ---------- ۲) ویرایش با entity ----------
                     if not ok:
                         try:
                             from pyrogram.enums import MessageEntityType
@@ -3289,9 +3296,9 @@ async def outgoing_message_modifier(client, message):
                             ok = True
                             logging.info("premium EDIT entity ok uid=%s", user_id)
                         except Exception as e:
-                            logging.warning("premium entity: %s", e)
+                            logging.warning("premium entity edit: %s", e)
 
-                    # 3) ارسال entity
+                    # ---------- ۳) ارسال دوباره با entity ----------
                     if not ok:
                         try:
                             from pyrogram.enums import MessageEntityType
@@ -3306,6 +3313,7 @@ async def outgoing_message_modifier(client, message):
                             await client.send_message(chat_id, matched_key, entities=ents)
                             await _del_orig()
                             ok = True
+                            logging.info("premium SEND entity ok uid=%s", user_id)
                         except Exception as e:
                             logging.warning("premium send entity: %s", e)
 
@@ -7330,7 +7338,7 @@ async def inline_panel_handler(client, query):
     q = (query.query or "").strip()
 
     # ===== ایموجی پریمیوم از طریق اینلاین =====
-    # فرمت‌ها: pe|uid|hex  یا  pe|uid|i|slot  یا  pe:uid:hex
+    # فرمت‌ها: pe|uid|i|slot   یا   pe|uid|hex
     if q.startswith("pe|") or q.startswith("pe:"):
         try:
             raw = q.replace("pe:", "pe|")
@@ -7339,8 +7347,8 @@ async def inline_panel_handler(client, query):
             mapping = _emoji_map_for_user(owner_id)
             cid = None
             normal = ""
+
             if len(parts) >= 4 and parts[2] in ("i", "s", "slot"):
-                # pe|uid|i|0
                 try:
                     slot = int(parts[3])
                     keys = list(mapping.keys())
@@ -7351,7 +7359,6 @@ async def inline_panel_handler(client, query):
                     pass
             elif len(parts) >= 3:
                 token = "|".join(parts[2:])
-                # hex utf-8
                 try:
                     normal = bytes.fromhex(token).decode("utf-8")
                     if normal in mapping:
@@ -7365,14 +7372,16 @@ async def inline_panel_handler(client, query):
                             if k in token or token in k:
                                 normal, cid = k, int(v)
                                 break
+
             if not cid:
                 logging.warning(f"inline pe: no cid for q={q!r} map={list(mapping.keys())}")
                 await query.answer([], cache_time=0, is_personal=True)
                 return
 
             ph = normal if normal else "⭐"
-            # UTF-16 length for entity
             utf16_len = len(ph.encode("utf-16-le")) // 2
+
+            # روش اصلی: entity مستقیم در Bot API
             payload = {
                 "inline_query_id": query.id,
                 "cache_time": 0,
@@ -7381,7 +7390,7 @@ async def inline_panel_handler(client, query):
                     "type": "article",
                     "id": f"pe_{owner_id}_{cid}",
                     "title": "ایموجی پریمیوم",
-                    "description": str(normal)[:40],
+                    "description": str(normal)[:40] or "premium",
                     "input_message_content": {
                         "message_text": ph,
                         "entities": [{
@@ -7397,29 +7406,55 @@ async def inline_panel_handler(client, query):
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=payload) as resp:
                     data = await resp.json()
-                    if not data.get("ok"):
-                        logging.warning(f"inline pe answer fail: {data}")
-                        # HTML fallback
-                        payload2 = {
-                            "inline_query_id": query.id,
-                            "cache_time": 0,
-                            "is_personal": True,
-                            "results": json.dumps([{
-                                "type": "article",
-                                "id": f"pe2_{owner_id}_{cid}",
-                                "title": "ایموجی پریمیوم",
-                                "input_message_content": {
-                                    "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
-                                    "parse_mode": "HTML",
-                                },
-                            }], ensure_ascii=False),
-                        }
-                        async with session.post(url, data=payload2) as resp2:
-                            data2 = await resp2.json()
-                            if not data2.get("ok"):
-                                logging.warning(f"inline pe html fail: {data2}")
-                                await query.answer([], cache_time=0, is_personal=True)
+                    if data.get("ok"):
+                        return
+                    logging.warning(f"inline pe entity fail: {data}")
+
+                    # fallback HTML (tg-emoji)
+                    payload2 = {
+                        "inline_query_id": query.id,
+                        "cache_time": 0,
+                        "is_personal": True,
+                        "results": json.dumps([{
+                            "type": "article",
+                            "id": f"pe2_{owner_id}_{cid}",
+                            "title": "ایموجی پریمیوم",
+                            "input_message_content": {
+                                "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
+                                "parse_mode": "HTML",
+                            },
+                        }], ensure_ascii=False),
+                    }
+                    async with session.post(url, data=payload2) as resp2:
+                        data2 = await resp2.json()
+                        if data2.get("ok"):
+                            return
+                        logging.warning(f"inline pe html fail: {data2}")
+
+            # آخرین تلاش با pyrogram
+            try:
+                from pyrogram.enums import MessageEntityType
+                from pyrogram.types import MessageEntity
+                ent = MessageEntity(
+                    type=MessageEntityType.CUSTOM_EMOJI,
+                    offset=0,
+                    length=utf16_len,
+                    custom_emoji_id=int(cid),
+                )
+                result = InlineQueryResultArticle(
+                    id=f"pe3_{owner_id}_{cid}",
+                    title="ایموجی پریمیوم",
+                    input_message_content=InputTextMessageContent(
+                        message_text=ph,
+                        entities=[ent],
+                    ),
+                )
+                await query.answer([result], cache_time=0, is_personal=True)
+            except Exception as e3:
+                logging.warning(f"inline pe pyrogram fail: {e3}")
+                await query.answer([], cache_time=0, is_personal=True)
             return
+
         except Exception as e:
             logging.warning(f"inline pe error: {e}")
             try:
@@ -7428,7 +7463,8 @@ async def inline_panel_handler(client, query):
                 pass
             return
 
-    if q != "panel":
+    # ===== پنل =====
+    if q != "panel" and q != "":
         return
 
     keyboard = build_panel_keyboard(user_id, 1)

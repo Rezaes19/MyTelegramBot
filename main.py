@@ -2690,7 +2690,7 @@ def format_profile_snoops(owner_id: int) -> str:
         return (
             "👁 **فضول پروفایل | self MR**\n\n"
             "هنوز کسی ثبت نشده.\n"
-            "افرادی که به پیوی شما پیام بدهند اینجا لیست می‌شوند."
+            "کسانی که پروفایل شما را دیده‌اند اینجا لیست می‌شوند."
         )
     items = sorted(
         bucket.items(),
@@ -6438,10 +6438,6 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
                 _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
             ],
-            [
-                _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
-                _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
-            ],
             [ _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary") ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
@@ -6535,6 +6531,18 @@ def build_panel_keyboard(user_id, page=1):
         ]
 
     # همه صفحات راهنما: فقط بازگشت تمام‌عرض
+
+    # ترجمه: زبان‌ها + راهنما
+    if page == 38:
+        return [
+            [
+                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
+                _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
+                _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
+            ],
+            [ _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger") ],
+        ]
+
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
@@ -7338,7 +7346,7 @@ async def callback_panel_handler(client, callback):
                         pass
                     await callback.answer(f"✅ ترجمه خودکار: {mid.upper()}")
             try:
-                await edit_panel_colored(callback, target_user_id, 1)
+                await edit_panel_colored(callback, target_user_id, 38)
             except Exception:
                 pass
             return
@@ -7556,14 +7564,15 @@ async def callback_panel_handler(client, callback):
                     "👁 فضول پروفایل | self MR\n\n"
                     "دستورات:\n"
                     ".فضول ها\n\n"
-                    "لیست کسانی که پروفایل شما را دیده اند\n"
-                    "نمایش داده می‌شود."
+                    "کسانی که پروفایل شما را دیده‌اند\n"
+                    "نمایش داده می‌شوند."
                 ),
                 38: (
                     "🌐 ترجمه | self MR\n\n"
                     "دستورات:\n"
                     "ریپلای + .ترجمه\n\n"
-                    "متن دلخواه شما به فارسی ترجمه می‌شود."
+                    "متن دلخواه شما به فارسی ترجمه می‌شود.\n\n"
+                    "دکمه‌های EN / RU / CN = ترجمه خودکار خروجی."
                 ),
             }
             try:

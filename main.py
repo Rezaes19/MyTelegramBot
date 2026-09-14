@@ -2612,7 +2612,7 @@ def format_profile_snoops(owner_id: int) -> str:
         return (
             "👁 **فضول پروفایل | self MR**\n\n"
             "هنوز کسی ثبت نشده.\n"
-            "افرادی که به پیوی شما پیام بدهند اینجا لیست می‌شوند."
+            "افرادی که پروفایل شما را ببینند در این لیست نمایش داده میشوند."
         )
     items = sorted(
         bucket.items(),
@@ -6338,7 +6338,7 @@ def _styled_btn(text, callback_data, active=None, style=None):
 
 
 def build_panel_keyboard(user_id, page=1):
-    """پنل کلاسیک self MR — صفحه اصلی با ۳ دکمه در هر ردیف"""
+    """پنل کلاسیک self MR — راهنماها در callback با متن دستورات"""
     try:
         page = int(page)
     except Exception:
@@ -6350,7 +6350,10 @@ def build_panel_keyboard(user_id, page=1):
     current_font = TEXT_FONT_STATUS.get(user_id, "none")
     cur_clock = USER_FONT_CHOICES.get(user_id, "bold")
 
-    # ========== صفحه ۱: منوی اصلی (۳تایی) ==========
+    def back_btn(to=1):
+        return [_styled_btn("⬅️ بازگشت", f"panel_page_{to}_{user_id}", style="danger")]
+
+    # ----- صفحه ۱: اصلی -----
     if page == 1:
         return [
             [
@@ -6406,22 +6409,16 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
                 _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
-                _styled_btn("🔎 سرچ عکس", f"panel_page_23_{user_id}", style="primary"),
+                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
             ],
             [
-                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
                 _styled_btn("🇨🇳 CN", f"lang_cn_{user_id}", t_lang == "zh-CN"),
             ],
-            [
-                _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
-            ],
-            [
-                _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
-            ],
+            [ _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary") ],
+            [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
 
-    # ========== صفحه ۲: حالت متن ==========
     if page == 2:
         rows = []
         row = []
@@ -6429,32 +6426,28 @@ def build_panel_keyboard(user_id, page=1):
             pn = FONT_PERSIAN_NAMES.get(fk, fk)
             on = (current_font == fk)
             row.append(_styled_btn(pn, f"set_text_font_{fk}_{user_id}", on))
-            if len(row) == 3:
+            if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
         rows.append([_styled_btn("❌ خاموش", f"set_text_font_none_{user_id}", current_font == "none")])
-        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        rows.append(back_btn(1))
         return rows
 
-    # ========== صفحه ۳: امنیتی ==========
     if page == 3:
         return [
             [
                 _styled_btn("✏️ هشدار ویرایش", f"panel_page_11_{user_id}", style="primary"),
                 _styled_btn("🗑 هشدار حذف", f"panel_page_12_{user_id}", style="primary"),
-                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
             ],
-            [
-                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
-            ],
+            back_btn(1),
         ]
 
-    # ========== صفحه ۴: اکشن‌ها ==========
     if page == 4:
         rows = []
         row = []
@@ -6465,7 +6458,7 @@ def build_panel_keyboard(user_id, page=1):
         for key, label in items:
             on = (ACTION_STATUS.get(user_id) == key)
             row.append(_styled_btn(label, f"set_action_{key}_{user_id}", on))
-            if len(row) == 3:
+            if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
@@ -6474,10 +6467,9 @@ def build_panel_keyboard(user_id, page=1):
             _styled_btn("⌨️ تایپ", f"toggle_type_{user_id}", TYPING_MODE_STATUS.get(user_id, False)),
             _styled_btn("🎮 بازی", f"toggle_game_{user_id}", PLAYING_MODE_STATUS.get(user_id, False)),
         ])
-        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        rows.append(back_btn(1))
         return rows
 
-    # ========== صفحه ۵: فونت ساعت ==========
     if page == 5:
         rows = []
         row = []
@@ -6485,58 +6477,44 @@ def build_panel_keyboard(user_id, page=1):
             name = CLOCK_FONT_NAMES.get(key, key)
             is_on = (cur_clock == key)
             row.append(_styled_btn(name, f"set_clock_font_{key}_{user_id}", is_on))
-            if len(row) == 3:
+            if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
-        rows.append([_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")])
+        rows.append(back_btn(1))
         return rows
 
-    # ========== میو ==========
-    if page == 35:
-        return [
-            [
-                _styled_btn("🐱 میو خودکار", f"panel_page_36_{user_id}", style="primary"),
-                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
-            ],
-        ]
-    if page == 36:
-        return [
-            [
-                _styled_btn(".میو روشن", "noop", style="success"),
-                _styled_btn(".میو خاموش", "noop", style="danger"),
-                _styled_btn("⬅️ بازگشت", f"panel_page_35_{user_id}", style="danger"),
-            ],
-        ]
-
-    # ========== هوش مصنوعی ==========
+    # هوش مصنوعی + سرچ عکس داخلش
     if page == 19:
         return [
             [
                 _styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary"),
-                _styled_btn("🔎 سرچ", f"panel_page_23_{user_id}", style="primary"),
-                _styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger"),
+                _styled_btn("🔎 سرچ عکس", f"panel_page_23_{user_id}", style="primary"),
             ],
+            back_btn(1),
         ]
 
-    # ========== فضول پروفایل ==========
-    if page == 37:
+    if page == 35:
         return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+            [ _styled_btn("🐱 میو خودکار", f"panel_page_36_{user_id}", style="primary") ],
+            back_btn(1),
+        ]
+    if page == 36:
+        return [
+            [ _styled_btn(".میو روشن", "noop", style="success") ],
+            [ _styled_btn(".میو خاموش", "noop", style="danger") ],
+            back_btn(35),
         ]
 
-    # ========== سایر صفحات راهنما: فقط بازگشت ==========
-
+    # همه صفحات راهنما: فقط بازگشت تمام‌عرض
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
         28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1,
     }
     back = back_map.get(page, 1)
-    return [
-        [_styled_btn("⬅️ بازگشت", f"panel_page_{back}_{user_id}", style="danger")],
-    ]
+    return [back_btn(back)]
 
 
 
@@ -7341,802 +7319,280 @@ async def callback_panel_handler(client, callback):
         elif action.startswith("panel_page_"):
             page = int(action.split("_")[2])
             target_user_id = int(parts[-1])
+            HELP_TEXTS = {
+                6: (
+                    "💱 قیمت ارز | self MR\n\n"
+                    "دستورات:\n"
+                    ".دلار\n.یورو\n.پوند\n.درهم\n.لیر\n.یوان\n.روبل\n"
+                    ".تتر\n.بیتکوین\n.اتریوم\n.طلا\n.سکه"
+                ),
+                7: (
+                    "🎤 متن به ویس | self MR\n\n"
+                    "دستورات:\n"
+                    ".تبدیل متن به ویس سلام\n"
+                    ".ویس سلام\n\n"
+                    "متن بعد از دستور به ویس تبدیل می‌شود."
+                ),
+                8: (
+                    "🧩 تبدیل به استیکر | self MR\n\n"
+                    "راهنما:\n"
+                    "ریپلای + .تبدیل به استیکر\n\n"
+                    "عکس یا متن ریپلای‌شده استیکر می‌شود."
+                ),
+                9: (
+                    "🔐 عضویت اجباری پیوی | self MR\n\n"
+                    "دستورات:\n"
+                    ".عضویت اجباری روشن\n"
+                    ".عضویت اجباری خاموش\n"
+                    ".تنظیم کانال اجباری @channel\n\n"
+                    "تا وقتی عضو کانال نشوند پیام پیوی پاک می‌شود."
+                ),
+                10: (
+                    "🎥 ساخت ویدیو گرد | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای روی ویدیو + .ویدیو مسیج"
+                ),
+                11: (
+                    "✏️ هشدار ویرایش پیام | self MR\n\n"
+                    "دستورات:\n"
+                    ".هشدار ویرایش روشن\n"
+                    ".هشدار ویرایش خاموش\n\n"
+                    "متن قبل از ویرایش به Saved Messages می‌رود."
+                ),
+                12: (
+                    "🗑 هشدار حذف پیام | self MR\n\n"
+                    "دستورات:\n"
+                    ".هشدار حذف روشن\n"
+                    ".هشدار حذف خاموش\n\n"
+                    "پیام حذف‌شده به Saved Messages می‌رود."
+                ),
+                13: (
+                    "💾 ذخیره | self MR\n\n"
+                    "برای استفاده:\n"
+                    "ریپلای + .ذخیره\n\n"
+                    "پشتیبانی: متن، عکس، ویدیو، ویس، فایل\n"
+                    "و مدیاهای تایم‌دار (نابودشونده)"
+                ),
+                14: (
+                    "✏️ تغییر اسم | self MR\n\n"
+                    "نحوه استفاده:\n"
+                    ".اسم نام جدید\n\n"
+                    "مثال:\n"
+                    ".اسم محمدرضا"
+                ),
+                15: (
+                    "📝 تغییر بیوگرافی | self MR\n\n"
+                    "نحوه استفاده:\n"
+                    ".بیو متن بیوگرافی\n\n"
+                    "مثال:\n"
+                    ".بیو خوش آمدید"
+                ),
+                16: (
+                    "🔖 تغییر یوزرنیم | self MR\n\n"
+                    "نحوه استفاده:\n"
+                    ".یوزرنیم اسم_کاربری\n\n"
+                    "مثال:\n"
+                    ".یوزرنیم my_user"
+                ),
+                17: (
+                    "🎞 انیمیشن | self MR\n\n"
+                    "انیمیشن‌ها:\n"
+                    "1- .قلب\n"
+                    "2- .برف\n"
+                    "3- .زندگی انسان\n\n"
+                    "پیام هر ۲ ثانیه ویرایش می‌شود."
+                ),
+                18: (
+                    "🔄 اسم چرخشی | self MR\n\n"
+                    "دستورات:\n"
+                    ".افزودن اسم علی\n"
+                    ".تنظیم تایم اسم 5\n"
+                    ".لیست اسامی چرخشی\n"
+                    ".پاکسازی لیست اسم چرخشی"
+                ),
+                19: (
+                    "🧠 هوش مصنوعی | self MR\n\n"
+                    "از دکمه‌های زیر یک قابلیت را انتخاب کنید."
+                ),
+                20: (
+                    "📝 متن گسترده | self MR\n\n"
+                    "دستورات:\n"
+                    ".هوش متن گسترده + متن شما\n\n"
+                    "مثال:\n"
+                    ".هوش متن گسترده علی به پارک رفت"
+                ),
+                21: (
+                    "🎵 استخراج متن آهنگ | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای روی آهنگ + .متن آهنگ"
+                ),
+                22: (
+                    "📸 اسکرین | self MR\n\n"
+                    "دستورات:\n"
+                    ".اسکرین\n\n"
+                    "از صفحه فعلی اسکرین می‌گیرد و به\n"
+                    "پیام‌های ذخیره‌شده می‌فرستد."
+                ),
+                23: (
+                    "🔎 سرچ عکس | self MR\n\n"
+                    "دستورات:\n"
+                    ".سرچ + کلمه\n\n"
+                    "مثال:\n"
+                    ".سرچ گاو\n\n"
+                    "یک تصویر مرتبط از گوگل ارسال می‌شود."
+                ),
+                24: (
+                    "🎰 تقلب | self MR\n\n"
+                    "دستورات:\n"
+                    ".بولینگ\n.بسکتبال\n.فوتبال\n"
+                    ".تاس 1 تا .تاس 6\n"
+                    ".اسلات 777\n.اسلات لیمو\n.اسلات انگور\n.اسلات Bar"
+                ),
+                25: (
+                    "🎵 آهنگ چرخشی | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای روی آهنگ + .آهنگ چرخشی\n"
+                    ".آهنگ چرخشی خاموش"
+                ),
+                26: (
+                    "🕐 ساعت کشورها | self MR\n\n"
+                    "دستورات:\n"
+                    ".ساعت تهران\n"
+                    ".ساعت London\n"
+                    ".ساعت Dubai"
+                ),
+                27: (
+                    "🌤 آب و هوا | self MR\n\n"
+                    "دستورات:\n"
+                    ".آب و هوا تهران\n"
+                    ".هوای شیراز\n"
+                    ".آب و هوا London"
+                ),
+                28: (
+                    "🎤 ویس به متن | self MR\n\n"
+                    "روی یک ویس ریپلای کنید:\n"
+                    ".ویس به متن"
+                ),
+                29: (
+                    "📄 عکس ↔ PDF | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای عکس + .تبدیل به pdf\n"
+                    "ریپلای pdf + .تبدیل به عکس"
+                ),
+                30: (
+                    "👑 تگ ادمین/اعضا | self MR\n\n"
+                    "دستورات:\n"
+                    ".تگ ادمین\n"
+                    ".تگ اعضا"
+                ),
+                31: (
+                    "💬 کامنت اول | self MR\n\n"
+                    "دستورات:\n"
+                    ".کامنت اول روشن\n"
+                    ".کامنت اول خاموش\n"
+                    ".تنظیم کامنت اول متن شما"
+                ),
+                32: (
+                    "✨ کیفیت عکس | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای روی عکس + .کیفیت عکس"
+                ),
+                33: (
+                    "🔎 سرچ آهنگ | self MR\n\n"
+                    "دستورات:\n"
+                    ".آهنگ نام آهنگ\n\n"
+                    "لیست نتایج به‌صورت دکمه می‌آید؛\n"
+                    "روی هر کدام بزنید تا دانلود شود."
+                ),
+                34: (
+                    "📣 سندر فور | self MR\n\n"
+                    "دستورات:\n"
+                    ".تنظیم سندر فور\n\n"
+                    "پیام ریپلای‌شده به همه گپ/چنل/پیوی ارسال می‌شود."
+                ),
+                35: (
+                    "🐱 میو | self MR\n\n"
+                    "از دکمه میو خودکار استفاده کنید."
+                ),
+                36: (
+                    "🐱 میو خودکار | self MR\n\n"
+                    "دستورات:\n"
+                    ".میو روشن\n"
+                    ".میو خاموش\n\n"
+                    "هر ۵ دقیقه در همین گپ «میو» ارسال می‌شود."
+                ),
+                37: (
+                    "👁 فضول پروفایل | self MR\n\n"
+                    "دستورات:\n"
+                    ".فضول ها\n\n"
+                    "لیست کسانی که با پیوی شما تعامل داشته‌اند\n"
+                    "نمایش داده می‌شود."
+                ),
+            }
             try:
-                if page == 22:
-                    help_text = (
-                        "اسکرین | self MR\n\n"
-                        "دستورات:\n"
-                        ".اسکرین\n\n"
-                        "در هر چت/پیوی بزن تا محتوای اخیر همان صفحه\n"
-                        "به پیام‌های ذخیره‌شده ارسال شود.\n"
-                        "(برای چت‌های ضد اسکرین‌شات هم تلاش می‌کند)"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 22))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 22))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 22)
-                    except Exception:
-                        pass
-                    return
-                if page == 23:
-                    help_text = (
-                        "سرچ | self MR\n\n"
-                        "دستورات:\n"
-                        ".سرچ + چیزی که می‌خوای\n\n"
-                        "مثال:\n"
-                        ".سرچ + گاو\n\n"
-                        "ربات از وب جستجو می‌کند و چند عکس مرتبط می‌فرستد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 23))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 23))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 23)
-                    except Exception:
-                        pass
-                    return
-                if page == 36:
-                    help_text = (
-                        "🐱 میو خودکار | self MR\n\n"
-                        "دستورات:\n"
-                        "• `.میو روشن`\n"
-                        "• `.میو خاموش`\n\n"
-                        "هر ۵ دقیقه فقط در گپی که روشن کردی «میو» می‌فرستد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 36))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 36))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 36)
-                    except Exception:
-                        pass
-                    return
-                if page == 35:
-                    help_text = (
-                        "🐱 میو | self MR\n\n"
-                        "از دکمه میو خودکار برای دیدن دستورات استفاده کن."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 35))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 35))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 35)
-                    except Exception:
-                        pass
-                    return
-                if page == 34:
-                    help_text = (
-                        "📣 سندر | self MR\n\n"
-                        "ارسال خودکار بنر داخل همین گروه با سقف ساعتی.\n\n"
-                        "دستورات:\n"
-                        "• `.تنظیم بنر سندر` → ریپلای روی بنر (کپی)\n"
-                        "• `.تنظیم بنر فور` → ریپلای روی بنر (فوروارد)\n"
-                        "• `.سندر روشن 100` → سهمیه ۵۰ تا ۲۰۰ در ساعت\n"
-                        "• `.سندر خاموش`\n"
-                        "• `.سندر تاخیر 60` → فاصله ارسال (ثانیه)\n"
-                        "• `.بنر فور` / `.بنر کپی`\n"
-                        "• `.سندر وضعیت`\n"
-                        "• `.سندر حذف` → پاک کردن این گروه\n\n"
-                        "⚠️ فقط در گروه‌هایی که عضو هستی."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 34))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 34))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 34)
-                    except Exception:
-                        pass
-                    return
-                if page == 24:
-
-                    help_text = (
-                        "🎰 تقلب | self MR\n\n"
-                        "این ویژگی ایموجی بازی را آنقدر می‌فرستد تا بهترین نتیجه بیاید "
-                        "و پیام‌های ناموفق را خودکار پاک می‌کند.\n\n"
-                        "دستورات:\n"
-                        "• `.بولینگ` → استرایک (۶)\n"
-                        "• `.بسکتبال` → توپ داخل سبد (۵)\n"
-                        "• `.فوتبال` → گل (۵)\n"
-                        "• `.تاس 1` تا `.تاس 6` → عدد دلخواه\n"
-                        "• `.اسلات 777` → جکپات ۷۷۷\n"
-                        "• `.اسلات لیمو` → سه لیمو\n"
-                        "• `.اسلات انگور` → سه انگور\n"
-                        "• `.اسلات Bar` → سه بار\n\n"
-                        "⚠️ برای جلوگیری از اسپم و ریپورت، بین هر پرتاب تاخیر تصادفی وجود دارد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 24))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 24))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 24)
-                    except Exception:
-                        pass
-                    return
-                if page == 25:
-                    lst = ROTATING_MUSIC.get(target_user_id) or []
-                    interval = ROTATING_MUSIC_INTERVAL.get(target_user_id, 1)
-                    st = "on ✅" if ROTATING_MUSIC_STATUS.get(target_user_id) else "off ❌"
-                    help_text = (
-                        f"🎵 آهنگ چرخشی | self MR\n\n"
-                        f"وضعیت: {st}\n"
-                        f"تایم: هر {interval} ساعت\n"
-                        f"تعداد آهنگ: {len(lst)}\n\n"
-                        f"دستورات:\n"
-                        f"ریپلای روی آهنگ + `.اضافه کردن آهنگ`\n"
-                        f".تنظیم تایم آهنگ 2\n"
-                        f"(حداقل ۱ ساعت — حداکثر ۲۴ ساعت)\n"
-                        f".لیست آهنگ چرخشی\n"
-                        f".پاکسازی لیست آهنگ چرخشی\n"
-                        f".آهنگ چرخشی روشن\n"
-                        f".آهنگ چرخشی خاموش"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 25))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 25))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 25)
-                    except Exception:
-                        pass
-                    return
-                if page == 26:
-                    help_text = (
-                        "🕐 ساعت کشورها | self MR\n\n"
-                        "دستورات:\n"
-                        "`.ساعت ایران`\n"
-                        "`.ساعت Tokyo`\n"
-                        "`.ساعت دبی`\n"
-                        "`.زمان لندن`\n\n"
-                        "نام کشور یا شهر را بعد از دستور بنویسید."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 26))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 26))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 26)
-                    except Exception:
-                        pass
-                    return
-                if page == 27:
-                    help_text = (
-                        "🌤 آب و هوا | self MR\n\n"
-                        "دستورات:\n"
-                        "`.آب و هوا تهران`\n"
-                        "`.آب و هوا London`\n"
-                        "`.هوای شیراز`\n\n"
-                        "نام شهر را بعد از دستور بنویسید."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 27))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 27))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 27)
-                    except Exception:
-                        pass
-                    return
-                if page == 28:
-                    help_text = (
-                        "🎤 ویس به متن | self MR\n\n"
-                        "روی یک ویس / صوت ریپلای کنید:\n"
-                        "`.ویس به متن`"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 28))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 28))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 28)
-                    except Exception:
-                        pass
-                    return
-                if page == 29:
-                    help_text = (
-                        "📄 عکس ↔ PDF | self MR\n\n"
-                        "ریپلای روی عکس:\n"
-                        "`.عکس به pdf`\n\n"
-                        "ریپلای روی PDF:\n"
-                        "`.pdf به عکس`\n"
-                        "(صفحه اول PDF → عکس)\n\n"
-                        "PDF→عکس نیاز به pymupdf دارد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 29))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 29))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 29)
-                    except Exception:
-                        pass
-                    return
-                if page == 30:
-                    help_text = (
-                        "👑 تگ ادمین / اعضا | self MR\n\n"
-                        "فقط داخل گروه:\n"
-                        "`.تگ ادمین`\n"
-                        "`.تگ اعضا`\n\n"
-                        "تگ اعضا حداکثر ۲۰۰ نفر\n"
-                        "با تاخیر ضد‌اسپم ارسال می‌شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 30))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 30))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 30)
-                    except Exception:
-                        pass
-                    return
-                if page == 31:
-                    st = FIRST_COMMENT_STATUS.get(target_user_id, False)
-                    txt = FIRST_COMMENT_TEXT.get(target_user_id, "🔥") or "🔥"
-                    help_text = (
-                        f"💬 کامنت اول کانال | self MR\n\n"
-                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n"
-                        f"متن فعلی: {txt[:80]}\n\n"
-                        f"دستورات:\n"
-                        f".کامنت اول روشن\n"
-                        f".کامنت اول خاموش\n"
-                        f".تنظیم کامنت اول متن دلخواه\n\n"
-                        f"روی پست کانال‌هایی که گروه بحث دارند\n"
-                        f"به‌صورت خودکار کامنت می‌گذارد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 31))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 31))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 31)
-                    except Exception:
-                        pass
-                    return
-                if page == 32:
-                    help_text = (
-                        "✨ کیفیت عکس | self MR\n\n"
-                        "روی عکس ریپلای کنید:\n"
-                        "`.کیفیت عکس`\n"
-                        "`.بهبود عکس`\n\n"
-                        "بزرگ‌نمایی نرم بدون پیکسله‌شدن."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 32))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 32))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 32)
-                    except Exception:
-                        pass
-                    return
-                if page == 33:
-                    help_text = (
-                        "🔎 سرچ آهنگ | self MR\n\n"
-                        "دستورات:\n"
-                        "`.سرچ آهنگ شادمهر`\n"
-                        "`.سرچ آهنگ تکه از متن`\n\n"
-                        "لیست آهنگ‌ها با دکمه می‌آید.\n"
-                        "روی هر دکمه بزن تا فایل صوتی دانلود شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 33))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 33))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 33)
-                    except Exception:
-                        pass
-                    return
-                if page == 19:
-
-                    help_text = (
-                        "هوش مصنوعی | self MR\n\n"
-                        "گزینه مورد نظر را انتخاب کنید."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 19))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 19))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 19)
-                    except Exception:
-                        pass
-                    return
-                if page == 20:
-                    help_text = (
-                        "متن گسترده | self MR\n\n"
-                        "دستور:\n"
-                        ".هوش متن گسترده + متن شما\n\n"
-                        "مثال:\n"
-                        ".هوش متن گسترده + علی در روز آفتابی با دوستانش بیرون رفت\n\n"
-                        "ربات متن را زیبا، داستانی و با ایموجی گسترش می‌دهد."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 20))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 20))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 20)
-                    except Exception:
-                        pass
-                    return
-                if page == 21:
-                    help_text = (
-                        "استخراج متن آهنگ | self MR\n\n"
-                        "دستورات:\n"
-                        "ریپلای + .متن آهنگ\n\n"
-                        "روی فایل آهنگ (music) ریپلای کنید تا متن آهنگ پیدا شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 21))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 21))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 21)
-                    except Exception:
-                        pass
-                    return
-                if page == 18:
-
-                    lst = ROTATING_NAMES.get(target_user_id) or []
-                    interval = ROTATING_NAME_INTERVAL.get(target_user_id, 10)
-                    st = "on ✅" if ROTATING_NAME_STATUS.get(target_user_id) else "off ❌"
-                    names_txt = "\n".join(f"• {n}" for n in lst) if lst else "—"
-                    help_text = (
-                        f"اسم چرخشی | self MR\n\n"
-                        f"وضعیت: {st}\n"
-                        f"تایم: {interval} ثانیه\n\n"
-                        f"لیست اسامی:\n{names_txt}\n\n"
-                        f"دستورات:\n"
-                        f".افزودن اسم علی\n"
-                        f".تنظیم تایم اسم 5\n"
-                        f".لیست اسامی چرخشی\n"
-                        f".پاکسازی لیست اسم چرخشی\n"
-                        f".اسم چرخشی روشن\n"
-                        f".اسم چرخشی خاموش"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 18))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 18))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 18)
-                    except Exception:
-                        pass
-                    return
-                if page == 17:
-                    lines = ["انیمیشن | self MR", "", "انیمیشن‌ها:"]
-                    for i, name in enumerate(EMOJI_ANIMATIONS.keys(), 1):
-                        lines.append(f"{i}- .{name}")
-                    help_text = "\n".join(lines)
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 17))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 17))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 17)
-                    except Exception:
-                        pass
-                    return
-                if page == 13:
-                    help_text = (
-                        "ذخیره | self MR\n\n"
-                        "برای استفاده:\n"
-                        "ریپلای + .ذخیره\n\n"
-                        "پشتیبانی از:\n"
-                        "• متن، عکس، ویدیو، ویس، فایل\n"
-                        "• عکس/ویدیو نابودشونده (تایم‌دار)\n"
-                        "خروجی در Saved Messages ذخیره می‌شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 13))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 13))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 13)
-                    except Exception:
-                        pass
-                    return
-                if page == 14:
-                    help_text = (
-                        "تغییر اسم | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".اسم نام جدید\n\n"
-                        "مثال:\n"
-                        ".اسم محمدرضا"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 14))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 14))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 14)
-                    except Exception:
-                        pass
-                    return
-                if page == 15:
-                    help_text = (
-                        "تغییر بیوگرافی | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".بیو متن بیوگرافی\n\n"
-                        "مثال:\n"
-                        ".بیو زندگی ادامه دارد\n\n"
-                        "حداکثر ۷۰ کاراکتر"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 15))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 15))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 15)
-                    except Exception:
-                        pass
-                    return
-                if page == 16:
-                    help_text = (
-                        "تغییر یوزرنیم | self MR\n\n"
-                        "نحوه استفاده:\n"
-                        ".یوزرنیم myname\n\n"
-                        "مثال:\n"
-                        ".یوزرنیم self_mr\n\n"
-                        "۵ تا ۳۲ کاراکتر | حرف اول انگلیسی"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 16))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 16))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 16)
-                    except Exception:
-                        pass
-                    return
-                if page == 11:
-                    st = EDIT_ALERT_STATUS.get(target_user_id, False)
-                    help_text = (
-                        "هشدار ویرایش پیام | self MR\n\n"
-                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n\n"
-                        "برای استفاده:\n"
-                        ".هشدار ویرایش روشن\n"
-                        ".هشدار ویرایش خاموش\n\n"
-                        "وقتی کسی در پیوی پیامش را ویرایش کند، متن قبل از ویرایش به پیام‌های ذخیره‌شده ارسال می‌شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 11)
-                    except Exception:
-                        pass
-                    return
-                if page == 12:
-                    st = DELETE_ALERT_STATUS.get(target_user_id, False)
-                    help_text = (
-                        "هشدار حذف پیام | self MR\n\n"
-                        f"وضعیت: {'on ✅' if st else 'off ❌'}\n\n"
-                        "برای استفاده:\n"
-                        ".هشدار حذف روشن\n"
-                        ".هشدار حذف خاموش\n\n"
-                        "وقتی کسی در پیوی پیامش را حذف کند، متن حذف‌شده به پیام‌های ذخیره‌شده ارسال می‌شود."
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
-                        else:
-                            await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 12)
-                    except Exception:
-                        pass
-                    return
-                if page == 10:
-                    help_text = (
-                        "ساخت ویدیو گرد | self MR\n\n"
-                        "دستورات\n"
-                        ".ویدیو مسیج\n\n"
-                        "روی یک ویدیو ریپلای کن؛ خروجی به صورت ویدیو گرد در همان چت ارسال می‌شود."
-                    )
+                if page in HELP_TEXTS:
+                    help_text = HELP_TEXTS[page]
                     try:
                         if callback.inline_message_id:
                             await client.edit_inline_text(
                                 callback.inline_message_id,
                                 help_text,
-                                reply_markup=generate_panel_markup(target_user_id, 10),
-                            )
-                        else:
-                            await callback.message.edit_text(
-                                help_text,
-                                reply_markup=generate_panel_markup(target_user_id, 10),
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 10)
-                    except Exception:
-                        pass
-                    return
-                # صفحه عضویت اجباری: متن راهنما + دکمه‌های وضعیت
-                if page == 9:
-                    st = FORCE_JOIN_PV_STATUS.get(target_user_id, False)
-                    chs = FORCE_JOIN_CHANNELS.get(target_user_id) or []
-                    status = "on ✅" if st else "off ❌"
-                    help_text = (
-                        f"عضویت اجباری پیوی | self MR\n\n"
-                        f"وضعیت: ( {status} )\n"
-                        f"تنظیمات\n\n"
-                        f".تنظیم عضویت @channel\n"
-                        f".حذف عضویت @channel\n"
-                        f".لیست عضویت اجباری\n"
-                        f".پاکسازی عضویت اجباری\n"
-                        f".عضویت اجباری روشن\n"
-                        f".عضویت اجباری خاموش\n\n"
-                        f"کانال‌های ثبت‌شده: {len(chs)}"
-                    )
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(
-                                callback.inline_message_id,
-                                help_text,
-                                reply_markup=generate_panel_markup(target_user_id, 9),
-                            )
-                        else:
-                            await callback.message.edit_text(
-                                help_text,
-                                reply_markup=generate_panel_markup(target_user_id, 9),
-                            )
-                    except Exception:
-                        await edit_panel_colored(callback, target_user_id, 9)
-                    # رنگ دکمه‌ها
-                    try:
-                        await edit_panel_colored(callback, target_user_id, 9)
-                    except Exception:
-                        pass
-                else:
-                    # صفحات اصلی: متن پنل را برگردان (نه راهنمای قبلی)
-                    page_titles = {
-                        1: f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}",
-                        2: "✏️ حالت متن / فونت‌ها | self MR",
-                        3: "🛡 بخش امنیتی | self MR",
-                        4: "⚡ اکشن‌ها | self MR",
-                        5: "🕐 فونت ساعت | self MR",
-                        6: "💱 قیمت ارز | self MR",
-                        7: "🎤 تبدیل متن به ویس | self MR",
-                        8: "🧩 تبدیل به استیکر | self MR",
-                    }
-                    panel_text = page_titles.get(page, f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}")
-                    try:
-                        if callback.inline_message_id:
-                            await client.edit_inline_text(
-                                callback.inline_message_id,
-                                panel_text,
                                 reply_markup=generate_panel_markup(target_user_id, page),
                             )
                         else:
                             await callback.message.edit_text(
-                                panel_text,
+                                help_text,
                                 reply_markup=generate_panel_markup(target_user_id, page),
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logging.warning(f"help edit page={page}: {e}")
+                        try:
+                            await callback.message.edit_text(
+                                help_text,
+                                reply_markup=generate_panel_markup(target_user_id, page),
+                            )
+                        except Exception:
+                            pass
                     try:
                         await edit_panel_colored(callback, target_user_id, page)
                     except Exception:
                         pass
-            except Exception:
-                pass
+                    return
+
+                # صفحات منو (۱ تا ۵ و ۱۹ با کیبورد مخصوص)
+                page_titles = {
+                    1: f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}",
+                    2: "✏️ حالت متن / فونت‌ها | self MR",
+                    3: "🛡 بخش امنیتی | self MR",
+                    4: "⚡ اکشن‌ها | self MR",
+                    5: "🕐 فونت ساعت | self MR",
+                    19: "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید.",
+                    35: "🐱 میو | self MR",
+                }
+                panel_text = page_titles.get(page, f"⚡️ self MR\n📄 صفحه {page}")
+                try:
+                    if callback.inline_message_id:
+                        await client.edit_inline_text(
+                            callback.inline_message_id,
+                            panel_text,
+                            reply_markup=generate_panel_markup(target_user_id, page),
+                        )
+                    else:
+                        await callback.message.edit_text(
+                            panel_text,
+                            reply_markup=generate_panel_markup(target_user_id, page),
+                        )
+                except Exception:
+                    pass
+                try:
+                    await edit_panel_colored(callback, target_user_id, page)
+                except Exception:
+                    pass
+            except Exception as e:
+                logging.error(f"panel_page error: {e}")
             return
 
-        elif action == "toggle_edit_alert":
-            target_user_id = int(parts[-1])
-            if callback.from_user.id != target_user_id:
-                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-                return
-            ns = not EDIT_ALERT_STATUS.get(target_user_id, False)
-            EDIT_ALERT_STATUS[target_user_id] = ns
-            data_manager.update_user_data(target_user_id, {"settings": {"edit_alert": ns}})
-            persist_all_user_settings(target_user_id)
-            await callback.answer("✅ روشن" if ns else "❌ خاموش")
-            try:
-                help_text = (
-                    "هشدار ویرایش پیام | self MR\n\n"
-                    f"وضعیت: {'on ✅' if ns else 'off ❌'}\n\n"
-                    "برای استفاده:\n.هشدار ویرایش روشن\n.هشدار ویرایش خاموش"
-                )
-                if callback.inline_message_id:
-                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 11))
-                else:
-                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 11))
-            except Exception:
-                pass
-            try:
-                await edit_panel_colored(callback, target_user_id, 11)
-            except Exception:
-                pass
-            return
-
-        elif action == "toggle_delete_alert":
-            target_user_id = int(parts[-1])
-            if callback.from_user.id != target_user_id:
-                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-                return
-            ns = not DELETE_ALERT_STATUS.get(target_user_id, False)
-            DELETE_ALERT_STATUS[target_user_id] = ns
-            data_manager.update_user_data(target_user_id, {"settings": {"delete_alert": ns}})
-            persist_all_user_settings(target_user_id)
-            await callback.answer("✅ روشن" if ns else "❌ خاموش")
-            try:
-                help_text = (
-                    "هشدار حذف پیام | self MR\n\n"
-                    f"وضعیت: {'on ✅' if ns else 'off ❌'}\n\n"
-                    "برای استفاده:\n.هشدار حذف روشن\n.هشدار حذف خاموش"
-                )
-                if callback.inline_message_id:
-                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 12))
-                else:
-                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 12))
-            except Exception:
-                pass
-            try:
-                await edit_panel_colored(callback, target_user_id, 12)
-            except Exception:
-                pass
-            return
-
-        elif action == "toggle_force_join":
-            target_user_id = int(parts[-1])
-            if callback.from_user.id != target_user_id:
-                await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-                return
-            new_state = not FORCE_JOIN_PV_STATUS.get(target_user_id, False)
-            FORCE_JOIN_PV_STATUS[target_user_id] = new_state
-            data_manager.update_user_data(target_user_id, {"settings": {"force_join_pv": new_state}})
-            persist_all_user_settings(target_user_id)
-            await callback.answer("✅ روشن شد" if new_state else "❌ خاموش شد")
-            # رفرش متن + دکمه
-            st = new_state
-            chs = FORCE_JOIN_CHANNELS.get(target_user_id) or []
-            status = "on ✅" if st else "off ❌"
-            help_text = (
-                f"عضویت اجباری پیوی | self MR\n\n"
-                f"وضعیت: ( {status} )\n"
-                f"تنظیمات\n\n"
-                f".تنظیم عضویت @channel\n"
-                f".حذف عضویت @channel\n"
-                f".لیست عضویت اجباری\n"
-                f".پاکسازی عضویت اجباری\n"
-                f".عضویت اجباری روشن\n"
-                f".عضویت اجباری خاموش\n\n"
-                f"کانال‌های ثبت‌شده: {len(chs)}"
-            )
-            try:
-                if callback.inline_message_id:
-                    await client.edit_inline_text(
-                        callback.inline_message_id,
-                        help_text,
-                        reply_markup=generate_panel_markup(target_user_id, 9),
-                    )
-                else:
-                    await callback.message.edit_text(
-                        help_text,
-                        reply_markup=generate_panel_markup(target_user_id, 9),
-                    )
-            except Exception:
-                pass
-            try:
-                await edit_panel_colored(callback, target_user_id, 9)
-            except Exception:
-                pass
-            return
-
-        elif action == "close_panel":
-            try:
-                if callback.inline_message_id:
-                    await client.edit_inline_text(callback.inline_message_id, "✔ پنل بسته شد.")
-                else:
-                    await callback.message.delete()
-            except:
-                pass
-            return
-
-        if settings_update:
-            data_manager.update_user_data(target_user_id, {"settings": settings_update})
-            # ذخیره کامل برای جلوگیری از پریدن تنظیمات
-            try:
-                persist_all_user_settings(target_user_id)
-            except Exception:
-                pass
-
-        # بعد از تغییر، همان بخش پنل را نگه دار
-        stay_page = 1
-        if action in ("toggle_sec", "toggle_seen", "toggle_anti", "toggle_g_enemy"):
-            stay_page = 3
-        elif action in ("toggle_type", "toggle_game") or action.startswith("set_action"):
-            stay_page = 4
-        elif action == "toggle_pv":
-            stay_page = 1
+        
         elif action.startswith("lang_"):
             stay_page = 1
 
@@ -9505,36 +8961,54 @@ async def finalize(message, user_c, phone):
 
     user_id = me.id
 
-    # کسر هزینه فعال‌سازی
-    if not deduct_balance(user_id, SELF_PRICE):
-        await message.reply_text("❌ خطا در کسر الماس. موجودی کافی نیست.")
-        LOGIN_STATES.pop(message.chat.id, None)
-        return
+    # فقط بار اول فعال‌سازی ۵۰ الماس کسر شود (نه بعد از ری‌استارت)
+    already = False
+    try:
+        if get_session_by_user_id(user_id):
+            already = True
+        elif get_self_start_time(user_id) and int(get_self_start_time(user_id)) > 0:
+            already = True
+    except Exception:
+        already = False
+    if not already:
+        if not deduct_balance(user_id, SELF_PRICE):
+            await message.reply_text("❌ خطا در کسر الماس. موجودی کافی نیست.")
+            LOGIN_STATES.pop(message.chat.id, None)
+            return
+    else:
+        logging.info(f"skip SELF_PRICE for re-activate user={user_id}")
 
     save_session_to_db(phone, s_str, user_id, me.first_name or "", me.username or "")
     data_manager.save_session(phone, s_str, user_id, me.first_name or "", me.username or "")
     
-    # ثبت زمان شروع سلف برای کسر ساعتی
-    set_self_start_time(user_id)
+    # زمان شروع فقط اگر قبلاً نبود
+    try:
+        if not (get_self_start_time(user_id) and int(get_self_start_time(user_id)) > 0):
+            set_self_start_time(user_id)
+    except Exception:
+        set_self_start_time(user_id)
     
     asyncio.create_task(start_bot_instance(s_str, phone, user_id, 'bold'))
     
     LOGIN_STATES.pop(message.chat.id, None)
     
     new_balance = get_balance(user_id)
-    await message.reply_text(
-        f"✅ **self MR با موفقیت فعال شد!**\n\n"
-        f"💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.\n"
-        f"💎 موجودی باقی‌مانده: `{new_balance:,}` الماس\n\n"
-        f"⏰ هر ساعت `{HOURLY_COST}` الماس از حساب شما کسر می‌شود.\n"
-        f"اگر موجودی تمام شود، سلف به صورت خودکار خاموش خواهد شد.\n\n"
-        f"دستور `پنل` را در اکانت خود بزنید."
-    )
-
-# =============================================
-# تابع اصلی با مدیریت Flood
-# =============================================
-
+    if already:
+        await message.reply_text(
+            f"✅ **self MR دوباره فعال شد!**\n\n"
+            f"💎 هزینه فعال‌سازی کسر نشد (قبلاً فعال بودید).\n"
+            f"💎 موجودی: `{new_balance:,}` الماس\n\n"
+            f"دستور `پنل` را در اکانت خود بزنید."
+        )
+    else:
+        await message.reply_text(
+            f"✅ **self MR با موفقیت فعال شد!**\n\n"
+            f"💎 {SELF_PRICE:,} الماس از حساب شما کسر شد.\n"
+            f"💎 موجودی باقی‌مانده: `{new_balance:,}` الماس\n\n"
+            f"⏰ هر ساعت `{HOURLY_COST}` الماس از حساب شما کسر می‌شود.\n"
+            f"اگر موجودی تمام شود، سلف به صورت خودکار خاموش خواهد شد.\n\n"
+            f"دستور `پنل` را در اکانت خود بزنید."
+        )
 
 async def restart_all_selfs():
     """خاموش کردن همه سلف‌های فعال و استارت مجدد از دیتابیس"""

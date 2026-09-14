@@ -2058,6 +2058,7 @@ PREMIUM_EMOJI_MAP = {}  # user_id -> {name: custom_emoji_id}
 # چند ایموجی پیش‌فرض رایج (custom_emoji_id)
 EMOJI_PREMIUM_CONVERT = {}  # user_id -> bool: تبدیل خودکار ایموجی عادی به پریمیوم
 EMOJI_CHAR_TO_PREMIUM = {}  # user_id -> {emoji_char: custom_emoji_id}
+EMOJI_PREMIUM_TEMPLATES = {}  # user_id -> {emoji_char: (chat_id, msg_id)}
 DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
     "❤": 5386650613544205592,
     "❤️": 5386650613544205592,
@@ -3205,12 +3206,13 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم
+        # تبدیل ایموجی عادی → پریمیوم (گپ + پیوی)
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
                 conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
                 if conv_ents:
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.25)
+                    ok = False
                     try:
                         await client.edit_message_text(
                             chat_id=message.chat.id,
@@ -3218,12 +3220,45 @@ async def outgoing_message_modifier(client, message):
                             text=conv_text,
                             entities=conv_ents,
                         )
-                        logging.info(f"premium emoji convert uid={user_id} ents={len(conv_ents)}")
-                        return
+                        ok = True
                     except Exception as e:
-                        err = str(e)
-                        if "MESSAGE_NOT_MODIFIED" not in err:
-                            logging.warning(f"premium emoji edit: {err[:120]}")
+                        if "MESSAGE_NOT_MODIFIED" in str(e):
+                            ok = True
+                        else:
+                            logging.warning(f"premium emoji edit: {str(e)[:140]}")
+                    if not ok:
+                        try:
+                            try:
+                                await client.delete_messages(message.chat.id, message.id)
+                            except Exception:
+                                try:
+                                    await message.delete()
+                                except Exception:
+                                    pass
+                            await client.send_message(message.chat.id, conv_text, entities=conv_ents)
+                            ok = True
+                        except Exception as e2:
+                            logging.warning(f"premium emoji resend: {e2}")
+                    # 3) کپی از قالب ذخیره‌شده (برای گپ‌هایی که entity مستقیم رد می‌شود)
+                    if not ok:
+                        try:
+                            tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+                            # پیدا کردن اولین ایموجی مپ‌شده در متن
+                            mapping = _emoji_map_for_user(user_id)
+                            for k in sorted(mapping.keys(), key=len, reverse=True):
+                                if k in text and k in tmap:
+                                    ch, mid = tmap[k]
+                                    try:
+                                        await client.delete_messages(message.chat.id, message.id)
+                                    except Exception:
+                                        pass
+                                    await client.copy_message(message.chat.id, ch, mid)
+                                    ok = True
+                                    break
+                        except Exception as e3:
+                            logging.warning(f"premium emoji copy: {e3}")
+                    if ok:
+                        return
             except Exception as e:
                 logging.warning(f"premium emoji convert: {e}")
 
@@ -6156,9 +6191,23 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ حداکثر {MAX_PREMIUM_EMOJI_SLOTS} ایموجی می‌توانید ثبت کنید.\nاول `.پاکسازی لیست ایموجی`")
             return
         bucket[normal_emoji] = cid
-        if normal_emoji.endswith("\ufe0f") and len(normal_emoji) > 1:
+        if normal_emoji.endswith("️") and len(normal_emoji) > 1:
             bucket[normal_emoji[:-1]] = cid
         EMOJI_CHAR_TO_PREMIUM[user_id] = bucket
+        # قالب برای کپی در گپ/پیوی (نه فقط سیو پیام متنی)
+        try:
+            from pyrogram.enums import MessageEntityType
+            from pyrogram.types import MessageEntity
+            ph = "⭐"
+            ent = MessageEntity(type=MessageEntityType.CUSTOM_EMOJI, offset=0, length=len(ph.encode("utf-16-le"))//2, custom_emoji_id=int(cid))
+            tmpl = await client.send_message("me", ph, entities=[ent])
+            tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+            tmap[normal_emoji] = (tmpl.chat.id, tmpl.id)
+            if normal_emoji.endswith("️") and len(normal_emoji) > 1:
+                tmap[normal_emoji[:-1]] = (tmpl.chat.id, tmpl.id)
+            EMOJI_PREMIUM_TEMPLATES[user_id] = tmap
+        except Exception as e:
+            logging.warning(f"emoji template save: {e}")
         try:
             persist_all_user_settings(user_id)
         except Exception:

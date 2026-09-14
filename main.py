@@ -2989,7 +2989,7 @@ def format_emoji_premium_panel(user_id: int) -> str:
     return "\n".join(lines)
 
 
-def convert_normal_emoji_to_premium_entities(text: str, user_id: int):
+
     """
     متن را می‌گیرد؛ ایموجی‌های عادی را با entity کاستوم جایگزین منطقی می‌کند.
     خروجی: (text, entities_list یا None)
@@ -3207,7 +3207,7 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم (اولویت اینلاین برای گپ و پیوی)
+        # تبدیل ایموجی عادی → پریمیوم (گپ + پیوی) اینلاین اول
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
                 mapping = _emoji_map_for_user(user_id)
@@ -3215,32 +3215,30 @@ async def outgoing_message_modifier(client, message):
                 matched_slot = -1
                 if mapping:
                     keys = list(mapping.keys())
-                    for i, k in enumerate(sorted(keys, key=len, reverse=True)):
+                    for k in sorted(keys, key=len, reverse=True):
                         if k and k in text:
                             matched_key = k
-                            # slot در ترتیب dict اصلی
                             try:
                                 matched_slot = keys.index(k)
                             except Exception:
-                                matched_slot = i
+                                matched_slot = 0
                             break
-                if matched_key:
+                if matched_key and text.strip() == matched_key.strip():
                     cid = int(mapping[matched_key])
                     await asyncio.sleep(0.15)
                     ok = False
                     chat_id = message.chat.id
-                    mid = message.id
 
                     async def _del_orig():
                         try:
-                            await client.delete_messages(chat_id, mid)
+                            await client.delete_messages(chat_id, message.id)
                         except Exception:
                             try:
                                 await message.delete()
                             except Exception:
                                 pass
 
-                    # ----- اینلاین (اصلی) -----
+                    # 1) اینلاین
                     try:
                         bot_un = MANAGER_BOT_USERNAME
                         if not bot_un:
@@ -3249,86 +3247,67 @@ async def outgoing_message_modifier(client, message):
                                 bot_un = me_bot.username
                                 globals()["MANAGER_BOT_USERNAME"] = bot_un
                             except Exception as e:
-                                logging.warning(f"bot username: {e}")
+                                logging.warning("bot username: %s", e)
                         if bot_un:
-                            queries = []
-                            if matched_slot >= 0:
-                                queries.append(f"pe|{user_id}|i|{matched_slot}")
+                            queries = [f"pe|{user_id}|i|{matched_slot}"]
                             try:
-                                hx = matched_key.encode("utf-8").hex()
-                                queries.append(f"pe|{user_id}|{hx}")
+                                queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
                             except Exception:
                                 pass
-                            queries.append(f"pe|{user_id}|{matched_key}")
-                            for q in queries:
+                            for qtry in queries:
                                 try:
-                                    results = await client.get_inline_bot_results(bot_un, q)
+                                    results = await client.get_inline_bot_results(bot_un, qtry)
                                     res_list = getattr(results, "results", None) or []
                                     if not res_list:
-                                        logging.warning(f"inline empty q={q!r}")
+                                        logging.warning("inline empty q=%r", qtry)
                                         continue
                                     await client.send_inline_bot_result(
-                                        chat_id,
-                                        results.query_id,
-                                        res_list[0].id,
+                                        chat_id, results.query_id, res_list[0].id
                                     )
                                     await _del_orig()
                                     ok = True
-                                    logging.info(f"premium INLINE ok uid={user_id} chat={chat_id} q={q!r}")
+                                    logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
                                     break
                                 except Exception as e_one:
-                                    logging.warning(f"inline try q={q!r}: {e_one}")
-                        else:
-                            logging.warning("MANAGER_BOT_USERNAME empty — inline skipped")
+                                    logging.warning("inline try: %s", e_one)
                     except Exception as e_inl:
-                        logging.warning(f"premium inline block: {e_inl}")
+                        logging.warning("premium inline: %s", e_inl)
 
-                    # ----- ویرایش entity -----
+                    # 2) ویرایش با entity
                     if not ok:
-                        conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
-                        if not conv_ents:
+                        try:
                             from pyrogram.enums import MessageEntityType
                             from pyrogram.types import MessageEntity
-                            conv_text = matched_key
                             ln = len(matched_key.encode("utf-16-le")) // 2
-                            conv_ents = [MessageEntity(
+                            ents = [MessageEntity(
                                 type=MessageEntityType.CUSTOM_EMOJI,
                                 offset=0,
                                 length=ln,
                                 custom_emoji_id=cid,
                             )]
-                        try:
-                            await client.edit_message_text(chat_id, mid, conv_text, entities=conv_ents)
+                            await client.edit_message_text(chat_id, message.id, matched_key, entities=ents)
                             ok = True
-                            logging.info(f"premium EDIT ok uid={user_id}")
+                            logging.info("premium EDIT entity ok uid=%s", user_id)
                         except Exception as e:
-                            if "MESSAGE_NOT_MODIFIED" in str(e):
-                                ok = True
-                            else:
-                                logging.warning(f"premium edit: {str(e)[:140]}")
+                            logging.warning("premium entity: %s", e)
 
-                    # ----- ارسال دوباره -----
+                    # 3) ارسال entity
                     if not ok:
                         try:
-                            await client.send_message(chat_id, conv_text, entities=conv_ents)
+                            from pyrogram.enums import MessageEntityType
+                            from pyrogram.types import MessageEntity
+                            ln = len(matched_key.encode("utf-16-le")) // 2
+                            ents = [MessageEntity(
+                                type=MessageEntityType.CUSTOM_EMOJI,
+                                offset=0,
+                                length=ln,
+                                custom_emoji_id=cid,
+                            )]
+                            await client.send_message(chat_id, matched_key, entities=ents)
                             await _del_orig()
                             ok = True
-                            logging.info(f"premium SEND ok uid={user_id}")
-                        except Exception as e2:
-                            logging.warning(f"premium send: {e2}")
-
-                    # ----- کپی قالب -----
-                    if not ok:
-                        try:
-                            tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
-                            if matched_key in tmap:
-                                ch, mtid = tmap[matched_key]
-                                await client.copy_message(chat_id, ch, mtid)
-                                await _del_orig()
-                                ok = True
-                                logging.info(f"premium COPY ok uid={user_id}")
-                        except Exception as e3:
-                            logging.warning(f"premium copy: {e3}")
+                        except Exception as e:
+                            logging.warning("premium send entity: %s", e)
 
                     if ok:
                         return

@@ -2332,55 +2332,120 @@ async def rotate_profile_name_task(client: Client, user_id: int):
 
 
 async def _fetch_profile_music_tracks(client: Client) -> list:
-    """خواندن آهنگ‌هایی که خود کاربر روی پروفایلش گذاشته (بدون آپلود جدید)"""
+    """خواندن آهنگ‌های پروفایل با چند روش API + پیام‌های ذخیره‌شده"""
     tracks = []
+    seen_ids = set()
+
+    def _add_doc(doc, title_fallback="آهنگ"):
+        try:
+            if not doc:
+                return
+            doc_id = getattr(doc, "id", None)
+            if doc_id is None or int(doc_id) in seen_ids:
+                return
+            access_hash = getattr(doc, "access_hash", None)
+            file_reference = getattr(doc, "file_reference", b"") or b""
+            title = title_fallback
+            for attr in (getattr(doc, "attributes", None) or []):
+                t = getattr(attr, "title", None) or getattr(attr, "file_name", None)
+                if t:
+                    title = str(t)[:64]
+                    break
+            seen_ids.add(int(doc_id))
+            tracks.append({
+                "title": title,
+                "doc_id": int(doc_id),
+                "access_hash": int(access_hash) if access_hash is not None else 0,
+                "file_reference": file_reference if isinstance(file_reference, (bytes, bytearray)) else b"",
+                "from_profile": True,
+            })
+        except Exception as e:
+            logging.warning(f"_add_doc: {e}")
+
     try:
         from pyrogram.raw import types as raw_types
         me = await client.get_me()
-        peer = await client.resolve_peer(me.id)
-        # چند نام متداول API
-        result = None
-        for inv in (
-            lambda: functions.account.GetSavedMusic(id=peer, offset=0, limit=20),
-            lambda: getattr(functions.account, "GetMusic", None) and functions.account.GetMusic(id=peer, offset=0, limit=20),
-        ):
+        peers = []
+        try:
+            peers.append(raw_types.InputUserSelf())
+        except Exception:
+            pass
+        try:
+            peers.append(await client.resolve_peer("me"))
+        except Exception:
+            pass
+        try:
+            peers.append(await client.resolve_peer(me.id))
+        except Exception:
+            pass
+
+        # روش ۱: account.GetSavedMusic
+        for peer in peers:
             try:
-                fn = inv()
-                if not fn:
-                    continue
-                result = await client.invoke(fn)
-                if result:
+                if not hasattr(functions.account, "GetSavedMusic"):
+                    break
+                result = await client.invoke(
+                    functions.account.GetSavedMusic(id=peer, offset=0, limit=50)
+                )
+                docs = getattr(result, "documents", None) or []
+                logging.info(f"GetSavedMusic docs={len(docs)} peer={type(peer).__name__}")
+                for i, doc in enumerate(docs):
+                    _add_doc(doc, f"آهنگ {i+1}")
+                if tracks:
                     break
             except Exception as e:
-                logging.warning(f"GetSavedMusic try: {e}")
-                continue
-        if not result:
-            return []
-        docs = getattr(result, "documents", None) or []
-        for i, doc in enumerate(docs):
+                logging.warning(f"GetSavedMusic: {e}")
+
+        # روش ۲: GetFullUser — فیلدهای music / saved_music
+        if len(tracks) < 2:
             try:
-                doc_id = getattr(doc, "id", None)
-                access_hash = getattr(doc, "access_hash", None)
-                file_reference = getattr(doc, "file_reference", b"") or b""
-                # عنوان از attributes
-                title = f"آهنگ {i+1}"
-                for attr in (getattr(doc, "attributes", None) or []):
-                    t = getattr(attr, "title", None) or getattr(attr, "file_name", None)
-                    if t:
-                        title = str(t)[:64]
-                        break
-                if doc_id is None:
-                    continue
-                tracks.append({
-                    "title": title,
-                    "doc_id": int(doc_id),
-                    "access_hash": int(access_hash) if access_hash is not None else 0,
-                    "file_reference": file_reference,
-                    "from_profile": True,
-                })
+                full = await client.invoke(functions.users.GetFullUser(id=raw_types.InputUserSelf()))
+                full_user = getattr(full, "full_user", None) or full
+                for attr_name in ("saved_music", "music", "profile_music", "songs"):
+                    val = getattr(full_user, attr_name, None)
+                    if not val:
+                        continue
+                    docs = getattr(val, "documents", None) or (val if isinstance(val, list) else [])
+                    for i, doc in enumerate(docs):
+                        _add_doc(doc, f"آهنگ {i+1}")
+                # گاهی documents در خود full هست
+                for doc in (getattr(full, "documents", None) or []):
+                    _add_doc(doc)
             except Exception as e:
-                logging.warning(f"parse profile music doc: {e}")
-        logging.info(f"profile music fetched: {len(tracks)}")
+                logging.warning(f"GetFullUser music: {e}")
+
+        # روش ۳: جستجو در Saved Messages برای پیام‌های صوتی اخیر (fallback)
+        if len(tracks) < 2:
+            try:
+                async for msg in client.get_chat_history("me", limit=80):
+                    if not msg or not msg.audio:
+                        continue
+                    try:
+                        from pyrogram.file_id import FileId
+                        fid = FileId.decode(msg.audio.file_id)
+                        doc_id = fid.media_id
+                        if doc_id in seen_ids:
+                            continue
+                        seen_ids.add(doc_id)
+                        title = msg.audio.title or msg.audio.file_name or f"آهنگ {len(tracks)+1}"
+                        tracks.append({
+                            "title": str(title)[:64],
+                            "doc_id": int(doc_id),
+                            "access_hash": int(fid.access_hash),
+                            "file_reference": fid.file_reference or b"",
+                            "file_id": msg.audio.file_id,
+                            "chat_id": msg.chat.id,
+                            "msg_id": msg.id,
+                            "from_profile": False,
+                        })
+                    except Exception:
+                        continue
+                    if len(tracks) >= 10:
+                        break
+            except Exception as e:
+                logging.warning(f"saved messages music scan: {e}")
+
+        logging.info(f"profile music fetched total={len(tracks)}")
     except Exception as e:
         logging.warning(f"_fetch_profile_music_tracks: {e}")
     return tracks
@@ -2718,6 +2783,53 @@ def format_profile_snoops(owner_id: int) -> str:
     if len(items) > 50:
         lines.append(f"\n… و `{len(items) - 50}` نفر دیگر")
     return "\n".join(lines)
+
+
+
+async def text_to_qr_image(text: str, out_path: str) -> bool:
+    """ساخت تصویر QR از متن"""
+    text = (text or "").strip()
+    if not text:
+        return False
+    try:
+        url = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" + quote(text[:1500])
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return False
+                data = await resp.read()
+                with open(out_path, "wb") as f:
+                    f.write(data)
+                return os.path.exists(out_path) and os.path.getsize(out_path) > 50
+    except Exception as e:
+        logging.warning(f"text_to_qr: {e}")
+        return False
+
+
+async def qr_image_to_text(image_path: str) -> str:
+    """خواندن متن از تصویر QR"""
+    try:
+        timeout = aiohttp.ClientTimeout(total=25)
+        url = "https://api.qrserver.com/v1/read-qr-code/"
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            with open(image_path, "rb") as f:
+                form = aiohttp.FormData()
+                form.add_field("file", f, filename="qr.png", content_type="image/png")
+                async with session.post(url, data=form) as resp:
+                    if resp.status != 200:
+                        return ""
+                    data = await resp.json(content_type=None)
+                    # [ { "symbol": [ { "data": "..." } ] } ]
+                    if isinstance(data, list) and data:
+                        sym = (data[0] or {}).get("symbol") or []
+                        if sym and isinstance(sym, list):
+                            val = (sym[0] or {}).get("data")
+                            if val:
+                                return str(val)
+    except Exception as e:
+        logging.warning(f"qr_to_text: {e}")
+    return ""
 
 
 async def translate_text(text: str, target_lang: str) -> str:
@@ -5378,6 +5490,34 @@ async def reply_based_controller(client, message):
         await message.edit_text(f"✅ تایم آهنگ چرخشی: هر {hours} ساعت")
         return
 
+    if cmd in (".ثبت آهنگ چرخشی", "ثبت آهنگ چرخشی"):
+        if not message.reply_to_message or not (message.reply_to_message.audio or message.reply_to_message.document):
+            await message.edit_text("❌ روی یک پیام آهنگ ریپلای کن و بفرست:\n`.ثبت آهنگ چرخشی`")
+            return
+        rep = message.reply_to_message
+        media = rep.audio or rep.document
+        try:
+            from pyrogram.file_id import FileId
+            fid = FileId.decode(media.file_id)
+            title = getattr(media, "title", None) or getattr(media, "file_name", None) or f"آهنگ {len(ROTATING_MUSIC.get(user_id) or [])+1}"
+            lst = list(ROTATING_MUSIC.get(user_id) or [])
+            lst.append({
+                "title": str(title)[:64],
+                "doc_id": int(fid.media_id),
+                "access_hash": int(fid.access_hash),
+                "file_reference": fid.file_reference or b"",
+                "file_id": media.file_id,
+                "chat_id": rep.chat.id,
+                "msg_id": rep.id,
+                "from_profile": False,
+            })
+            ROTATING_MUSIC[user_id] = lst
+            persist_all_user_settings(user_id)
+            await message.edit_text(f"✅ ثبت شد: `{title}`\n📊 تعداد: `{len(lst)}`")
+        except Exception as e:
+            await message.edit_text(f"❌ خطا در ثبت: {e}")
+        return
+
     if cmd in (".آهنگ چرخشی روشن", "آهنگ چرخشی روشن"):
         await message.edit_text("⏳ در حال خواندن آهنگ‌های پروفایل...")
         try:
@@ -5385,12 +5525,15 @@ async def reply_based_controller(client, message):
         except Exception as e:
             logging.warning(f"fetch music on: {e}")
             tracks = []
+        stored = list(ROTATING_MUSIC.get(user_id) or [])
+        if len(tracks) < 2 and len(stored) >= 2:
+            tracks = stored
         if len(tracks) < 2:
             await message.edit_text(
-                "❌ حداقل ۲ آهنگ روی پروفایل تلگرام خود بگذارید\n"
-                "سپس دوباره `.آهنگ چرخشی روشن` بزنید.\n\n"
-                "ربات فقط بین همان آهنگ‌های پروفایل جابه‌جا می‌کند\n"
-                "(برای جلوگیری از محدودیت تلگرام)."
+                "❌ حداقل ۲ آهنگ نیاز است.\n\n"
+                "روش ۱: ۲–۳ آهنگ روی پروفایل بگذارید و دوباره روشن کنید.\n"
+                "روش ۲: ریپلای روی آهنگ + `.ثبت آهنگ چرخشی` (حداقل ۲ بار)\n"
+                "بعد `.آهنگ چرخشی روشن`"
             )
             return
         ROTATING_MUSIC[user_id] = tracks
@@ -5651,6 +5794,63 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ خطا در ترجمه: {e}")
         return
 
+
+
+    # ========== QR ==========
+    if cmd.startswith(".متن به QR") or cmd.startswith("متن به QR") or cmd.startswith(".متن به qr") or cmd.startswith("متن به qr"):
+        body = ""
+        for p in (".متن به QR", "متن به QR", ".متن به qr", "متن به qr"):
+            if cmd.startswith(p):
+                body = cmd[len(p):].strip().lstrip("+").strip()
+                break
+        if not body and message.reply_to_message and message.reply_to_message.text:
+            body = message.reply_to_message.text.strip()
+        if not body:
+            await message.edit_text("❌ مثال:\n`.متن به QR سلام دنیا`")
+            return
+        path = f"qr_{user_id}_{int(time.time())}.png"
+        await message.edit_text("⏳ ساخت QR...")
+        ok = await text_to_qr_image(body, path)
+        if not ok:
+            await message.edit_text("❌ ساخت QR ناموفق بود.")
+            return
+        try:
+            await client.send_photo(message.chat.id, path, caption="📱 QR | self MR")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await message.edit_text(f"❌ ارسال QR: {e}")
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        return
+
+    if cmd in (".QR به متن", "QR به متن", ".qr به متن", "qr به متن", ".کیوآر به متن"):
+        rep = message.reply_to_message
+        if not rep or not (rep.photo or (rep.document and (rep.document.mime_type or "").startswith("image"))):
+            await message.edit_text("❌ روی یک عکس QR ریپلای کن و بفرست:\n`.QR به متن`")
+            return
+        await message.edit_text("⏳ خواندن QR...")
+        path = await client.download_media(rep, file_name=f"qr_read_{user_id}_{int(time.time())}.jpg")
+        if not path:
+            await message.edit_text("❌ دانلود تصویر ناموفق.")
+            return
+        try:
+            txt = await qr_image_to_text(path)
+            if txt:
+                await message.edit_text(f"📱 **متن QR:**\n\n`{txt}`")
+            else:
+                await message.edit_text("❌ متنی از QR خوانده نشد.")
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        return
 
     # ========== فضول پروفایل ==========
     if cmd in (".فضول ها", "فضول ها", ".فضول‌ها", "فضول‌ها"):
@@ -6438,7 +6638,10 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
                 _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
             ],
-            [ _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary") ],
+            [
+                _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
+                _styled_btn("📱 QR", f"panel_page_39_{user_id}", style="primary"),
+            ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
 
@@ -6546,7 +6749,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -7485,13 +7688,13 @@ async def callback_panel_handler(client, callback):
                 ),
                 25: (
                     "🎵 آهنگ چرخشی | self MR\n\n"
-                    "اول ۲ یا ۳ آهنگ روی پروفایل تلگرام خود بگذارید.\n"
-                    "بعد ربات همان‌ها را به نوبت عوض می‌کند.\n\n"
+                    "روش ۱: ۲–۳ آهنگ روی پروفایل بگذارید.\n"
+                    "روش ۲: ریپلای + .ثبت آهنگ چرخشی\n\n"
                     "دستورات:\n"
                     ".آهنگ چرخشی روشن\n"
                     ".آهنگ چرخشی خاموش\n"
-                    ".تنظیم تایم آهنگ 2\n\n"
-                    "(تایم بر حسب ساعت — حداقل ۱)"
+                    ".تنظیم تایم آهنگ 2\n"
+                    ".ثبت آهنگ چرخشی"
                 ),
                 26: (
                     "🕐 ساعت کشورها | self MR\n\n"
@@ -7573,6 +7776,12 @@ async def callback_panel_handler(client, callback):
                     "ریپلای + .ترجمه\n\n"
                     "متن دلخواه شما به فارسی ترجمه می‌شود.\n\n"
                     "دکمه‌های EN / RU / CN = ترجمه خودکار خروجی."
+                ),
+                39: (
+                    "📱 QR | self MR\n\n"
+                    "دستورات:\n"
+                    ".متن به QR + متن\n"
+                    ".QR به متن + ریپلای روی QR"
                 ),
             }
             try:

@@ -2061,55 +2061,17 @@ EMOJI_PREMIUM_CONVERT = {}  # user_id -> bool: تبدیل خودکار ایمو�
 EMOJI_CHAR_TO_PREMIUM = {}  # user_id -> {emoji_char: custom_emoji_id}
 EMOJI_PREMIUM_TEMPLATES = {}  # user_id -> {emoji_char: (chat_id, msg_id)}
 DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
-    # حروف انگلیسی (فونت قرمز پریمیوم)
-    "A": 5293991227513914037, "a": 5293991227513914037,
-    "B": 5294446571356697709, "b": 5294446571356697709,
-    "C": 5323692545568424149, "c": 5323692545568424149,
-    "D": 5294029641701407930, "d": 5294029641701407930,
-    "E": 5327938799345349736, "e": 5327938799345349736,
-    "F": 5325878958799994800, "f": 5325878958799994800,
-    "G": 5294448748905119870, "g": 5294448748905119870,
-    "H": 5463362571341942623, "h": 5463362571341942623,
-    "I": 5310097750010901912, "i": 5310097750010901912,
-    "J": 5298628306134909270, "j": 5298628306134909270,
-    "K": 5330144144792763349, "k": 5330144144792763349,
-    "L": 5312383462886356958, "l": 5312383462886356958,
-    "M": 5330094426251344221, "m": 5330094426251344221,
-    "N": 5321450791683241246, "n": 5321450791683241246,
-    "O": 5307644490461231051, "o": 5307644490461231051,
-    "P": 5327844718086733432, "p": 5327844718086733432,
-    "Q": 5314463451123300950, "q": 5314463451123300950,
-    "R": 5328162635860948105, "r": 5328162635860948105,
-    "S": 5332815043220225405, "s": 5332815043220225405,
-    "T": 5330292450013494017, "t": 5330292450013494017,
-    "U": 5330388403877853223, "u": 5330388403877853223,
-    "V": 5332614094585345389, "v": 5332614094585345389,
-    "W": 5332470243245702221, "w": 5332470243245702221,
-    "X": 5334637865995352639, "x": 5334637865995352639,
-    "Y": 5298741607372178279, "y": 5298741607372178279,
-    "Z": 5334671517064117716, "z": 5334671517064117716,
-    # اعداد
-    "0": 5364100121875199958,
-    "1": 5364021841801262907,
-    "2": 5363858809137677324,
-    "3": 5363938558090425835,
-    "4": 5363839335755953463,
-    "5": 5364345867018974771,
-    "6": 5363807703321818872,
-    "7": 5364243419164064459,
-    "8": 5363897880455167063,
-    "9": 5363848393841985608,
-    # نمادها
-    "+": 5298954496016138169,
-    "!": 5301240299085906131,
-    "/": 5325798810415287550,
-    "*": 5325614745296847217,
-    "-": 5325853090211977061,
-    ".": 5332565024583991774,
-    ":": 5332675989359052329,
-    "?": 5341689815748329896,
-    "@": 5463336165883013485,
-    "#": 5393369129996534190,
+    "❤": 5386650613544205592,
+    "❤️": 5386650613544205592,
+    "👍": 5408900743127339898,
+    "🔥": 5409141755087678642,
+    "⭐": 5417916264542682953,
+    "😂": 5431896702279886413,
+    "💰": 5411227513668973897,
+    "👑": 5440661526033634830,
+    "✅": 5411225752743381226,
+    "✔": 5411225752743381226,
+    "♥️": 5386650613544205592,
 }
 DEFAULT_PREMIUM_EMOJIS = {
     "قلب": 5386650613544205592,
@@ -2986,20 +2948,80 @@ async def send_premium_emoji(client, chat_id, custom_emoji_id: int, placeholder:
 
 
 
+
+async def custom_emoji_to_sticker_file_id(client, custom_emoji_id: int, user_id: int = 0):
+    path = None
+    try:
+        from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
+        r = await client.invoke(GetCustomEmojiDocuments(document_id=[int(custom_emoji_id)]))
+        docs = getattr(r, "documents", None) or []
+        if not docs:
+            return None
+        path = await client.download_media(docs[0], file_name=f"cem_{custom_emoji_id}_{user_id}")
+        if not path:
+            return None
+        lower = path.lower()
+        sent = None
+        try:
+            if lower.endswith((".tgs", ".webp", ".webm")):
+                sent = await client.send_sticker("me", path)
+            else:
+                sent = await client.send_document("me", path)
+        except Exception:
+            sent = await client.send_document("me", path)
+        if sent and getattr(sent, "sticker", None):
+            return sent.sticker.file_id
+        if sent and getattr(sent, "document", None):
+            return sent.document.file_id
+        return None
+    except Exception as e:
+        logging.warning("custom_emoji_to_sticker_file_id: %s", e)
+        return None
+    finally:
+        if path:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
+async def send_registered_emoji_sticker(client, chat_id: int, user_id: int, normal_key: str, cid: int) -> bool:
+    tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+    prev = tmap.get(normal_key)
+    fid = None
+    if isinstance(prev, dict):
+        fid = prev.get("sticker_file_id")
+    if fid:
+        try:
+            await client.send_sticker(chat_id, fid)
+            return True
+        except Exception as e:
+            logging.warning("send cached sticker fail: %s", e)
+    fid = await custom_emoji_to_sticker_file_id(client, cid, user_id)
+    if not fid:
+        return False
+    tmap[normal_key] = {"sticker_file_id": fid, "custom_emoji_id": int(cid)}
+    EMOJI_PREMIUM_TEMPLATES[user_id] = tmap
+    try:
+        persist_all_user_settings(user_id)
+    except Exception:
+        pass
+    try:
+        await client.send_sticker(chat_id, fid)
+        return True
+    except Exception as e:
+        logging.warning("send new sticker fail: %s", e)
+        return False
+
+
+
 MAX_PREMIUM_EMOJI_SLOTS = 5
 
 
 def _emoji_map_for_user(user_id: int) -> dict:
-    """ایموجی‌های ثبت‌شده کاربر + لیست ثابت پیش‌فرض (حروف/اعداد/نماد پریمیوم)"""
-    m = {}
-    # اول پیش‌فرض‌ها
-    for k, v in DEFAULT_EMOJI_CHAR_TO_PREMIUM.items():
-        try:
-            m[str(k)] = int(v)
-        except Exception:
-            pass
-    # بعد سفارشی کاربر (روی پیش‌فرض override می‌شود)
+    """فقط ایموجی‌های ثبت‌شده توسط کاربر (حداکثر ۵)"""
     custom = EMOJI_CHAR_TO_PREMIUM.get(user_id) or {}
+    m = {}
     for k, v in custom.items():
         try:
             m[str(k)] = int(v)
@@ -3034,7 +3056,7 @@ def format_emoji_premium_panel(user_id: int) -> str:
     return "\n".join(lines)
 
 
-def convert_normal_emoji_to_premium_entities(text: str, user_id: int):
+
     """
     متن را می‌گیرد؛ ایموجی‌های عادی را با entity کاستوم جایگزین منطقی می‌کند.
     خروجی: (text, entities_list یا None)
@@ -3252,24 +3274,50 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی/حروف → پریمیوم (گپ + پیوی)
+        # تبدیل ایموجی عادی → استیکر پریمیوم (مدل VTR / helper)
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
-                conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
-                if conv_ents:
+                mapping = _emoji_map_for_user(user_id)
+                matched_key = None
+                matched_slot = -1
+                if mapping:
+                    keys = list(mapping.keys())
+                    for k in sorted(keys, key=len, reverse=True):
+                        if k and k in text:
+                            matched_key = k
+                            try:
+                                matched_slot = keys.index(k)
+                            except Exception:
+                                matched_slot = 0
+                            break
+                if matched_key and text.strip() == matched_key.strip():
+                    cid = int(mapping[matched_key])
                     await asyncio.sleep(0.12)
                     ok = False
                     chat_id = message.chat.id
 
-                    # اگر کل پیام فقط یک کاراکتر مپ‌شده است → اینلاین را هم امتحان کن
-                    mapping = _emoji_map_for_user(user_id)
-                    stripped = text.strip()
-                    pure_single = stripped in mapping and len(stripped) <= 2
-
-                    if pure_single:
+                    async def _del_orig():
                         try:
-                            keys = list(mapping.keys())
-                            matched_slot = keys.index(stripped) if stripped in keys else 0
+                            await client.delete_messages(chat_id, message.id)
+                        except Exception:
+                            try:
+                                await message.delete()
+                            except Exception:
+                                pass
+
+                    # 1) استیکر مستقیم (پایدار برای همه)
+                    try:
+                        ok = await send_registered_emoji_sticker(client, chat_id, user_id, matched_key, cid)
+                        if ok:
+                            await _del_orig()
+                            logging.info("premium STICKER ok uid=%s cid=%s", user_id, cid)
+                    except Exception as e:
+                        logging.warning("premium sticker: %s", e)
+                        ok = False
+
+                    # 2) اینلاین هلپر (manager bot) — استیکر کش‌شده
+                    if not ok:
+                        try:
                             bot_un = MANAGER_BOT_USERNAME
                             if not bot_un:
                                 try:
@@ -3277,12 +3325,9 @@ async def outgoing_message_modifier(client, message):
                                     bot_un = me_bot.username
                                     globals()["MANAGER_BOT_USERNAME"] = bot_un
                                 except Exception:
-                                    pass
+                                    bot_un = None
                             if bot_un:
-                                for qtry in (
-                                    f"pe|{user_id}|i|{matched_slot}",
-                                    f"pe|{user_id}|{stripped.encode('utf-8').hex()}",
-                                ):
+                                for qtry in (f"pe|{user_id}|i|{matched_slot}",):
                                     try:
                                         results = await client.get_inline_bot_results(bot_un, qtry)
                                         res_list = getattr(results, "results", None) or []
@@ -3291,50 +3336,31 @@ async def outgoing_message_modifier(client, message):
                                         await client.send_inline_bot_result(
                                             chat_id, results.query_id, res_list[0].id
                                         )
-                                        try:
-                                            await client.delete_messages(chat_id, message.id)
-                                        except Exception:
-                                            try:
-                                                await message.delete()
-                                            except Exception:
-                                                pass
+                                        await _del_orig()
                                         ok = True
-                                        logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
+                                        logging.info("premium INLINE sticker ok uid=%s", user_id)
                                         break
                                     except Exception as e_one:
-                                        logging.warning("inline try: %s", e_one)
+                                        logging.warning("inline sticker try: %s", e_one)
                         except Exception as e_inl:
                             logging.warning("premium inline: %s", e_inl)
 
-                    # روش اصلی: ادیت کل متن با entityهای کاستوم
+                    # 3) entity روی متن (اگر اکانت دسترسی داشته باشد)
                     if not ok:
                         try:
-                            await client.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message.id,
-                                text=conv_text,
-                                entities=conv_ents,
-                            )
+                            from pyrogram.enums import MessageEntityType
+                            from pyrogram.types import MessageEntity
+                            ln = len(matched_key.encode("utf-16-le")) // 2
+                            ents = [MessageEntity(
+                                type=MessageEntityType.CUSTOM_EMOJI,
+                                offset=0,
+                                length=ln,
+                                custom_emoji_id=cid,
+                            )]
+                            await client.edit_message_text(chat_id, message.id, matched_key, entities=ents)
                             ok = True
-                            logging.info("premium FULL entity edit ok uid=%s", user_id)
                         except Exception as e:
-                            logging.warning("premium entity edit: %s", e)
-
-                    # fallback: پاک + ارسال دوباره
-                    if not ok:
-                        try:
-                            try:
-                                await client.delete_messages(chat_id, message.id)
-                            except Exception:
-                                try:
-                                    await message.delete()
-                                except Exception:
-                                    pass
-                            await client.send_message(chat_id, conv_text, entities=conv_ents)
-                            ok = True
-                            logging.info("premium FULL entity send ok uid=%s", user_id)
-                        except Exception as e:
-                            logging.warning("premium entity send: %s", e)
+                            logging.warning("premium entity: %s", e)
 
                     if ok:
                         return
@@ -6273,6 +6299,20 @@ async def reply_based_controller(client, message):
         if normal_emoji.endswith("️") and len(normal_emoji) > 1:
             bucket[normal_emoji[:-1]] = cid
         EMOJI_CHAR_TO_PREMIUM[user_id] = bucket
+
+        # ساخت استیکر از کاستوم‌ایموجی برای استفاده همگانی
+        try:
+            fid = await custom_emoji_to_sticker_file_id(client, cid, user_id)
+            if fid:
+                tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+                tmap[normal_emoji] = {"sticker_file_id": fid, "custom_emoji_id": int(cid)}
+                if normal_emoji.endswith("\ufe0f") and len(normal_emoji) > 1:
+                    tmap[normal_emoji[:-1]] = tmap[normal_emoji]
+                EMOJI_PREMIUM_TEMPLATES[user_id] = tmap
+                logging.info("registered sticker fid for uid=%s", user_id)
+        except Exception as e:
+            logging.warning("register sticker build: %s", e)
+
         # قالب برای کپی در گپ/پیوی (نه فقط سیو پیام متنی)
         try:
             from pyrogram.enums import MessageEntityType
@@ -7357,7 +7397,7 @@ async def inline_panel_handler(client, query):
     q = (query.query or "").strip()
 
     # ===== ایموجی پریمیوم از طریق اینلاین =====
-    # فرمت‌ها: pe|uid|i|slot   یا   pe|uid|hex
+    # فرمت‌ها: pe|uid|hex  یا  pe|uid|i|slot  یا  pe:uid:hex
     if q.startswith("pe|") or q.startswith("pe:"):
         try:
             raw = q.replace("pe:", "pe|")
@@ -7366,8 +7406,8 @@ async def inline_panel_handler(client, query):
             mapping = _emoji_map_for_user(owner_id)
             cid = None
             normal = ""
-
             if len(parts) >= 4 and parts[2] in ("i", "s", "slot"):
+                # pe|uid|i|0
                 try:
                     slot = int(parts[3])
                     keys = list(mapping.keys())
@@ -7378,6 +7418,7 @@ async def inline_panel_handler(client, query):
                     pass
             elif len(parts) >= 3:
                 token = "|".join(parts[2:])
+                # hex utf-8
                 try:
                     normal = bytes.fromhex(token).decode("utf-8")
                     if normal in mapping:
@@ -7391,89 +7432,88 @@ async def inline_panel_handler(client, query):
                             if k in token or token in k:
                                 normal, cid = k, int(v)
                                 break
-
             if not cid:
                 logging.warning(f"inline pe: no cid for q={q!r} map={list(mapping.keys())}")
                 await query.answer([], cache_time=0, is_personal=True)
                 return
 
+            # ترجیح: استیکر کش‌شده کاربر (اگر file_id برای بات قابل استفاده نباشد article)
+            sticker_fid = None
+            try:
+                tmap = EMOJI_PREMIUM_TEMPLATES.get(owner_id) or {}
+                prev = tmap.get(normal) if normal else None
+                if isinstance(prev, dict):
+                    sticker_fid = prev.get("sticker_file_id")
+                if not sticker_fid and mapping:
+                    # اولین کلید
+                    for nk, ncid in mapping.items():
+                        prev = tmap.get(nk)
+                        if isinstance(prev, dict) and prev.get("sticker_file_id"):
+                            sticker_fid = prev.get("sticker_file_id")
+                            normal = nk
+                            cid = int(ncid)
+                            break
+            except Exception:
+                pass
+
+            results_list = []
+            if sticker_fid:
+                results_list.append({
+                    "type": "sticker",
+                    "id": f"pes_{owner_id}_{cid}",
+                    "sticker_file_id": sticker_fid,
+                })
+            # همیشه article با entity هم بده
             ph = normal if normal else "⭐"
             utf16_len = len(ph.encode("utf-16-le")) // 2
-
-            # روش اصلی: entity مستقیم در Bot API
+            results_list.append({
+                "type": "article",
+                "id": f"pe_{owner_id}_{cid}",
+                "title": "ایموجی پریمیوم",
+                "description": str(normal)[:40],
+                "input_message_content": {
+                    "message_text": ph,
+                    "entities": [{
+                        "type": "custom_emoji",
+                        "offset": 0,
+                        "length": utf16_len,
+                        "custom_emoji_id": str(int(cid)),
+                    }],
+                },
+            })
             payload = {
                 "inline_query_id": query.id,
                 "cache_time": 0,
                 "is_personal": True,
-                "results": json.dumps([{
-                    "type": "article",
-                    "id": f"pe_{owner_id}_{cid}",
-                    "title": "ایموجی پریمیوم",
-                    "description": str(normal)[:40] or "premium",
-                    "input_message_content": {
-                        "message_text": ph,
-                        "entities": [{
-                            "type": "custom_emoji",
-                            "offset": 0,
-                            "length": utf16_len,
-                            "custom_emoji_id": str(int(cid)),
-                        }],
-                    },
-                }], ensure_ascii=False),
+                "results": json.dumps(results_list, ensure_ascii=False),
             }
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerInlineQuery"
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=payload) as resp:
                     data = await resp.json()
-                    if data.get("ok"):
-                        return
-                    logging.warning(f"inline pe entity fail: {data}")
-
-                    # fallback HTML (tg-emoji)
-                    payload2 = {
-                        "inline_query_id": query.id,
-                        "cache_time": 0,
-                        "is_personal": True,
-                        "results": json.dumps([{
-                            "type": "article",
-                            "id": f"pe2_{owner_id}_{cid}",
-                            "title": "ایموجی پریمیوم",
-                            "input_message_content": {
-                                "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
-                                "parse_mode": "HTML",
-                            },
-                        }], ensure_ascii=False),
-                    }
-                    async with session.post(url, data=payload2) as resp2:
-                        data2 = await resp2.json()
-                        if data2.get("ok"):
-                            return
-                        logging.warning(f"inline pe html fail: {data2}")
-
-            # آخرین تلاش با pyrogram
-            try:
-                from pyrogram.enums import MessageEntityType
-                from pyrogram.types import MessageEntity
-                ent = MessageEntity(
-                    type=MessageEntityType.CUSTOM_EMOJI,
-                    offset=0,
-                    length=utf16_len,
-                    custom_emoji_id=int(cid),
-                )
-                result = InlineQueryResultArticle(
-                    id=f"pe3_{owner_id}_{cid}",
-                    title="ایموجی پریمیوم",
-                    input_message_content=InputTextMessageContent(
-                        message_text=ph,
-                        entities=[ent],
-                    ),
-                )
-                await query.answer([result], cache_time=0, is_personal=True)
-            except Exception as e3:
-                logging.warning(f"inline pe pyrogram fail: {e3}")
-                await query.answer([], cache_time=0, is_personal=True)
+                    if not data.get("ok"):
+                        logging.warning(f"inline pe answer fail: {data}")
+                        # فقط article html
+                        payload2 = {
+                            "inline_query_id": query.id,
+                            "cache_time": 0,
+                            "is_personal": True,
+                            "results": json.dumps([{
+                                "type": "article",
+                                "id": f"pe2_{owner_id}_{cid}",
+                                "title": "ایموجی پریمیوم",
+                                "input_message_content": {
+                                    "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
+                                    "parse_mode": "HTML",
+                                },
+                            }], ensure_ascii=False),
+                        }
+                        async with session.post(url, data=payload2) as resp2:
+                            data2 = await resp2.json()
+                            if not data2.get("ok"):
+                                logging.warning(f"inline pe html fail: {data2}")
+                                await query.answer([], cache_time=0, is_personal=True)
             return
-
         except Exception as e:
             logging.warning(f"inline pe error: {e}")
             try:
@@ -7482,8 +7522,7 @@ async def inline_panel_handler(client, query):
                 pass
             return
 
-    # ===== پنل =====
-    if q != "panel" and q != "":
+    if q != "panel":
         return
 
     keyboard = build_panel_keyboard(user_id, 1)

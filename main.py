@@ -2330,6 +2330,62 @@ async def rotate_profile_name_task(client: Client, user_id: int):
             await asyncio.sleep(5)
 
 
+
+async def _fetch_profile_music_tracks(client: Client) -> list:
+    """خواندن آهنگ‌هایی که خود کاربر روی پروفایلش گذاشته (بدون آپلود جدید)"""
+    tracks = []
+    try:
+        from pyrogram.raw import types as raw_types
+        me = await client.get_me()
+        peer = await client.resolve_peer(me.id)
+        # چند نام متداول API
+        result = None
+        for inv in (
+            lambda: functions.account.GetSavedMusic(id=peer, offset=0, limit=20),
+            lambda: getattr(functions.account, "GetMusic", None) and functions.account.GetMusic(id=peer, offset=0, limit=20),
+        ):
+            try:
+                fn = inv()
+                if not fn:
+                    continue
+                result = await client.invoke(fn)
+                if result:
+                    break
+            except Exception as e:
+                logging.warning(f"GetSavedMusic try: {e}")
+                continue
+        if not result:
+            return []
+        docs = getattr(result, "documents", None) or []
+        for i, doc in enumerate(docs):
+            try:
+                doc_id = getattr(doc, "id", None)
+                access_hash = getattr(doc, "access_hash", None)
+                file_reference = getattr(doc, "file_reference", b"") or b""
+                # عنوان از attributes
+                title = f"آهنگ {i+1}"
+                for attr in (getattr(doc, "attributes", None) or []):
+                    t = getattr(attr, "title", None) or getattr(attr, "file_name", None)
+                    if t:
+                        title = str(t)[:64]
+                        break
+                if doc_id is None:
+                    continue
+                tracks.append({
+                    "title": title,
+                    "doc_id": int(doc_id),
+                    "access_hash": int(access_hash) if access_hash is not None else 0,
+                    "file_reference": file_reference,
+                    "from_profile": True,
+                })
+            except Exception as e:
+                logging.warning(f"parse profile music doc: {e}")
+        logging.info(f"profile music fetched: {len(tracks)}")
+    except Exception as e:
+        logging.warning(f"_fetch_profile_music_tracks: {e}")
+    return tracks
+
+
 async def _apply_profile_music(client: Client, user_id: int, track: dict) -> bool:
     """اعمال آهنگ روی موزیک پروفایل — با رفرش file_reference و دانلود مجدد"""
     if not track or not isinstance(track, dict):
@@ -2392,8 +2448,26 @@ async def _apply_profile_music(client: Client, user_id: int, track: dict) -> boo
     temp_msg = None
     input_doc = None
     try:
+        # 0) آهنگ از خود پروفایل (doc_id)
+        if track.get("from_profile") and track.get("doc_id"):
+            try:
+                from pyrogram.raw import types as raw_types
+                fr = track.get("file_reference") or b""
+                if isinstance(fr, str):
+                    try:
+                        fr = bytes.fromhex(fr)
+                    except Exception:
+                        fr = b""
+                input_doc = raw_types.InputDocument(
+                    id=int(track["doc_id"]),
+                    access_hash=int(track.get("access_hash") or 0),
+                    file_reference=fr if isinstance(fr, (bytes, bytearray)) else b"",
+                )
+            except Exception as e:
+                logging.warning(f"profile track input: {e}")
+
         # 1) رفرش از پیام اصلی (بهترین روش)
-        if src_chat and src_msg:
+        if input_doc is None and src_chat and src_msg:
             try:
                 orig = await client.get_messages(int(src_chat), int(src_msg))
                 if orig and (orig.audio or orig.document):
@@ -2493,40 +2567,44 @@ async def _apply_profile_music(client: Client, user_id: int, track: dict) -> boo
 
 
 async def rotate_profile_music_task(client: Client, user_id: int):
-    """چرخش آهنگ پروفایل — حداقل هر ۱ ساعت، حداکثر ۲۴ ساعت"""
-    await asyncio.sleep(8)
-    while True:
+    """چرخش بین آهنگ‌های روی پروفایل کاربر (بدون آپلود مکرر)"""
+    while user_id in ACTIVE_BOTS:
         try:
-            if user_id not in ACTIVE_BOTS:
-                break
             if not ROTATING_MUSIC_STATUS.get(user_id, False):
-                await asyncio.sleep(8)
+                await asyncio.sleep(30)
                 continue
             tracks = ROTATING_MUSIC.get(user_id) or []
+            if len(tracks) < 2:
+                # تلاش برای خواندن از پروفایل
+                try:
+                    fetched = await _fetch_profile_music_tracks(client)
+                    if fetched:
+                        ROTATING_MUSIC[user_id] = fetched
+                        tracks = fetched
+                        try:
+                            persist_all_user_settings(user_id)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logging.warning(f"refresh profile music: {e}")
             if len(tracks) < 1:
-                await asyncio.sleep(15)
+                await asyncio.sleep(60)
                 continue
-
             hours = max(1, min(24, int(ROTATING_MUSIC_INTERVAL.get(user_id) or 1)))
             idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(tracks)
             track = tracks[idx]
-
             ok = await _apply_profile_music(client, user_id, track)
             if ok:
                 ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(tracks)
-                logging.info(f"🎵 rotated music uid={user_id} idx={idx} title={track.get('title')}")
-            else:
-                logging.warning(f"🎵 rotate apply failed uid={user_id} title={track.get('title')}")
-                # اگر شکست خورد، ۳۰ دقیقه بعد دوباره تلاش (ایندکس را جلو نبر)
-                await asyncio.sleep(30 * 60)
-                continue
-
+                logging.info(f"🎵 rotated profile music uid={user_id} -> {track.get('title')}")
+            # فاصله بر حسب ساعت — برای ضد بن تلگرام حداقل ۱ ساعت
             await asyncio.sleep(hours * 3600)
         except asyncio.CancelledError:
             break
         except Exception as e:
             logging.error(f"rotate_profile_music_task: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(120)
+
 
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -2612,7 +2690,7 @@ def format_profile_snoops(owner_id: int) -> str:
         return (
             "👁 **فضول پروفایل | self MR**\n\n"
             "هنوز کسی ثبت نشده.\n"
-            "افرادی که پروفایل شما را ببینند در این لیست نمایش داده میشوند."
+            "افرادی که به پیوی شما پیام بدهند اینجا لیست می‌شوند."
         )
     items = sorted(
         bucket.items(),
@@ -5281,41 +5359,7 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ اسم چرخشی خاموش شد | self MR")
         return
 
-    # ========== آهنگ چرخشی ==========
-    if cmd in (".اضافه کردن آهنگ", "اضافه کردن آهنگ", ".افزودن آهنگ", "افزودن آهنگ"):
-        reply = message.reply_to_message
-        if not reply or not (reply.audio or reply.document or reply.voice):
-            await message.edit_text("❌ روی یک فایل آهنگ / موزیک ریپلای کنید و بعد بفرستید:\n`.اضافه کردن آهنگ`")
-            return
-        media = reply.audio or reply.document or reply.voice
-        file_id = media.file_id
-        title = None
-        if reply.audio:
-            title = reply.audio.title or reply.audio.file_name
-            if reply.audio.performer:
-                title = f"{reply.audio.performer} - {title}" if title else reply.audio.performer
-        if not title:
-            title = getattr(media, "file_name", None) or f"آهنگ {len(ROTATING_MUSIC.get(user_id) or []) + 1}"
-        title = str(title)[:80]
-        # دانلود محلی برای اعمال پایدار روی پروفایل
-        local_path = ""
-        try:
-            music_dir = os.path.join(DOWNLOAD_PATH, "music", str(user_id))
-            os.makedirs(music_dir, exist_ok=True)
-            local_path = await client.download_media(
-                reply,
-                file_name=os.path.join(music_dir, f"track_{int(time.time())}_{random.randint(100,999)}")
-            ) or ""
-        except Exception as e:
-            logging.warning(f"music download for rotate: {e}")
-            local_path = ""
-        lst = ROTATING_MUSIC.get(user_id) or []
-        lst.append({"file_id": file_id, "title": title, "path": local_path or "", "chat_id": reply.chat.id if reply.chat else None, "msg_id": reply.id})
-        ROTATING_MUSIC[user_id] = lst
-        persist_all_user_settings(user_id)
-        await message.edit_text(f"✅ آهنگ اضافه شد: `{title}`\nتعداد لیست: {len(lst)}")
-        return
-
+    # ========== آهنگ چرخشی (از آهنگ‌های پروفایل) ==========
     if cmd.startswith(".تنظیم تایم آهنگ ") or cmd.startswith("تنظیم تایم آهنگ "):
         parts = cmd.lstrip(".").split()
         try:
@@ -5334,55 +5378,38 @@ async def reply_based_controller(client, message):
         await message.edit_text(f"✅ تایم آهنگ چرخشی: هر {hours} ساعت")
         return
 
-    if cmd in (".پاکسازی لیست آهنگ چرخشی", "پاکسازی لیست آهنگ چرخشی", ".پاکسازی لیست آهنگ", "پاکسازی لیست آهنگ"):
-        ROTATING_MUSIC[user_id] = []
+    if cmd in (".آهنگ چرخشی روشن", "آهنگ چرخشی روشن"):
+        await message.edit_text("⏳ در حال خواندن آهنگ‌های پروفایل...")
+        try:
+            tracks = await _fetch_profile_music_tracks(client)
+        except Exception as e:
+            logging.warning(f"fetch music on: {e}")
+            tracks = []
+        if len(tracks) < 2:
+            await message.edit_text(
+                "❌ حداقل ۲ آهنگ روی پروفایل تلگرام خود بگذارید\n"
+                "سپس دوباره `.آهنگ چرخشی روشن` بزنید.\n\n"
+                "ربات فقط بین همان آهنگ‌های پروفایل جابه‌جا می‌کند\n"
+                "(برای جلوگیری از محدودیت تلگرام)."
+            )
+            return
+        ROTATING_MUSIC[user_id] = tracks
+        ROTATING_MUSIC_STATUS[user_id] = True
         ROTATING_MUSIC_INDEX[user_id] = 0
         persist_all_user_settings(user_id)
-        await message.edit_text("✅ لیست آهنگ چرخشی پاک شد.")
-        return
-
-    if cmd in (".لیست آهنگ چرخشی", "لیست آهنگ چرخشی", ".لیست آهنگ", "لیست آهنگ"):
-        lst = ROTATING_MUSIC.get(user_id) or []
-        if not lst:
-            await message.edit_text("لیست آهنگ چرخشی خالی است.")
-            return
-        body = "\n".join(
-            f"{i}. {(t.get('title') if isinstance(t, dict) else t)}"
-            for i, t in enumerate(lst, 1)
-        )
-        interval = ROTATING_MUSIC_INTERVAL.get(user_id, 1)
-        st = "on ✅" if ROTATING_MUSIC_STATUS.get(user_id) else "off ❌"
-        await message.edit_text(
-            f"لیست آهنگ چرخشی | self MR\n\n{body}\n\n"
-            f"⏱ تایم: هر {interval} ساعت\nوضعیت: {st}"
-        )
-        return
-
-    if cmd in (".آهنگ چرخشی روشن", "آهنگ چرخشی روشن"):
-        lst = ROTATING_MUSIC.get(user_id) or []
-        if len(lst) < 1:
-            await message.edit_text("❌ اول با ریپلای + `.اضافه کردن آهنگ` آهنگ اضافه کنید.")
-            return
-        ROTATING_MUSIC_STATUS[user_id] = True
-        persist_all_user_settings(user_id)
-        # اعمال فوری اولین آهنگ
         try:
-            idx = ROTATING_MUSIC_INDEX.get(user_id, 0) % len(lst)
-            ok = await _apply_profile_music(client, user_id, lst[idx])
-            ROTATING_MUSIC_INDEX[user_id] = (idx + 1) % len(lst)
-            if ok:
-                await message.edit_text(
-                    f"✅ آهنگ چرخشی روشن شد | self MR\n"
-                    f"🎵 الان: `{lst[idx].get('title', 'آهنگ')}`"
-                )
-            else:
-                await message.edit_text(
-                    "✅ آهنگ چرخشی روشن شد | self MR\n"
-                    "⚠️ اعمال روی پروفایل ممکن است چند لحظه طول بکشد یا توسط تلگرام محدود شود."
-                )
-        except Exception as e:
-            logging.warning(f"apply music on enable: {e}")
-            await message.edit_text("✅ آهنگ چرخشی روشن شد | self MR")
+            ok = await _apply_profile_music(client, user_id, tracks[0])
+            ROTATING_MUSIC_INDEX[user_id] = 1 % len(tracks)
+        except Exception:
+            ok = False
+        interval = ROTATING_MUSIC_INTERVAL.get(user_id, 1)
+        names = "\n".join(f"• {t.get('title','آهنگ')}" for t in tracks[:8])
+        await message.edit_text(
+            f"✅ آهنگ چرخشی روشن شد | self MR\n\n"
+            f"🎵 تعداد: `{len(tracks)}`\n"
+            f"⏱ هر `{interval}` ساعت یک‌بار عوض می‌شود\n\n"
+            f"{names}"
+        )
         return
 
     if cmd in (".آهنگ چرخشی خاموش", "آهنگ چرخشی خاموش"):
@@ -6409,7 +6436,7 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
                 _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
-                _styled_btn("🇬🇧 EN", f"lang_en_{user_id}", t_lang == "en"),
+                _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🇷🇺 RU", f"lang_ru_{user_id}", t_lang == "ru"),
@@ -6511,7 +6538,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -7450,9 +7477,13 @@ async def callback_panel_handler(client, callback):
                 ),
                 25: (
                     "🎵 آهنگ چرخشی | self MR\n\n"
+                    "اول ۲ یا ۳ آهنگ روی پروفایل تلگرام خود بگذارید.\n"
+                    "بعد ربات همان‌ها را به نوبت عوض می‌کند.\n\n"
                     "دستورات:\n"
-                    "ریپلای روی آهنگ + .آهنگ چرخشی\n"
-                    ".آهنگ چرخشی خاموش"
+                    ".آهنگ چرخشی روشن\n"
+                    ".آهنگ چرخشی خاموش\n"
+                    ".تنظیم تایم آهنگ 2\n\n"
+                    "(تایم بر حسب ساعت — حداقل ۱)"
                 ),
                 26: (
                     "🕐 ساعت کشورها | self MR\n\n"
@@ -7525,8 +7556,14 @@ async def callback_panel_handler(client, callback):
                     "👁 فضول پروفایل | self MR\n\n"
                     "دستورات:\n"
                     ".فضول ها\n\n"
-                    "لیست کسانی که با پیوی شما تعامل داشته‌اند\n"
+                    "لیست کسانی که پروفایل شما را دیده اند\n"
                     "نمایش داده می‌شود."
+                ),
+                38: (
+                    "🌐 ترجمه | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای + .ترجمه\n\n"
+                    "متن دلخواه شما به فارسی ترجمه می‌شود."
                 ),
             }
             try:

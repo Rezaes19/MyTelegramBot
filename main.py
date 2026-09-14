@@ -3207,7 +3207,7 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم (اولویت: اینلاین بات — مثل VTR)
+        # تبدیل ایموجی عادی → پریمیوم (گپ/پیوی) — بدون ستاره الکی
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
                 mapping = _emoji_map_for_user(user_id)
@@ -3218,83 +3218,109 @@ async def outgoing_message_modifier(client, message):
                             matched_key = k
                             break
                 if matched_key:
+                    cid = int(mapping[matched_key])
                     await asyncio.sleep(0.2)
                     ok = False
-                    # --- روش ۱: اینلاین بات منیجر ---
-                    try:
-                        global MANAGER_BOT_USERNAME
-                        bot_un = MANAGER_BOT_USERNAME
-                        if not bot_un:
-                            try:
-                                me_bot = await manager_bot.get_me()
-                                bot_un = me_bot.username
-                                MANAGER_BOT_USERNAME = bot_un
-                            except Exception:
-                                bot_un = None
-                        if bot_un:
-                            q = f"pe|{user_id}|{matched_key}"
-                            results = await client.get_inline_bot_results(bot_un, q)
-                            if results and getattr(results, "results", None):
-                                try:
-                                    await client.delete_messages(message.chat.id, message.id)
-                                except Exception:
-                                    try:
-                                        await message.delete()
-                                    except Exception:
-                                        pass
-                                await client.send_inline_bot_result(
-                                    message.chat.id,
-                                    results.query_id,
-                                    results.results[0].id,
-                                )
-                                ok = True
-                                logging.info(f"premium emoji INLINE ok uid={user_id} chat={message.chat.id}")
-                    except Exception as e_inl:
-                        logging.warning(f"premium emoji inline: {e_inl}")
 
-                    # --- روش ۲: ویرایش entity ---
+                    # متن و entity روی خود ایموجی عادی (نه ستاره)
+                    conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
+                    if not conv_ents:
+                        # فقط همان ایموجی
+                        from pyrogram.enums import MessageEntityType
+                        from pyrogram.types import MessageEntity
+                        conv_text = matched_key
+                        ln = len(matched_key.encode("utf-16-le")) // 2
+                        conv_ents = [MessageEntity(
+                            type=MessageEntityType.CUSTOM_EMOJI,
+                            offset=0,
+                            length=ln,
+                            custom_emoji_id=cid,
+                        )]
+
+                    # 1) ویرایش — پیام اصلی پاک نمی‌شود تا موفق شود
+                    try:
+                        await client.edit_message_text(
+                            chat_id=message.chat.id,
+                            message_id=message.id,
+                            text=conv_text,
+                            entities=conv_ents,
+                        )
+                        ok = True
+                        logging.info(f"premium emoji EDIT ok uid={user_id}")
+                    except Exception as e:
+                        if "MESSAGE_NOT_MODIFIED" in str(e):
+                            ok = True
+                        else:
+                            logging.warning(f"premium emoji edit: {str(e)[:140]}")
+
+                    # 2) اینلاین بات (با همان ایموجی عادی داخل tg-emoji)
                     if not ok:
-                        conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
-                        if conv_ents:
-                            try:
-                                await client.edit_message_text(
-                                    chat_id=message.chat.id,
-                                    message_id=message.id,
-                                    text=conv_text,
-                                    entities=conv_ents,
-                                )
-                                ok = True
-                            except Exception as e:
-                                if "MESSAGE_NOT_MODIFIED" in str(e):
-                                    ok = True
-                                else:
-                                    logging.warning(f"premium emoji edit: {str(e)[:120]}")
-                            if not ok:
+                        try:
+                            bot_un = MANAGER_BOT_USERNAME
+                            if not bot_un:
                                 try:
+                                    me_bot = await manager_bot.get_me()
+                                    bot_un = me_bot.username
+                                    globals()["MANAGER_BOT_USERNAME"] = bot_un
+                                except Exception:
+                                    bot_un = None
+                            if bot_un:
+                                q = f"pe|{user_id}|{matched_key}"
+                                results = await client.get_inline_bot_results(bot_un, q)
+                                if results and getattr(results, "results", None):
+                                    await client.send_inline_bot_result(
+                                        message.chat.id,
+                                        results.query_id,
+                                        results.results[0].id,
+                                    )
                                     try:
                                         await client.delete_messages(message.chat.id, message.id)
                                     except Exception:
-                                        pass
-                                    await client.send_message(message.chat.id, conv_text, entities=conv_ents)
+                                        try:
+                                            await message.delete()
+                                        except Exception:
+                                            pass
                                     ok = True
-                                except Exception as e2:
-                                    logging.warning(f"premium emoji resend: {e2}")
+                                    logging.info(f"premium emoji INLINE ok uid={user_id}")
+                        except Exception as e_inl:
+                            logging.warning(f"premium emoji inline: {e_inl}")
 
-                    # --- روش ۳: کپی قالب ---
+                    # 3) حذف + ارسال با entity روی خود ایموجی
+                    if not ok:
+                        try:
+                            await client.send_message(
+                                message.chat.id,
+                                conv_text,
+                                entities=conv_ents,
+                            )
+                            try:
+                                await client.delete_messages(message.chat.id, message.id)
+                            except Exception:
+                                try:
+                                    await message.delete()
+                                except Exception:
+                                    pass
+                            ok = True
+                            logging.info(f"premium emoji SEND ok uid={user_id}")
+                        except Exception as e2:
+                            logging.warning(f"premium emoji send: {e2}")
+
+                    # 4) کپی قالب
                     if not ok:
                         try:
                             tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
                             if matched_key in tmap:
                                 ch, mid = tmap[matched_key]
+                                await client.copy_message(message.chat.id, ch, mid)
                                 try:
                                     await client.delete_messages(message.chat.id, message.id)
                                 except Exception:
                                     pass
-                                await client.copy_message(message.chat.id, ch, mid)
                                 ok = True
                         except Exception as e3:
                             logging.warning(f"premium emoji copy: {e3}")
 
+                    # اگر هیچکدام نشد پیام اصلی را دست نزن
                     if ok:
                         return
             except Exception as e:
@@ -6236,8 +6262,13 @@ async def reply_based_controller(client, message):
         try:
             from pyrogram.enums import MessageEntityType
             from pyrogram.types import MessageEntity
-            ph = "⭐"
-            ent = MessageEntity(type=MessageEntityType.CUSTOM_EMOJI, offset=0, length=len(ph.encode("utf-16-le"))//2, custom_emoji_id=int(cid))
+            ph = normal_emoji or "⭐"
+            ent = MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=0,
+                length=len(ph.encode("utf-16-le")) // 2,
+                custom_emoji_id=int(cid),
+            )
             tmpl = await client.send_message("me", ph, entities=[ent])
             tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
             tmap[normal_emoji] = (tmpl.chat.id, tmpl.id)
@@ -7334,7 +7365,7 @@ async def inline_panel_handler(client, query):
                 await query.answer([], cache_time=0, is_personal=True)
                 return
             # HTML tg-emoji برای Bot API
-            html_text = f'<tg-emoji emoji-id="{int(cid)}">⭐</tg-emoji>'
+            html_text = f'<tg-emoji emoji-id="{int(cid)}">{normal}</tg-emoji>'
             payload = {
                 "inline_query_id": query.id,
                 "cache_time": 0,
@@ -7362,7 +7393,7 @@ async def inline_panel_handler(client, query):
                             result = InlineQueryResultArticle(
                                 id=f"pe_{owner_id}_{int(cid)}",
                                 title="⭐ ایموجی پریمیوم",
-                                input_message_content=InputTextMessageContent("⭐"),
+                                input_message_content=InputTextMessageContent(str(normal) or "⭐"),
                             )
                             await query.answer([result], cache_time=0, is_personal=True)
                         except Exception:

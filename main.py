@@ -7935,6 +7935,50 @@ async def callback_panel_handler(client, callback):
             GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
             settings_update["global_enemy"] = GLOBAL_ENEMY_STATUS[target_user_id]
 
+
+        elif action == "toggle_emoji_convert":
+            EMOJI_PREMIUM_CONVERT[target_user_id] = not EMOJI_PREMIUM_CONVERT.get(target_user_id, False)
+            try:
+                persist_all_user_settings(target_user_id)
+            except Exception:
+                pass
+            st = "on ✓" if EMOJI_PREMIUM_CONVERT[target_user_id] else "off ✗"
+            await callback.answer(f"وضعیت: {st}")
+            try:
+                help_text = format_emoji_premium_panel(target_user_id)
+                if callback.inline_message_id:
+                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+                else:
+                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+            except Exception as e:
+                logging.warning(f"toggle emoji panel: {e}")
+            try:
+                await edit_panel_colored(callback, target_user_id, 40)
+            except Exception:
+                pass
+            return
+
+        elif action == "clear_emoji_map":
+            EMOJI_CHAR_TO_PREMIUM[target_user_id] = {}
+            try:
+                persist_all_user_settings(target_user_id)
+            except Exception:
+                pass
+            await callback.answer("لیست پاک شد")
+            try:
+                help_text = format_emoji_premium_panel(target_user_id)
+                if callback.inline_message_id:
+                    await client.edit_inline_text(callback.inline_message_id, help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+                else:
+                    await callback.message.edit_text(help_text, reply_markup=generate_panel_markup(target_user_id, 40))
+            except Exception as e:
+                logging.warning(f"clear emoji panel: {e}")
+            try:
+                await edit_panel_colored(callback, target_user_id, 40)
+            except Exception:
+                pass
+            return
+
         elif action.startswith("lang_"):
             target_user_id = int(data.split("_")[-1])
             if callback.from_user.id != target_user_id:

@@ -3256,105 +3256,101 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی/حروف → پریمیوم
-        # اولویت: اکانت کمکی پریمیوم (راه ۲) → entity سلف → اینلاین → ارسال سلف
+        # تبدیل ایموجی عادی/حروف → پریمیوم (مدل اینلاین؛ مثل بات مرجع)
+        # سلف فقط نتیجه اینلاین را می‌فرستد — هلپر لازم نیست عضو گپ باشد
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
-                conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
-                if conv_ents:
-                    await asyncio.sleep(0.12)
-                    ok = False
-                    chat_id = message.chat.id
+                mapping = _emoji_map_for_user(user_id)
+                if not mapping:
+                    pass
+                else:
+                    # آیا در متن حداقل یک کاراکتر مپ‌شده هست؟
+                    keys = sorted(mapping.keys(), key=len, reverse=True)
+                    has_any = any(k and k in text for k in keys)
+                    if has_any:
+                        await asyncio.sleep(0.1)
+                        ok = False
+                        chat_id = message.chat.id
 
-                    async def _del_orig():
-                        try:
-                            await client.delete_messages(chat_id, message.id)
-                        except Exception:
+                        # یوزرنیم بات اینلاین (منیجر)
+                        bot_un = MANAGER_BOT_USERNAME
+                        if not bot_un:
                             try:
-                                await message.delete()
-                            except Exception:
-                                pass
+                                me_bot = await manager_bot.get_me()
+                                bot_un = me_bot.username
+                                globals()["MANAGER_BOT_USERNAME"] = bot_un
+                            except Exception as e:
+                                logging.warning("bot username: %s", e)
 
-                    # ----- راه ۲: ارسال توسط اکانت کمکی پریمیوم -----
-                    global premium_helper
-                    if premium_helper is not None:
-                        try:
-                            await premium_helper.send_message(
-                                chat_id,
-                                conv_text,
-                                entities=conv_ents,
-                            )
-                            await _del_orig()
-                            ok = True
-                            logging.info("premium HELPER send ok uid=%s chat=%s", user_id, chat_id)
-                        except Exception as e_h:
-                            logging.warning("premium HELPER send fail: %s", e_h)
+                        if bot_un:
+                            # برای هر کاراکتر مپ‌شده در متن، اگر کل پیام فقط همان یکی است اینلاین بزن
+                            # (اینلاین معمولاً یک نتیجه = یک پیام؛ برای متن چندحرفی entity سلف را هم امتحان می‌کنیم)
+                            stripped = text.strip()
+                            cid = None
+                            matched_key = None
+                            for k in keys:
+                                if k and stripped == k:
+                                    matched_key = k
+                                    cid = int(mapping[k])
+                                    break
 
-                    # ----- entity روی خود سلف -----
-                    if not ok:
-                        try:
-                            await client.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message.id,
-                                text=conv_text,
-                                entities=conv_ents,
-                            )
-                            ok = True
-                            logging.info("premium SELF entity edit ok uid=%s", user_id)
-                        except Exception as e:
-                            logging.warning("premium SELF entity edit: %s", e)
-
-                    # ----- اینلاین (فقط پیام تک‌کاراکتری) -----
-                    if not ok:
-                        mapping = _emoji_map_for_user(user_id)
-                        stripped = text.strip()
-                        pure_single = stripped in mapping and len(stripped) <= 2
-                        if pure_single:
-                            try:
-                                keys = list(mapping.keys())
-                                matched_slot = keys.index(stripped) if stripped in keys else 0
-                                bot_un = MANAGER_BOT_USERNAME
-                                if not bot_un:
+                            if cid is not None:
+                                # کوئری ساده: فقط آیدی عددی — بات اینلاین می‌فهمد
+                                queries = [
+                                    f"eid:{cid}",
+                                    f"pe|{user_id}|{matched_key.encode('utf-8').hex()}",
+                                    str(cid),
+                                ]
+                                for qtry in queries:
                                     try:
-                                        me_bot = await manager_bot.get_me()
-                                        bot_un = me_bot.username
-                                        globals()["MANAGER_BOT_USERNAME"] = bot_un
-                                    except Exception:
-                                        pass
-                                if bot_un:
-                                    for qtry in (
-                                        f"pe|{user_id}|i|{matched_slot}",
-                                        f"pe|{user_id}|{stripped.encode('utf-8').hex()}",
-                                    ):
+                                        results = await client.get_inline_bot_results(bot_un, qtry)
+                                        res_list = getattr(results, "results", None) or []
+                                        if not res_list:
+                                            logging.warning("inline empty q=%r", qtry)
+                                            continue
+                                        await client.send_inline_bot_result(
+                                            chat_id,
+                                            results.query_id,
+                                            res_list[0].id,
+                                        )
                                         try:
-                                            results = await client.get_inline_bot_results(bot_un, qtry)
-                                            res_list = getattr(results, "results", None) or []
-                                            if not res_list:
-                                                continue
-                                            await client.send_inline_bot_result(
-                                                chat_id, results.query_id, res_list[0].id
-                                            )
-                                            await _del_orig()
+                                            await client.delete_messages(chat_id, message.id)
+                                        except Exception:
+                                            try:
+                                                await message.delete()
+                                            except Exception:
+                                                pass
+                                        ok = True
+                                        logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
+                                        break
+                                    except Exception as e_one:
+                                        logging.warning("inline try q=%r: %s", qtry, e_one)
+
+                            # متن چندبخشی: ساخت entity روی کل متن و ارسال توسط سلف
+                            if not ok:
+                                conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
+                                if conv_ents:
+                                    try:
+                                        await client.edit_message_text(
+                                            chat_id, message.id, conv_text, entities=conv_ents
+                                        )
+                                        ok = True
+                                        logging.info("premium multi entity edit ok uid=%s", user_id)
+                                    except Exception as e_ed:
+                                        logging.warning("multi entity edit: %s", e_ed)
+                                        try:
+                                            try:
+                                                await client.delete_messages(chat_id, message.id)
+                                            except Exception:
+                                                pass
+                                            await client.send_message(chat_id, conv_text, entities=conv_ents)
                                             ok = True
-                                            logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
-                                            break
-                                        except Exception as e_one:
-                                            logging.warning("inline try: %s", e_one)
-                            except Exception as e_inl:
-                                logging.warning("premium inline: %s", e_inl)
+                                            logging.info("premium multi entity send ok uid=%s", user_id)
+                                        except Exception as e_se:
+                                            logging.warning("multi entity send: %s", e_se)
 
-                    # ----- ارسال دوباره توسط سلف -----
-                    if not ok:
-                        try:
-                            await _del_orig()
-                            await client.send_message(chat_id, conv_text, entities=conv_ents)
-                            ok = True
-                            logging.info("premium SELF entity send ok uid=%s", user_id)
-                        except Exception as e:
-                            logging.warning("premium SELF entity send: %s", e)
-
-                    if ok:
-                        return
+                        if ok:
+                            return
             except Exception as e:
                 logging.warning(f"premium emoji convert: {e}")
 
@@ -7369,138 +7365,146 @@ async def edit_panel_colored(callback, user_id, page=1):
 
 @manager_bot.on_inline_query()
 async def inline_panel_handler(client, query):
+    """اینلاین منیجر: پنل + ایموجی پریمیوم (مدل بات مرجع)"""
     global MANAGER_BOT_USERNAME
     user_id = query.from_user.id if query.from_user else 0
     q = (query.query or "").strip()
 
-    # ===== ایموجی پریمیوم از طریق اینلاین =====
-    # فرمت‌ها: pe|uid|i|slot   یا   pe|uid|hex
-    if q.startswith("pe|") or q.startswith("pe:"):
+    # ---------- ایموجی پریمیوم ----------
+    # فرمت‌های پشتیبانی‌شده:
+    #   eid:123456789
+    #   123456789
+    #   pe|uid|hex
+    #   pe|uid|i|slot
+    cid = None
+    ph = "⭐"
+
+    if q.startswith("eid:"):
+        try:
+            cid = int(q[4:].strip())
+        except Exception:
+            cid = None
+    elif q.isdigit() and len(q) >= 10:
+        try:
+            cid = int(q)
+        except Exception:
+            cid = None
+    elif q.startswith("pe|") or q.startswith("pe:"):
         try:
             raw = q.replace("pe:", "pe|")
             parts = raw.split("|")
             owner_id = int(parts[1]) if len(parts) > 1 else user_id
             mapping = _emoji_map_for_user(owner_id)
-            cid = None
-            normal = ""
-
             if len(parts) >= 4 and parts[2] in ("i", "s", "slot"):
-                try:
-                    slot = int(parts[3])
-                    keys = list(mapping.keys())
-                    if 0 <= slot < len(keys):
-                        normal = keys[slot]
-                        cid = int(mapping[normal])
-                except Exception:
-                    pass
+                slot = int(parts[3])
+                keys = list(mapping.keys())
+                if 0 <= slot < len(keys):
+                    ph = keys[slot]
+                    cid = int(mapping[ph])
             elif len(parts) >= 3:
                 token = "|".join(parts[2:])
                 try:
-                    normal = bytes.fromhex(token).decode("utf-8")
-                    if normal in mapping:
-                        cid = int(mapping[normal])
+                    ph = bytes.fromhex(token).decode("utf-8")
+                    if ph in mapping:
+                        cid = int(mapping[ph])
                 except Exception:
-                    normal = token
-                    if normal in mapping:
-                        cid = int(mapping[normal])
-                    else:
-                        for k, v in mapping.items():
-                            if k in token or token in k:
-                                normal, cid = k, int(v)
-                                break
+                    if token in mapping:
+                        ph = token
+                        cid = int(mapping[token])
+        except Exception as e:
+            logging.warning("inline pe parse: %s", e)
+            cid = None
 
-            if not cid:
-                logging.warning(f"inline pe: no cid for q={q!r} map={list(mapping.keys())}")
-                await query.answer([], cache_time=0, is_personal=True)
-                return
+    if cid:
+        utf16_len = len(ph.encode("utf-16-le")) // 2
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerInlineQuery"
 
-            ph = normal if normal else "⭐"
-            utf16_len = len(ph.encode("utf-16-le")) // 2
-
-            # روش اصلی: entity مستقیم در Bot API
-            payload = {
-                "inline_query_id": query.id,
-                "cache_time": 0,
-                "is_personal": True,
-                "results": json.dumps([{
-                    "type": "article",
-                    "id": f"pe_{owner_id}_{cid}",
-                    "title": "ایموجی پریمیوم",
-                    "description": str(normal)[:40] or "premium",
-                    "input_message_content": {
-                        "message_text": ph,
-                        "entities": [{
-                            "type": "custom_emoji",
-                            "offset": 0,
-                            "length": utf16_len,
-                            "custom_emoji_id": str(int(cid)),
-                        }],
-                    },
-                }], ensure_ascii=False),
-            }
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerInlineQuery"
+        # 1) entity رسمی Bot API
+        payload1 = {
+            "inline_query_id": query.id,
+            "cache_time": 0,
+            "is_personal": True,
+            "results": json.dumps([{
+                "type": "article",
+                "id": f"eid_{cid}",
+                "title": "Premium Emoji",
+                "description": str(ph)[:40],
+                "input_message_content": {
+                    "message_text": ph,
+                    "entities": [{
+                        "type": "custom_emoji",
+                        "offset": 0,
+                        "length": utf16_len,
+                        "custom_emoji_id": str(int(cid)),
+                    }],
+                },
+            }], ensure_ascii=False),
+        }
+        try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload) as resp:
+                async with session.post(url, data=payload1) as resp:
                     data = await resp.json()
                     if data.get("ok"):
                         return
-                    logging.warning(f"inline pe entity fail: {data}")
+                    logging.warning("inline eid entity fail: %s", data)
 
-                    # fallback HTML (tg-emoji)
-                    payload2 = {
-                        "inline_query_id": query.id,
-                        "cache_time": 0,
-                        "is_personal": True,
-                        "results": json.dumps([{
-                            "type": "article",
-                            "id": f"pe2_{owner_id}_{cid}",
-                            "title": "ایموجی پریمیوم",
-                            "input_message_content": {
-                                "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
-                                "parse_mode": "HTML",
-                            },
-                        }], ensure_ascii=False),
-                    }
-                    async with session.post(url, data=payload2) as resp2:
-                        data2 = await resp2.json()
-                        if data2.get("ok"):
-                            return
-                        logging.warning(f"inline pe html fail: {data2}")
-
-            # آخرین تلاش با pyrogram
-            try:
-                from pyrogram.enums import MessageEntityType
-                from pyrogram.types import MessageEntity
-                ent = MessageEntity(
-                    type=MessageEntityType.CUSTOM_EMOJI,
-                    offset=0,
-                    length=utf16_len,
-                    custom_emoji_id=int(cid),
-                )
-                result = InlineQueryResultArticle(
-                    id=f"pe3_{owner_id}_{cid}",
-                    title="ایموجی پریمیوم",
-                    input_message_content=InputTextMessageContent(
-                        message_text=ph,
-                        entities=[ent],
-                    ),
-                )
-                await query.answer([result], cache_time=0, is_personal=True)
-            except Exception as e3:
-                logging.warning(f"inline pe pyrogram fail: {e3}")
-                await query.answer([], cache_time=0, is_personal=True)
-            return
-
+                # 2) HTML tg-emoji
+                payload2 = {
+                    "inline_query_id": query.id,
+                    "cache_time": 0,
+                    "is_personal": True,
+                    "results": json.dumps([{
+                        "type": "article",
+                        "id": f"eidh_{cid}",
+                        "title": "Premium Emoji",
+                        "input_message_content": {
+                            "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
+                            "parse_mode": "HTML",
+                        },
+                    }], ensure_ascii=False),
+                }
+                async with session.post(url, data=payload2) as resp2:
+                    data2 = await resp2.json()
+                    if data2.get("ok"):
+                        return
+                    logging.warning("inline eid html fail: %s", data2)
         except Exception as e:
-            logging.warning(f"inline pe error: {e}")
+            logging.warning("inline eid http: %s", e)
+
+        # 3) pyrogram native
+        try:
+            from pyrogram.enums import MessageEntityType
+            from pyrogram.types import MessageEntity
+            ent = MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=0,
+                length=utf16_len,
+                custom_emoji_id=int(cid),
+            )
+            result = InlineQueryResultArticle(
+                id=f"eidp_{cid}",
+                title="Premium Emoji",
+                input_message_content=InputTextMessageContent(
+                    message_text=ph,
+                    entities=[ent],
+                ),
+            )
+            await query.answer([result], cache_time=0, is_personal=True)
+            return
+        except Exception as e3:
+            logging.warning("inline eid pyrogram: %s", e3)
             try:
-                await query.answer([], cache_time=0)
+                await query.answer([], cache_time=0, is_personal=True)
             except Exception:
                 pass
             return
 
-    # ===== پنل =====
-    if q != "panel" and q != "":
+    # ---------- پنل ----------
+    if q not in ("panel", ""):
+        try:
+            await query.answer([], cache_time=0)
+        except Exception:
+            pass
         return
 
     keyboard = build_panel_keyboard(user_id, 1)
@@ -7523,7 +7527,7 @@ async def inline_panel_handler(client, query):
             async with session.post(url, data=payload) as resp:
                 data = await resp.json()
                 if not data.get("ok"):
-                    logging.warning(f"Colored inline panel failed: {data}")
+                    logging.warning("inline panel fail: %s", data)
                     result = InlineQueryResultArticle(
                         id=f"panel_{user_id}",
                         title="پنل مدیریت self MR",
@@ -7534,7 +7538,7 @@ async def inline_panel_handler(client, query):
                     )
                     await query.answer([result], cache_time=0)
     except Exception as e:
-        logging.error(f"inline panel error: {e}")
+        logging.error("inline panel error: %s", e)
         try:
             result = InlineQueryResultArticle(
                 id=f"panel_{user_id}",

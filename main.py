@@ -3326,11 +3326,9 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم
+
+        # تبدیل ایموجی عادی → پریمیوم (گپ + پیوی + سیو)
         _em_on = bool(EMOJI_PREMIUM_CONVERT.get(user_id, False))
-        if not _em_on and len(stripped) <= 8:
-            # فقط برای پیام‌های کوتاه لاگ وضعیت (دیباگ)
-            pass
         if _em_on:
             try:
                 mapping = _emoji_map_for_user(user_id)
@@ -3351,18 +3349,7 @@ async def outgoing_message_modifier(client, message):
                             except Exception:
                                 matched_slot = 0
                             break
-                    if not matched_key:
-                        logging.info(
-                            "premium no-match uid=%s convert_on=1 map=%r text=%r",
-                            user_id, list(keys)[:5], text[:40],
-                        )
-                    else:
-                        logging.info(
-                            "premium match uid=%s key=%r map_size=%s",
-                            user_id, matched_key, len(keys),
-                        )
                 if matched_key:
-                    # جلوگیری از اجرای دوباره (outgoing + me)
                     _done_key = (message.chat.id, message.id)
                     if _done_key in _PREMIUM_CONVERT_DONE:
                         return
@@ -3375,6 +3362,7 @@ async def outgoing_message_modifier(client, message):
                     await asyncio.sleep(0.12)
                     ok = False
                     chat_id = message.chat.id
+                    is_saved = (chat_id == user_id) or (getattr(message.chat, "is_self", False) if message.chat else False)
 
                     async def _del_orig():
                         try:
@@ -3385,48 +3373,112 @@ async def outgoing_message_modifier(client, message):
                             except Exception:
                                 pass
 
-                    bot_un = (HELPER_INLINE_BOT or MANAGER_BOT_USERNAME or "").lstrip("@")
                     logging.info(
-                        "premium convert uid=%s pure=%s bot=%s key=%r cid=%s",
-                        user_id, pure, bot_un, matched_key, cid,
+                        "premium convert uid=%s pure=%s saved=%s chat=%s key=%r cid=%s",
+                        user_id, pure, is_saved, chat_id, matched_key, cid,
                     )
 
-                    # اگر file_id هلپر نیست، همین الان بساز
+                    # همیشه file_id هلپر را آماده کن
                     try:
                         tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
                         prev = tmap.get(matched_key) if isinstance(tmap.get(matched_key), dict) else {}
                         if not (prev.get("helper_file_id") or prev.get("sticker_file_id")):
-                            logging.info("premium building helper file_id uid=%s cid=%s", user_id, cid)
                             await upload_custom_emoji_to_helper_bot(cid, user_id, matched_key)
                     except Exception as e:
-                        logging.warning("premium ensure helper file_id: %s", e)
+                        logging.warning("premium ensure file_id: %s", e)
 
-                    # پیام خالص = اینلاین هلپر
-                    if pure and bot_un:
-                        queries = [f"pe|{user_id}|i|{matched_slot}"]
+                    # ===== پیام خالص =====
+                    if pure:
+                        # 1) استیکر / مدیا مستقیم (بهترین برای گپ و پیوی)
                         try:
-                            queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
-                        except Exception:
-                            pass
-                        for qtry in queries:
+                            ok = await send_registered_emoji_sticker(
+                                client, chat_id, user_id, matched_key, cid
+                            )
+                            if ok:
+                                await _del_orig()
+                                logging.info("premium STICKER ok uid=%s chat=%s", user_id, chat_id)
+                        except Exception as e:
+                            logging.warning("premium sticker: %s", e)
+                            ok = False
+
+                        if not ok:
                             try:
-                                results = await client.get_inline_bot_results(bot_un, qtry)
-                                res_list = getattr(results, "results", None) or []
-                                if not res_list:
-                                    logging.warning("inline empty q=%r bot=%s", qtry, bot_un)
-                                    continue
-                                await client.send_inline_bot_result(
-                                    chat_id, results.query_id, res_list[0].id
-                                )
+                                pc = await ensure_premium_client()
+                                use_c = pc or client
+                                from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
+                                r = await use_c.invoke(GetCustomEmojiDocuments(document_id=[int(cid)]))
+                                docs = getattr(r, "documents", None) or []
+                                if docs:
+                                    path = await use_c.download_media(docs[0])
+                                    if path:
+                                        try:
+                                            await client.send_sticker(chat_id, path)
+                                            ok = True
+                                        except Exception:
+                                            try:
+                                                await client.send_document(chat_id, path)
+                                                ok = True
+                                            except Exception as e2:
+                                                logging.warning("send media: %s", e2)
+                                        try:
+                                            os.remove(path)
+                                        except Exception:
+                                            pass
+                                        if ok:
+                                            await _del_orig()
+                                            logging.info("premium DIRECT ok uid=%s chat=%s", user_id, chat_id)
+                            except Exception as e:
+                                logging.warning("premium direct: %s", e)
+
+                        # 2) اینلاین (سیو و بعضی چت‌ها)
+                        if not ok:
+                            bot_un = (HELPER_INLINE_BOT or MANAGER_BOT_USERNAME or "").lstrip("@")
+                            if bot_un:
+                                queries = [f"pe|{user_id}|i|{matched_slot}"]
+                                try:
+                                    queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
+                                except Exception:
+                                    pass
+                                for qtry in queries:
+                                    try:
+                                        results = await client.get_inline_bot_results(bot_un, qtry)
+                                        res_list = getattr(results, "results", None) or []
+                                        if not res_list:
+                                            continue
+                                        await client.send_inline_bot_result(
+                                            chat_id, results.query_id, res_list[0].id
+                                        )
+                                        await _del_orig()
+                                        ok = True
+                                        logging.info("premium INLINE ok uid=%s chat=%s", user_id, chat_id)
+                                        break
+                                    except Exception as e_one:
+                                        err = str(e_one)
+                                        if "INLINE" in err.upper() or "FORBIDDEN" in err.upper():
+                                            logging.warning("inline blocked chat=%s: %s", chat_id, err[:120])
+                                        else:
+                                            logging.warning("inline try: %s", e_one)
+
+                        # 3) entity
+                        if not ok:
+                            try:
+                                from pyrogram.enums import MessageEntityType
+                                from pyrogram.types import MessageEntity
+                                ln = len(matched_key.encode("utf-16-le")) // 2
+                                ents = [MessageEntity(
+                                    type=MessageEntityType.CUSTOM_EMOJI,
+                                    offset=0, length=ln, custom_emoji_id=cid,
+                                )]
+                                await client.send_message(chat_id, matched_key, entities=ents)
                                 await _del_orig()
                                 ok = True
-                                logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
-                                break
-                            except Exception as e_one:
-                                logging.warning("inline try: %s", e_one)
+                                logging.info("premium ENTITY send ok uid=%s", user_id)
+                            except Exception as e:
+                                logging.warning("premium entity pure: %s", e)
 
-                    # متن مخلوط یا fallback: entity روی کل متن
-                    if not ok:
+                    # ===== متن + ایموجی =====
+                    else:
+                        # اول entity روی کل متن
                         try:
                             conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
                             if conv_ents:
@@ -3435,59 +3487,71 @@ async def outgoing_message_modifier(client, message):
                                         chat_id, message.id, conv_text, entities=conv_ents
                                     )
                                     ok = True
-                                    logging.info("premium EDIT mixed ok uid=%s", user_id)
+                                    logging.info("premium EDIT mixed ok uid=%s chat=%s", user_id, chat_id)
                                 except Exception as e_ed:
                                     if "MESSAGE_NOT_MODIFIED" not in str(e_ed):
-                                        await client.send_message(chat_id, conv_text, entities=conv_ents)
-                                        await _del_orig()
-                                        ok = True
-                                        logging.info("premium SEND mixed ok uid=%s", user_id)
+                                        try:
+                                            await client.send_message(chat_id, conv_text, entities=conv_ents)
+                                            await _del_orig()
+                                            ok = True
+                                            logging.info("premium SEND mixed ok uid=%s", user_id)
+                                        except Exception as e_s:
+                                            logging.warning("premium send mixed: %s", e_s)
                                     else:
-                                        logging.warning("premium edit not modified: %s", e_ed)
+                                        logging.warning("premium edit not modified")
                         except Exception as e:
-                            logging.warning("premium mixed entity: %s", e)
+                            logging.warning("premium mixed: %s", e)
 
-                    # استیکر فقط برای پیام خالص
-                    if not ok and pure:
-                        try:
-                            ok = await send_registered_emoji_sticker(
-                                client, chat_id, user_id, matched_key, cid
-                            )
-                            if ok:
-                                await _del_orig()
-                                logging.info("premium STICKER ok uid=%s", user_id)
-                        except Exception as e:
-                            logging.warning("premium sticker: %s", e)
-
-                    # آخرین تلاش: دانلود از سشن پریمیوم و ارسال مستقیم در چت
-                    if not ok and pure:
-                        try:
-                            pc = await ensure_premium_client()
-                            use_c = pc or client
-                            from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
-                            r = await use_c.invoke(GetCustomEmojiDocuments(document_id=[int(cid)]))
-                            docs = getattr(r, "documents", None) or []
-                            if docs:
-                                path = await use_c.download_media(docs[0])
-                                if path:
-                                    try:
-                                        await client.send_sticker(chat_id, path)
-                                        ok = True
-                                    except Exception:
-                                        await client.send_document(chat_id, path)
-                                        ok = True
-                                    try:
-                                        os.remove(path)
-                                    except Exception:
-                                        pass
-                                    if ok:
-                                        await _del_orig()
-                                        logging.info("premium DIRECT media ok uid=%s", user_id)
-                        except Exception as e:
-                            logging.warning("premium direct media: %s", e)
+                        # اگر entity نشد: متن بدون ایموجی + استیکر جدا
+                        if not ok:
+                            try:
+                                rest = text
+                                for k in sorted(mapping.keys(), key=len, reverse=True):
+                                    rest = rest.replace(k, "")
+                                rest = " ".join(rest.split())
+                                st_ok = await send_registered_emoji_sticker(
+                                    client, chat_id, user_id, matched_key, cid
+                                )
+                                if not st_ok:
+                                    pc = await ensure_premium_client()
+                                    use_c = pc or client
+                                    from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
+                                    r = await use_c.invoke(GetCustomEmojiDocuments(document_id=[int(cid)]))
+                                    docs = getattr(r, "documents", None) or []
+                                    if docs:
+                                        path = await use_c.download_media(docs[0])
+                                        if path:
+                                            try:
+                                                await client.send_sticker(chat_id, path)
+                                                st_ok = True
+                                            except Exception:
+                                                await client.send_document(chat_id, path)
+                                                st_ok = True
+                                            try:
+                                                os.remove(path)
+                                            except Exception:
+                                                pass
+                                if st_ok:
+                                    if rest:
+                                        try:
+                                            await client.send_message(chat_id, rest)
+                                        except Exception:
+                                            pass
+                                    await _del_orig()
+                                    ok = True
+                                    logging.info("premium MIXED sticker+text ok uid=%s", user_id)
+                            except Exception as e:
+                                logging.warning("premium mixed sticker: %s", e)
 
                     if pure or ok:
                         return
+                else:
+                    # فقط اگر متن شبیه ایموجی بود لاگ no-match
+                    if len(stripped) <= 12:
+                        logging.info(
+                            "premium no-match uid=%s map=%r text=%r",
+                            user_id, list(mapping.keys())[:5] if mapping else [], text[:40],
+                        )
             except Exception as e:
                 logging.warning(f"premium emoji convert: {e}")
 

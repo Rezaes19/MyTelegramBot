@@ -3391,6 +3391,16 @@ async def outgoing_message_modifier(client, message):
                         user_id, pure, bot_un, matched_key, cid,
                     )
 
+                    # اگر file_id هلپر نیست، همین الان بساز
+                    try:
+                        tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+                        prev = tmap.get(matched_key) if isinstance(tmap.get(matched_key), dict) else {}
+                        if not (prev.get("helper_file_id") or prev.get("sticker_file_id")):
+                            logging.info("premium building helper file_id uid=%s cid=%s", user_id, cid)
+                            await upload_custom_emoji_to_helper_bot(cid, user_id, matched_key)
+                    except Exception as e:
+                        logging.warning("premium ensure helper file_id: %s", e)
+
                     # پیام خالص = اینلاین هلپر
                     if pure and bot_un:
                         queries = [f"pe|{user_id}|i|{matched_slot}"]
@@ -3448,6 +3458,33 @@ async def outgoing_message_modifier(client, message):
                                 logging.info("premium STICKER ok uid=%s", user_id)
                         except Exception as e:
                             logging.warning("premium sticker: %s", e)
+
+                    # آخرین تلاش: دانلود از سشن پریمیوم و ارسال مستقیم در چت
+                    if not ok and pure:
+                        try:
+                            pc = await ensure_premium_client()
+                            use_c = pc or client
+                            from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
+                            r = await use_c.invoke(GetCustomEmojiDocuments(document_id=[int(cid)]))
+                            docs = getattr(r, "documents", None) or []
+                            if docs:
+                                path = await use_c.download_media(docs[0])
+                                if path:
+                                    try:
+                                        await client.send_sticker(chat_id, path)
+                                        ok = True
+                                    except Exception:
+                                        await client.send_document(chat_id, path)
+                                        ok = True
+                                    try:
+                                        os.remove(path)
+                                    except Exception:
+                                        pass
+                                    if ok:
+                                        await _del_orig()
+                                        logging.info("premium DIRECT media ok uid=%s", user_id)
+                        except Exception as e:
+                            logging.warning("premium direct media: %s", e)
 
                     if pure or ok:
                         return

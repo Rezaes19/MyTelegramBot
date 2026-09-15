@@ -3205,31 +3205,25 @@ def format_emoji_premium_panel(user_id: int) -> str:
     return "\n".join(lines)
 
 
-
-    """
-    متن را می‌گیرد؛ ایموجی‌های عادی را با entity کاستوم جایگزین منطقی می‌کند.
-    خروجی: (text, entities_list یا None)
-    """
+def convert_normal_emoji_to_premium_entities(text: str, user_id: int):
+    """ایموجی‌های عادی ثبت‌شده را با entity کاستوم جایگزین می‌کند"""
     if not text:
         return text, None
     mapping = _emoji_map_for_user(user_id)
     if not mapping:
         return text, None
-    # مرتب‌سازی بر اساس طول برای match طولانی‌تر اول (❤️ قبل از ❤)
     keys = sorted(mapping.keys(), key=len, reverse=True)
     from pyrogram.enums import MessageEntityType
     from pyrogram.types import MessageEntity
-
     entities = []
     i = 0
-    # پیمایش بر اساس کاراکترهای پایتون؛ offset تلگرام UTF-16 است
     utf16_pos = 0
     n = len(text)
     found = False
     while i < n:
         matched = None
         for k in keys:
-            if text.startswith(k, i):
+            if k and text.startswith(k, i):
                 matched = k
                 break
         if matched:
@@ -3253,97 +3247,6 @@ def format_emoji_premium_panel(user_id: int) -> str:
     if not found:
         return text, None
     return text, entities
-
-
-async def translate_text(text: str, target_lang: str) -> str:
-    """ترجمه متن — اول HTTP گوگل، بعد MyMemory (بدون وابستگی به deep در rate-limit)"""
-    global _TRANSLATE_LAST
-    if not text or not target_lang:
-        return text
-
-    text = text.strip()
-    if not text:
-        return text
-
-    lang_map = {
-        "en": "en", "ru": "ru", "zh-CN": "zh-CN", "cn": "zh-CN", "zh": "zh-CN",
-        "ar": "ar", "tr": "tr", "de": "de", "fr": "fr", "es": "es", "it": "it",
-        "ja": "ja", "jp": "ja", "ko": "ko", "hi": "hi", "pt": "pt", "nl": "nl",
-        "pl": "pl", "uk": "uk", "sv": "sv", "fa": "fa",
-    }
-    code = lang_map.get(target_lang, lang_map.get(str(target_lang).lower(), target_lang))
-
-    now = time.time()
-    wait = 0.8 - (now - _TRANSLATE_LAST)
-    if wait > 0:
-        await asyncio.sleep(wait)
-
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    timeout = aiohttp.ClientTimeout(total=12)
-
-    # 1) Google gtx مستقیم
-    try:
-        url = (
-            "https://translate.googleapis.com/translate_a/single"
-            f"?client=gtx&sl=auto&tl={quote(code)}&dt=t&q={quote(text[:3000])}"
-        )
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url) as resp:
-                _TRANSLATE_LAST = time.time()
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    if isinstance(data, list) and data and isinstance(data[0], list):
-                        parts = []
-                        for item in data[0]:
-                            if isinstance(item, list) and item and isinstance(item[0], str):
-                                parts.append(item[0])
-                        if parts:
-                            out = "".join(parts).strip()
-                            if out:
-                                return out
-    except Exception as e:
-        logging.warning(f"translate gtx: {str(e)[:100]}")
-        _TRANSLATE_LAST = time.time()
-
-    # 2) MyMemory (وقتی گوگل محدود شد)
-    try:
-        url = (
-            "https://api.mymemory.translated.net/get"
-            f"?q={quote(text[:1500])}&langpair=autodetect|{quote(code)}"
-        )
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url) as resp:
-                _TRANSLATE_LAST = time.time()
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    out = (data or {}).get("responseData", {}).get("translatedText")
-                    if out and isinstance(out, str) and "MYMEMORY WARNING" not in out.upper():
-                        out = out.strip()
-                        if out and out != text:
-                            return out
-    except Exception as e:
-        logging.warning(f"translate mymemory: {str(e)[:100]}")
-        _TRANSLATE_LAST = time.time()
-
-    # 3) deep_translator فقط اگر هنوز چیزی نگرفتیم
-    try:
-        from deep_translator import GoogleTranslator
-        result = await asyncio.to_thread(
-            GoogleTranslator(source="auto", target=code).translate,
-            text[:3000]
-        )
-        _TRANSLATE_LAST = time.time()
-        if result and isinstance(result, str) and result.strip() and result.strip() != text.strip():
-            return result.strip()
-    except Exception as e:
-        # rate-limit را فقط debug-level
-        err = str(e)
-        if "too many requests" not in err.lower():
-            logging.warning(f"translate deep: {err[:100]}")
-        _TRANSLATE_LAST = time.time()
-
-    return text
-
 
 
 async def anti_login_task(client: Client, user_id: int):
@@ -3424,21 +3327,40 @@ async def outgoing_message_modifier(client, message):
             pass
 
         # تبدیل ایموجی عادی → پریمیوم
-        if EMOJI_PREMIUM_CONVERT.get(user_id, False):
+        _em_on = bool(EMOJI_PREMIUM_CONVERT.get(user_id, False))
+        if not _em_on and len(stripped) <= 8:
+            # فقط برای پیام‌های کوتاه لاگ وضعیت (دیباگ)
+            pass
+        if _em_on:
             try:
                 mapping = _emoji_map_for_user(user_id)
                 matched_key = None
                 matched_slot = -1
                 if mapping:
                     keys = list(mapping.keys())
+                    def _norm_em(s):
+                        return (s or "").replace("\ufe0f", "").replace("\ufe0e", "")
+                    text_n = _norm_em(text)
                     for k in sorted(keys, key=len, reverse=True):
-                        if k and k in text:
+                        if not k:
+                            continue
+                        if k in text or _norm_em(k) in text_n:
                             matched_key = k
                             try:
                                 matched_slot = keys.index(k)
                             except Exception:
                                 matched_slot = 0
                             break
+                    if not matched_key:
+                        logging.info(
+                            "premium no-match uid=%s convert_on=1 map=%r text=%r",
+                            user_id, list(keys)[:5], text[:40],
+                        )
+                    else:
+                        logging.info(
+                            "premium match uid=%s key=%r map_size=%s",
+                            user_id, matched_key, len(keys),
+                        )
                 if matched_key:
                     # جلوگیری از اجرای دوباره (outgoing + me)
                     _done_key = (message.chat.id, message.id)

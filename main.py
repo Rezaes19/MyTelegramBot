@@ -3053,6 +3053,87 @@ async def custom_emoji_to_sticker_file_id(client, custom_emoji_id: int, user_id:
                 pass
 
 
+
+async def upload_custom_emoji_to_helper_bot(custom_emoji_id: int, user_id: int, normal_key: str = ""):
+    """دانلود کاستوم و آپلود با توکن هلپر تا file_id برای اینلاین استیکر معتبر باشد"""
+    path = None
+    try:
+        token = HELPER_BOT_TOKEN or BOT_TOKEN
+        if not token:
+            return None
+        dl_client = None
+        try:
+            dl_client = await ensure_premium_client()
+        except Exception:
+            pass
+        if not dl_client:
+            return None
+        from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
+        r = await dl_client.invoke(GetCustomEmojiDocuments(document_id=[int(custom_emoji_id)]))
+        docs = getattr(r, "documents", None) or []
+        if not docs:
+            logging.warning("upload helper: no document cid=%s", custom_emoji_id)
+            return None
+        path = await dl_client.download_media(docs[0], file_name=f"pe_up_{custom_emoji_id}")
+        if not path:
+            return None
+        # آپلود با Bot API به Saved-like: chat_id = user must have /start on helper
+        # اگر نشد، به GOD_ADMIN بفرست برای گرفتن file_id
+        targets = [user_id] + list(GOD_ADMIN_IDS)
+        file_id = None
+        async with aiohttp.ClientSession() as session:
+            for chat_id in targets:
+                try:
+                    url = f"https://api.telegram.org/bot{token}/sendDocument"
+                    with open(path, "rb") as fbin:
+                        form = aiohttp.FormData()
+                        form.add_field("chat_id", str(chat_id))
+                        form.add_field("document", fbin, filename=os.path.basename(path))
+                        form.add_field("caption", f"pe|{user_id}|{custom_emoji_id}|{normal_key}")
+                        async with session.post(url, data=form) as resp:
+                            data = await resp.json()
+                    if data.get("ok"):
+                        msg = data["result"]
+                        doc = msg.get("document") or msg.get("sticker") or {}
+                        file_id = doc.get("file_id")
+                        # پاک کردن پیام کمکی از چت
+                        try:
+                            mid = msg.get("message_id")
+                            del_url = f"https://api.telegram.org/bot{token}/deleteMessage"
+                            await session.post(del_url, data={"chat_id": chat_id, "message_id": mid})
+                        except Exception:
+                            pass
+                        if file_id:
+                            logging.info("helper bot file_id ok uid=%s cid=%s", user_id, custom_emoji_id)
+                            break
+                    else:
+                        logging.warning("helper upload fail chat=%s: %s", chat_id, data)
+                except Exception as e:
+                    logging.warning("helper upload chat=%s: %s", chat_id, e)
+        if file_id:
+            tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
+            tmap[normal_key or str(custom_emoji_id)] = {
+                "sticker_file_id": file_id,
+                "custom_emoji_id": int(custom_emoji_id),
+                "helper_file_id": file_id,
+            }
+            EMOJI_PREMIUM_TEMPLATES[user_id] = tmap
+            try:
+                persist_all_user_settings(user_id)
+            except Exception:
+                pass
+        return file_id
+    except Exception as e:
+        logging.warning("upload_custom_emoji_to_helper_bot: %s", e)
+        return None
+    finally:
+        if path:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
 async def send_registered_emoji_sticker(client, chat_id: int, user_id: int, normal_key: str, cid: int) -> bool:
     tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
     prev = tmap.get(normal_key)
@@ -6394,6 +6475,10 @@ async def reply_based_controller(client, message):
                     tmap[normal_emoji[:-1]] = tmap[normal_emoji]
                 EMOJI_PREMIUM_TEMPLATES[user_id] = tmap
                 logging.info("registered sticker fid for uid=%s", user_id)
+            try:
+                await upload_custom_emoji_to_helper_bot(cid, user_id, normal_emoji)
+            except Exception as e:
+                logging.warning("helper upload on register: %s", e)
         except Exception as e:
             logging.warning("register sticker build: %s", e)
 
@@ -7560,15 +7645,27 @@ async def inline_panel_handler(client, query):
             try:
                 tmap = EMOJI_PREMIUM_TEMPLATES.get(owner_id) or {}
                 prev = tmap.get(normal) if normal else None
-                sticker_fid = prev.get("sticker_file_id") if isinstance(prev, dict) else None
+                if not isinstance(prev, dict):
+                    prev = {}
+                sticker_fid = prev.get("helper_file_id") or prev.get("sticker_file_id")
                 if sticker_fid:
+                    # اول استیکر؛ اگر file_id از هلپر باشد در اینلاین معتبر است
                     results_list.insert(0, {
                         "type": "sticker",
                         "id": f"pes_{owner_id}_{cid}",
                         "sticker_file_id": sticker_fid,
                     })
-            except Exception:
-                pass
+                    results_list.insert(1, {
+                        "type": "document",
+                        "id": f"ped_{owner_id}_{cid}",
+                        "title": "پریمیوم",
+                        "document_file_id": sticker_fid,
+                    })
+                    logging.info("inline pe has helper file_id for cid=%s", cid)
+                else:
+                    logging.warning("inline pe NO helper file_id owner=%s key=%r — دوباره ثبت ایموجی لازم است", owner_id, normal)
+            except Exception as e:
+                logging.warning("inline sticker template: %s", e)
 
             payload = {
                 "inline_query_id": query.id,

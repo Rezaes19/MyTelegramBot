@@ -2116,7 +2116,8 @@ AUTO_TRANSLATE_TARGET = {}
 PROFILE_SNOOPS = {}  # owner_id -> {viewer_id: info}
 PREMIUM_EMOJI_MAP = {}  # user_id -> {name: custom_emoji_id}
 # چند ایموجی پیش‌فرض رایج (custom_emoji_id)
-EMOJI_PREMIUM_CONVERT = {}  # user_id -> bool: تبدیل خودکار ایموجی عادی به پریمیوم
+EMOJI_PREMIUM_CONVERT = {}
+_PREMIUM_CONVERT_DONE = set()  # (chat_id, msg_id) جلوگیری از دابل  # user_id -> bool: تبدیل خودکار ایموجی عادی به پریمیوم
 EMOJI_CHAR_TO_PREMIUM = {}  # user_id -> {emoji_char: custom_emoji_id}
 EMOJI_PREMIUM_TEMPLATES = {}  # user_id -> {emoji_char: (chat_id, msg_id)}
 DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
@@ -3341,7 +3342,7 @@ async def outgoing_message_modifier(client, message):
         except Exception:
             pass
 
-        # تبدیل ایموجی عادی → پریمیوم (اینلاین هلپر @helperselfmr_bot)
+        # تبدیل ایموجی عادی → پریمیوم
         if EMOJI_PREMIUM_CONVERT.get(user_id, False):
             try:
                 mapping = _emoji_map_for_user(user_id)
@@ -3357,9 +3358,18 @@ async def outgoing_message_modifier(client, message):
                             except Exception:
                                 matched_slot = 0
                             break
-                if matched_key and text.strip() == matched_key.strip():
+                if matched_key:
+                    # جلوگیری از اجرای دوباره (outgoing + me)
+                    _done_key = (message.chat.id, message.id)
+                    if _done_key in _PREMIUM_CONVERT_DONE:
+                        return
+                    _PREMIUM_CONVERT_DONE.add(_done_key)
+                    if len(_PREMIUM_CONVERT_DONE) > 5000:
+                        _PREMIUM_CONVERT_DONE.clear()
+
                     cid = int(mapping[matched_key])
-                    await asyncio.sleep(0.15)
+                    pure = (text.strip() == matched_key.strip())
+                    await asyncio.sleep(0.12)
                     ok = False
                     chat_id = message.chat.id
 
@@ -3372,51 +3382,71 @@ async def outgoing_message_modifier(client, message):
                             except Exception:
                                 pass
 
-                    # فقط اینلاین هلپر (یک‌بار — بدون دابل‌سند)
-                    try:
-                        bot_un = HELPER_INLINE_BOT or MANAGER_BOT_USERNAME
-                        if bot_un:
-                            queries = [f"pe|{user_id}|i|{matched_slot}"]
-                            try:
-                                queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
-                            except Exception:
-                                pass
-                            for qtry in queries:
-                                try:
-                                    results = await client.get_inline_bot_results(bot_un, qtry)
-                                    res_list = getattr(results, "results", None) or []
-                                    if not res_list:
-                                        logging.warning("inline empty q=%r bot=%s", qtry, bot_un)
-                                        continue
-                                    await client.send_inline_bot_result(
-                                        chat_id, results.query_id, res_list[0].id
-                                    )
-                                    await _del_orig()
-                                    ok = True
-                                    logging.info("premium INLINE ok uid=%s bot=%s q=%r", user_id, bot_un, qtry)
-                                    break
-                                except Exception as e_one:
-                                    logging.warning("inline try: %s", e_one)
-                    except Exception as e_inl:
-                        logging.warning("premium inline: %s", e_inl)
+                    bot_un = (HELPER_INLINE_BOT or MANAGER_BOT_USERNAME or "").lstrip("@")
+                    logging.info(
+                        "premium convert uid=%s pure=%s bot=%s key=%r cid=%s",
+                        user_id, pure, bot_un, matched_key, cid,
+                    )
 
-                    # fallback: entity روی اکانت خود کاربر
+                    # پیام خالص = اینلاین هلپر
+                    if pure and bot_un:
+                        queries = [f"pe|{user_id}|i|{matched_slot}"]
+                        try:
+                            queries.append(f"pe|{user_id}|{matched_key.encode('utf-8').hex()}")
+                        except Exception:
+                            pass
+                        for qtry in queries:
+                            try:
+                                results = await client.get_inline_bot_results(bot_un, qtry)
+                                res_list = getattr(results, "results", None) or []
+                                if not res_list:
+                                    logging.warning("inline empty q=%r bot=%s", qtry, bot_un)
+                                    continue
+                                await client.send_inline_bot_result(
+                                    chat_id, results.query_id, res_list[0].id
+                                )
+                                await _del_orig()
+                                ok = True
+                                logging.info("premium INLINE ok uid=%s q=%r", user_id, qtry)
+                                break
+                            except Exception as e_one:
+                                logging.warning("inline try: %s", e_one)
+
+                    # متن مخلوط یا fallback: entity روی کل متن
                     if not ok:
                         try:
-                            from pyrogram.enums import MessageEntityType
-                            from pyrogram.types import MessageEntity
-                            ln = len(matched_key.encode("utf-16-le")) // 2
-                            ents = [MessageEntity(
-                                type=MessageEntityType.CUSTOM_EMOJI,
-                                offset=0, length=ln, custom_emoji_id=cid,
-                            )]
-                            await client.edit_message_text(chat_id, message.id, matched_key, entities=ents)
-                            ok = True
-                            logging.info("premium ENTITY ok uid=%s", user_id)
+                            conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
+                            if conv_ents:
+                                try:
+                                    await client.edit_message_text(
+                                        chat_id, message.id, conv_text, entities=conv_ents
+                                    )
+                                    ok = True
+                                    logging.info("premium EDIT mixed ok uid=%s", user_id)
+                                except Exception as e_ed:
+                                    if "MESSAGE_NOT_MODIFIED" not in str(e_ed):
+                                        await client.send_message(chat_id, conv_text, entities=conv_ents)
+                                        await _del_orig()
+                                        ok = True
+                                        logging.info("premium SEND mixed ok uid=%s", user_id)
+                                    else:
+                                        logging.warning("premium edit not modified: %s", e_ed)
                         except Exception as e:
-                            logging.warning("premium entity: %s", e)
+                            logging.warning("premium mixed entity: %s", e)
 
-                    if ok:
+                    # استیکر فقط برای پیام خالص
+                    if not ok and pure:
+                        try:
+                            ok = await send_registered_emoji_sticker(
+                                client, chat_id, user_id, matched_key, cid
+                            )
+                            if ok:
+                                await _del_orig()
+                                logging.info("premium STICKER ok uid=%s", user_id)
+                        except Exception as e:
+                            logging.warning("premium sticker: %s", e)
+
+                    if pure or ok:
                         return
             except Exception as e:
                 logging.warning(f"premium emoji convert: {e}")
@@ -7486,88 +7516,78 @@ async def inline_panel_handler(client, query):
                             if k in token or token in k:
                                 normal, cid = k, int(v)
                                 break
+
             if not cid:
                 logging.warning(f"inline pe: no cid for q={q!r} map={list(mapping.keys())}")
                 await query.answer([], cache_time=0, is_personal=True)
                 return
 
-            # ترجیح: استیکر کش‌شده کاربر (اگر file_id برای بات قابل استفاده نباشد article)
-            sticker_fid = None
-            try:
-                tmap = EMOJI_PREMIUM_TEMPLATES.get(owner_id) or {}
-                prev = tmap.get(normal) if normal else None
-                if isinstance(prev, dict):
-                    sticker_fid = prev.get("sticker_file_id")
-                if not sticker_fid and mapping:
-                    # اولین کلید
-                    for nk, ncid in mapping.items():
-                        prev = tmap.get(nk)
-                        if isinstance(prev, dict) and prev.get("sticker_file_id"):
-                            sticker_fid = prev.get("sticker_file_id")
-                            normal = nk
-                            cid = int(ncid)
-                            break
-            except Exception:
-                pass
-
-            results_list = []
-            if sticker_fid:
-                results_list.append({
-                    "type": "sticker",
-                    "id": f"pes_{owner_id}_{cid}",
-                    "sticker_file_id": sticker_fid,
-                })
-            # همیشه article با entity هم بده
             ph = normal if normal else "⭐"
             utf16_len = len(ph.encode("utf-16-le")) // 2
-            results_list.append({
+            _pe_token = HELPER_BOT_TOKEN or BOT_TOKEN
+            url = f"https://api.telegram.org/bot{_pe_token}/answerInlineQuery"
+
+            # نتیجه ۱: custom_emoji با entities (روش اصلی)
+            results_list = [{
                 "type": "article",
                 "id": f"pe_{owner_id}_{cid}",
-                "title": "ایموجی پریمیوم",
-                "description": str(normal)[:40],
+                "title": "⭐ پریمیوم",
+                "description": str(ph)[:40],
                 "input_message_content": {
                     "message_text": ph,
                     "entities": [{
                         "type": "custom_emoji",
                         "offset": 0,
-                        "length": utf16_len,
+                        "length": int(utf16_len),
                         "custom_emoji_id": str(int(cid)),
                     }],
                 },
+            }]
+
+            # نتیجه ۲: HTML tg-emoji
+            results_list.append({
+                "type": "article",
+                "id": f"pehtml_{owner_id}_{cid}",
+                "title": "⭐ پریمیوم HTML",
+                "description": str(ph)[:40],
+                "input_message_content": {
+                    "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
+                    "parse_mode": "HTML",
+                },
             })
+
+            # نتیجه ۳: استیکر کش‌شده (اگر file_id از سشن کاربر/پریمیوم ذخیره شده)
+            try:
+                tmap = EMOJI_PREMIUM_TEMPLATES.get(owner_id) or {}
+                prev = tmap.get(normal) if normal else None
+                sticker_fid = prev.get("sticker_file_id") if isinstance(prev, dict) else None
+                if sticker_fid:
+                    results_list.insert(0, {
+                        "type": "sticker",
+                        "id": f"pes_{owner_id}_{cid}",
+                        "sticker_file_id": sticker_fid,
+                    })
+            except Exception:
+                pass
+
             payload = {
                 "inline_query_id": query.id,
                 "cache_time": 0,
                 "is_personal": True,
                 "results": json.dumps(results_list, ensure_ascii=False),
             }
-            _pe_token = HELPER_BOT_TOKEN or BOT_TOKEN
-            url = f"https://api.telegram.org/bot{_pe_token}/answerInlineQuery"
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=payload) as resp:
                     data = await resp.json()
-                    if not data.get("ok"):
-                        logging.warning(f"inline pe answer fail: {data}")
-                        # فقط article html
-                        payload2 = {
-                            "inline_query_id": query.id,
-                            "cache_time": 0,
-                            "is_personal": True,
-                            "results": json.dumps([{
-                                "type": "article",
-                                "id": f"pe2_{owner_id}_{cid}",
-                                "title": "ایموجی پریمیوم",
-                                "input_message_content": {
-                                    "message_text": f'<tg-emoji emoji-id="{int(cid)}">{ph}</tg-emoji>',
-                                    "parse_mode": "HTML",
-                                },
-                            }], ensure_ascii=False),
-                        }
-                        async with session.post(url, data=payload2) as resp2:
-                            data2 = await resp2.json()
-                            if not data2.get("ok"):
-                                logging.warning(f"inline pe html fail: {data2}")
-                                await query.answer([], cache_time=0, is_personal=True)
+                    if data.get("ok"):
+                        logging.info(
+                            "inline pe answered ok owner=%s cid=%s n=%s token_helper=%s",
+                            owner_id, cid, len(results_list), bool(HELPER_BOT_TOKEN),
+                        )
+                    else:
+                        logging.warning("inline pe answer fail: %s", data)
+                        # حداقل یک نتیجه ساده
+                        await query.answer([], cache_time=0, is_personal=True)
             return
         except Exception as e:
             logging.warning(f"inline pe error: {e}")

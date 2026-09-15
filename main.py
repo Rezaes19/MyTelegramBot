@@ -9453,6 +9453,7 @@ async def admin_diamond_panel(client, message):
     
     buttons = [
         [KeyboardButton("➕ افزودن الماس به کاربر")],
+        [KeyboardButton("➖ کسر الماس از کاربر")],
         [KeyboardButton("💰 موجودی خودم"), KeyboardButton("🔍 موجودی با آیدی")],
         [KeyboardButton("🔙 بازگشت به منو")]
     ]
@@ -9465,6 +9466,18 @@ async def admin_add_diamond_start(client, message):
         return
     ADMIN_STATES[message.from_user.id] = "admin_add_diamond_id"
     await message.reply_text(
+        "🆔 **آیدی عددی کاربر** را وارد کنید:\n\n"
+        "برای لغو، `لغو` را بفرستید.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+@manager_bot.on_message(filters.text & filters.private & filters.regex("^➖ کسر الماس از کاربر$"))
+async def admin_deduct_diamond_start(client, message):
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return
+    ADMIN_STATES[message.from_user.id] = "admin_deduct_diamond_id"
+    await message.reply_text(
+        "➖ **کسر الماس از کاربر**\n\n"
         "🆔 **آیدی عددی کاربر** را وارد کنید:\n\n"
         "برای لغو، `لغو` را بفرستید.",
         reply_markup=ReplyKeyboardRemove()
@@ -9702,6 +9715,57 @@ async def private_handler(client, message):
                 )
             except ValueError:
                 await message.reply_text("❌ آیدی عددی نامعتبر است.")
+            return
+
+        # کسر الماس - مرحله ۱: آیدی
+        if ADMIN_STATES.get(user_id) == "admin_deduct_diamond_id":
+            if text.strip() == "لغو":
+                ADMIN_STATES[user_id] = None
+                await message.reply_text("❌ لغو شد.")
+                return
+            try:
+                target_id = int(text.strip())
+                ADMIN_STATES[user_id] = f"admin_deduct_diamond_amount_{target_id}"
+                bal = get_balance(target_id)
+                await message.reply_text(
+                    f"➖ مقدار کسر از کاربر `{target_id}`\n"
+                    f"💎 موجودی فعلی: `{bal:,}`\n\n"
+                    f"عدد را وارد کنید:"
+                )
+            except ValueError:
+                await message.reply_text("❌ آیدی عددی نامعتبر است. دوباره وارد کنید یا `لغو` بفرستید.")
+            return
+
+        # کسر الماس - مرحله ۲: مقدار
+        if str(ADMIN_STATES.get(user_id, "")).startswith("admin_deduct_diamond_amount_"):
+            if text.strip() == "لغو":
+                ADMIN_STATES[user_id] = None
+                await message.reply_text("❌ لغو شد.")
+                return
+            try:
+                target_id = int(ADMIN_STATES[user_id].split("_")[-1])
+                amount = int(text.strip())
+                if amount <= 0:
+                    await message.reply_text("❌ مقدار باید بیشتر از صفر باشد.")
+                    return
+                init_user_db(target_id)
+                actual, new_bal = force_deduct_balance(target_id, amount)
+                ADMIN_STATES[user_id] = None
+                await message.reply_text(
+                    f"✅ **الماس کسر شد | self MR**\n\n"
+                    f"👤 کاربر: `{target_id}`\n"
+                    f"➖ کسر شده: `{actual:,}`\n"
+                    f"✨ موجودی جدید: `{new_bal:,}`"
+                )
+                try:
+                    await manager_bot.send_message(
+                        target_id,
+                        f"⚠️ `{actual:,}` الماس توسط ادمین از حساب شما کسر شد.\nموجودی جدید: `{new_bal:,}`"
+                    )
+                except Exception:
+                    pass
+            except ValueError:
+                await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
             return
 
         # از دکمه اینلاین قدیمی

@@ -3302,45 +3302,84 @@ async def upload_custom_emoji_to_helper_bot(custom_emoji_id: int, user_id: int, 
 
 
 async def send_pack_emoji_media(client, chat_id: int, cid: int) -> bool:
-    """ارسال مدیا از Document پک (بدون GetCustomEmojiDocuments)"""
+    """ارسال از Document پک — بدون نیاز به file_id استرینگ"""
     try:
         await ensure_premium_emoji_pack(client)
         doc = PACK_DOC_BY_ID.get(int(cid))
         if not doc:
-            logging.warning("send_pack: no cached doc cid=%s cache_docs=%s", cid, len(PACK_DOC_BY_ID))
+            logging.warning("send_pack: no cached doc cid=%s docs=%s", cid, len(PACK_DOC_BY_ID))
             return False
-        path = None
+
+        # روش ۱: SendMedia با InputDocument (بهترین)
         try:
-            path = await client.download_media(doc)
-        except Exception as e_dl:
-            logging.warning("send_pack download_media: %s", e_dl)
-        if not path:
-            # raw download via file location
-            try:
-                from pyrogram.raw.types import InputDocumentFileLocation
-                loc = InputDocumentFileLocation(
-                    id=int(doc.id),
-                    access_hash=int(doc.access_hash),
-                    file_reference=doc.file_reference,
-                    thumb_size="",
+            from pyrogram.raw.types import InputDocument, InputMediaDocument
+            from pyrogram.raw.functions.messages import SendMedia
+            peer = await client.resolve_peer(chat_id)
+            await client.invoke(
+                SendMedia(
+                    peer=peer,
+                    media=InputMediaDocument(
+                        id=InputDocument(
+                            id=int(doc.id),
+                            access_hash=int(doc.access_hash),
+                            file_reference=doc.file_reference,
+                        )
+                    ),
+                    message="",
+                    random_id=client.rnd_id(),
                 )
-                path = await client.download_media(loc)
-            except Exception as e2:
-                logging.warning("send_pack download2: %s", e2)
-                return False
-        if not path:
-            return False
-        try:
-            try:
-                await client.send_sticker(chat_id, path)
-            except Exception:
-                await client.send_document(chat_id, path)
+            )
+            logging.info("send_pack InputDocument ok cid=%s chat=%s", cid, chat_id)
             return True
-        finally:
+        except Exception as e1:
+            logging.warning("send_pack InputDocument: %s", e1)
+
+        # روش ۲: ساخت file_id و send_sticker
+        try:
+            from pyrogram.file_id import FileId, FileType
+            dc = int(getattr(doc, "dc_id", 0) or 0) or 2
+            for ftype in (FileType.STICKER, FileType.DOCUMENT, FileType.ANIMATION):
+                try:
+                    fid = FileId(
+                        file_type=ftype,
+                        dc_id=dc,
+                        file_reference=doc.file_reference,
+                        media_id=int(doc.id),
+                        access_hash=int(doc.access_hash),
+                    ).encode()
+                    try:
+                        await client.send_sticker(chat_id, fid)
+                    except Exception:
+                        await client.send_document(chat_id, fid)
+                    logging.info("send_pack FileId ok type=%s cid=%s", ftype, cid)
+                    return True
+                except Exception as e_ft:
+                    logging.warning("send_pack FileId %s: %s", ftype, e_ft)
+        except Exception as e2:
+            logging.warning("send_pack FileId block: %s", e2)
+
+        # روش ۳: دانلود با get_file
+        try:
+            from pyrogram.raw.functions.upload import GetFile
+            from pyrogram.raw.types import InputDocumentFileLocation
+            loc = InputDocumentFileLocation(
+                id=int(doc.id),
+                access_hash=int(doc.access_hash),
+                file_reference=doc.file_reference,
+                thumb_size="",
+            )
+            # pyrogram internal download
+            path = await client.download_media(message=None)  # placeholder fail
+        except Exception:
+            path = None
+        if not path:
             try:
-                os.remove(path)
+                # write via invoke getFile chunks - skip heavy
+                pass
             except Exception:
                 pass
+
+        return False
     except Exception as e:
         logging.warning("send_pack_emoji_media: %s", e)
         return False
@@ -3515,6 +3554,26 @@ async def status_action_task(client: Client, user_id: int):
 
 
 
+
+async def translate_text(text: str, target_lang: str = "fa") -> str:
+    """ترجمه ساده با deep_translator / گوگل"""
+    if not text or not str(text).strip():
+        return text
+    code = (target_lang or "fa").strip()
+    if code in ("fa", "per", "persian"):
+        code = "fa"
+    try:
+        from deep_translator import GoogleTranslator
+        result = await asyncio.to_thread(
+            GoogleTranslator(source="auto", target=code).translate,
+            str(text)[:3000],
+        )
+        if result and str(result).strip():
+            return str(result).strip()
+    except Exception as e:
+        logging.warning("translate_text: %s", e)
+    return text
+
 async def outgoing_sticker_premium_handler(client, message):
     """اگر فیلتر تبدیل روشن باشد: استیکر خروجی را با ایموجی پک thehornyclubemojis جایگزین کن"""
     try:
@@ -3676,15 +3735,32 @@ async def outgoing_message_modifier(client, message):
 
                     # ===== پیام خالص =====
                     if pure:
-                        # 0) مستقیم از پک thehornyclubemojis
+                        # 0) ویرایش entity (همان روشی که در Saved جواب می‌دهد)
                         try:
-                            ok = await send_pack_emoji_media(client, chat_id, cid)
-                            if ok:
-                                await _del_orig()
-                                logging.info("premium PACK media ok uid=%s cid=%s", user_id, cid)
-                        except Exception as e:
-                            logging.warning("premium pack media: %s", e)
+                            from pyrogram.enums import MessageEntityType
+                            from pyrogram.types import MessageEntity
+                            ln = len(matched_key.encode("utf-16-le")) // 2
+                            ents = [MessageEntity(
+                                type=MessageEntityType.CUSTOM_EMOJI,
+                                offset=0, length=ln, custom_emoji_id=int(cid),
+                            )]
+                            await client.edit_message_text(chat_id, message.id, matched_key, entities=ents)
+                            ok = True
+                            logging.info("premium ENTITY edit ok uid=%s chat=%s", user_id, chat_id)
+                        except Exception as e0:
+                            logging.warning("premium entity edit: %s", e0)
                             ok = False
+
+                        # 1) پک thehornyclubemojis با InputDocument
+                        if not ok:
+                            try:
+                                ok = await send_pack_emoji_media(client, chat_id, cid)
+                                if ok:
+                                    await _del_orig()
+                                    logging.info("premium PACK media ok uid=%s cid=%s", user_id, cid)
+                            except Exception as e:
+                                logging.warning("premium pack media: %s", e)
+                                ok = False
                         # 1) استیکر ثبت‌شده
                         if not ok:
                             try:

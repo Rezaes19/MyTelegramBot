@@ -2182,6 +2182,8 @@ DEFAULT_PREMIUM_EMOJIS = {
 ANTI_LOGIN_STATUS = {}
 COPY_MODE_STATUS = {}
 PV_LOCK_STATUS = {}
+PV_FILTER_STICKER = {}  # user_id -> bool
+PV_FILTER_GIF = {}  # user_id -> bool
 FORCE_JOIN_PV_STATUS = {}
 FORCE_JOIN_CHANNELS = {}
 EDIT_ALERT_STATUS = {}
@@ -2216,6 +2218,8 @@ def load_all_states():
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
         AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
         PV_LOCK_STATUS[user_id] = settings.get("pv_lock", False)
+        PV_FILTER_STICKER[user_id] = bool(settings.get("pv_filter_sticker", False))
+        PV_FILTER_GIF[user_id] = bool(settings.get("pv_filter_gif", False))
         ANTI_LOGIN_STATUS[user_id] = settings.get("anti_login", False)
         TYPING_MODE_STATUS[user_id] = settings.get("typing", False)
         PLAYING_MODE_STATUS[user_id] = settings.get("playing", False)
@@ -2292,6 +2296,8 @@ def apply_user_settings_from_db(user_id: int):
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "") or ""
         AUTO_SEEN_STATUS[user_id] = bool(settings.get("auto_seen", False))
         PV_LOCK_STATUS[user_id] = bool(settings.get("pv_lock", False))
+        PV_FILTER_STICKER[user_id] = bool(settings.get("pv_filter_sticker", False))
+        PV_FILTER_GIF[user_id] = bool(settings.get("pv_filter_gif", False))
         ANTI_LOGIN_STATUS[user_id] = bool(settings.get("anti_login", False))
         TYPING_MODE_STATUS[user_id] = bool(settings.get("typing", False))
         PLAYING_MODE_STATUS[user_id] = bool(settings.get("playing", False))
@@ -2371,6 +2377,8 @@ def persist_all_user_settings(user_id: int):
             "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
             "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
             "pv_lock": PV_LOCK_STATUS.get(user_id, False),
+            "pv_filter_sticker": bool(PV_FILTER_STICKER.get(user_id, False)),
+            "pv_filter_gif": bool(PV_FILTER_GIF.get(user_id, False)),
             "anti_login": ANTI_LOGIN_STATUS.get(user_id, False),
             "typing": TYPING_MODE_STATUS.get(user_id, False),
             "playing": PLAYING_MODE_STATUS.get(user_id, False),
@@ -3711,6 +3719,58 @@ async def enemy_handler(client, message):
         await message.reply_text(reply_text)
     except:
         pass
+
+
+async def pv_filter_media_handler(client, message):
+    """فیلتر استیکر / گیف در پیوی — حذف خودکار"""
+    try:
+        if not message or not message.from_user:
+            return
+        if getattr(message.from_user, "is_self", False) or getattr(message.from_user, "is_bot", False):
+            return
+        try:
+            owner_id = client.me.id if client.me else (await client.get_me()).id
+        except Exception:
+            return
+        # فقط پیوی
+        try:
+            ctype = str(getattr(message.chat, "type", "")).lower()
+            if "private" not in ctype:
+                return
+        except Exception:
+            return
+
+        is_sticker = bool(getattr(message, "sticker", None))
+        is_gif = bool(getattr(message, "animation", None))
+        if not is_gif and getattr(message, "document", None):
+            doc = message.document
+            mime = (getattr(doc, "mime_type", None) or "").lower()
+            name = (getattr(doc, "file_name", None) or "").lower()
+            if "gif" in mime or name.endswith(".gif"):
+                is_gif = True
+
+        if is_sticker and PV_FILTER_STICKER.get(owner_id, False):
+            try:
+                await message.delete()
+            except Exception:
+                try:
+                    await client.delete_messages(message.chat.id, message.id)
+                except Exception:
+                    pass
+            return
+
+        if is_gif and PV_FILTER_GIF.get(owner_id, False):
+            try:
+                await message.delete()
+            except Exception:
+                try:
+                    await client.delete_messages(message.chat.id, message.id)
+                except Exception:
+                    pass
+            return
+    except Exception as e:
+        logging.warning(f"pv_filter_media_handler: {e}")
+
 
 async def secretary_auto_reply_handler(client, message):
     """منشی آفلاین: فقط پیوی، یک‌بار برای هر نفر تا ریست"""
@@ -5734,6 +5794,64 @@ async def reply_based_controller(client, message):
         return
 
         # ========== 📩 منشی آفلاین ==========
+
+    # ========== فیلتر استیکر / گیف پیوی ==========
+    if cmd in (".فیلتر استیکر", ".فیلتر استیکر روشن", "فیلتر استیکر روشن"):
+        if cmd == ".فیلتر استیکر":
+            PV_FILTER_STICKER[user_id] = not PV_FILTER_STICKER.get(user_id, False)
+        else:
+            PV_FILTER_STICKER[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        st = "روشن ✅" if PV_FILTER_STICKER.get(user_id) else "خاموش ❌"
+        try:
+            await message.edit_text(f"🚫 فیلتر استیکر پیوی: {st}")
+        except Exception:
+            await message.reply_text(f"🚫 فیلتر استیکر پیوی: {st}")
+        return
+
+    if cmd in (".فیلتر استیکر خاموش", "فیلتر استیکر خاموش"):
+        PV_FILTER_STICKER[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("🚫 فیلتر استیکر پیوی: خاموش ❌")
+        except Exception:
+            await message.reply_text("🚫 فیلتر استیکر پیوی: خاموش ❌")
+        return
+
+    if cmd in (".فیلتر گیف", ".فیلتر گیف روشن", "فیلتر گیف روشن"):
+        if cmd == ".فیلتر گیف":
+            PV_FILTER_GIF[user_id] = not PV_FILTER_GIF.get(user_id, False)
+        else:
+            PV_FILTER_GIF[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        st = "روشن ✅" if PV_FILTER_GIF.get(user_id) else "خاموش ❌"
+        try:
+            await message.edit_text(f"🎞 فیلتر گیف پیوی: {st}")
+        except Exception:
+            await message.reply_text(f"🎞 فیلتر گیف پیوی: {st}")
+        return
+
+    if cmd in (".فیلتر گیف خاموش", "فیلتر گیف خاموش"):
+        PV_FILTER_GIF[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("🎞 فیلتر گیف پیوی: خاموش ❌")
+        except Exception:
+            await message.reply_text("🎞 فیلتر گیف پیوی: خاموش ❌")
+        return
+
     if cmd in (".منشی روشن", "منشی روشن"):
         SECRETARY_MODE_STATUS[user_id] = True
         try:
@@ -7433,6 +7551,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     enemy_filter = filters.create(lambda _, c, m: bool(m.from_user and ((m.from_user.id, m.chat.id) in ACTIVE_ENEMIES.get(c.me.id, set()) or GLOBAL_ENEMY_STATUS.get(c.me.id))))
     client.add_handler(MessageHandler(enemy_handler, enemy_filter & ~filters.me), group=1)
 
+    client.add_handler(MessageHandler(pv_filter_media_handler, filters.private & ~filters.me), group=0)
     client.add_handler(MessageHandler(secretary_auto_reply_handler, filters.private & ~filters.me), group=1)
 
     tasks = [
@@ -7550,6 +7669,10 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("⭐ ایموجی پریمیوم", f"panel_page_40_{user_id}", style="primary"),
                 _styled_btn("📩 منشی آفلاین", f"panel_page_41_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🚫 فیلتر استیکر پیوی", f"panel_page_42_{user_id}", style="primary"),
+                _styled_btn("🎞 فیلتر گیف پیوی", f"panel_page_43_{user_id}", style="primary"),
             ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
@@ -7671,10 +7794,24 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
+    if page == 42:
+        on = PV_FILTER_STICKER.get(user_id, False)
+        return [
+            [_styled_btn(f"فیلتر استیکر: ({'on ✓' if on else 'off ✗'})", f"toggle_pv_filter_sticker_{user_id}", on)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
+    if page == 43:
+        on = PV_FILTER_GIF.get(user_id, False)
+        return [
+            [_styled_btn(f"فیلتر گیف: ({'on ✓' if on else 'off ✗'})", f"toggle_pv_filter_gif_{user_id}", on)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 42: 1, 43: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -8493,7 +8630,7 @@ async def callback_panel_handler(client, callback):
             await callback.answer(f"✅ {FONT_PERSIAN_NAMES.get(font_name, font_name)}")
             return
 
-        elif action == "toggle_sec":
+        elif action in ("toggle_sec", "toggle_secretary"):
             SECRETARY_MODE_STATUS[target_user_id] = not SECRETARY_MODE_STATUS.get(target_user_id, False)
             settings_update["secretary"] = SECRETARY_MODE_STATUS[target_user_id]
             if SECRETARY_MODE_STATUS[target_user_id]:
@@ -8506,6 +8643,14 @@ async def callback_panel_handler(client, callback):
         elif action == "toggle_pv":
             PV_LOCK_STATUS[target_user_id] = not PV_LOCK_STATUS.get(target_user_id, False)
             settings_update["pv_lock"] = PV_LOCK_STATUS[target_user_id]
+
+        elif action == "toggle_pv_filter_sticker":
+            PV_FILTER_STICKER[target_user_id] = not PV_FILTER_STICKER.get(target_user_id, False)
+            settings_update["pv_filter_sticker"] = PV_FILTER_STICKER[target_user_id]
+
+        elif action == "toggle_pv_filter_gif":
+            PV_FILTER_GIF[target_user_id] = not PV_FILTER_GIF.get(target_user_id, False)
+            settings_update["pv_filter_gif"] = PV_FILTER_GIF[target_user_id]
 
         elif action == "toggle_anti":
             ANTI_LOGIN_STATUS[target_user_id] = not ANTI_LOGIN_STATUS.get(target_user_id, False)
@@ -8937,6 +9082,24 @@ async def callback_panel_handler(client, callback):
                     "مثال:\n"
                     ".تنظیم منشی الان در دسترس نیستم"
                 ),
+                42: (
+                    "🚫 فیلتر استیکر پیوی | self MR\n\n"
+                    "دستورات:\n"
+                    ".فیلتر استیکر\n"
+                    ".فیلتر استیکر روشن\n"
+                    ".فیلتر استیکر خاموش\n\n"
+                    "با روشن بودن، هر استیکری که در پیوی\n"
+                    "برای شما ارسال شود خودکار پاک می‌شود."
+                ),
+                43: (
+                    "🎞 فیلتر گیف پیوی | self MR\n\n"
+                    "دستورات:\n"
+                    ".فیلتر گیف\n"
+                    ".فیلتر گیف روشن\n"
+                    ".فیلتر گیف خاموش\n\n"
+                    "با روشن بودن، هر گیفی که در پیوی\n"
+                    "برای شما ارسال شود خودکار پاک می‌شود."
+                )
             }
             try:
                 if page in HELP_TEXTS:

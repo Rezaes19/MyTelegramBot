@@ -729,53 +729,59 @@ async def cleanup_old_files():
 # =============================================
 # 🎰 سیستم تقلب تاس / بولینگ / اسلات (ضد اسپم)
 # =============================================
-async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40):
+async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tries: int = 40, user_id: int = 0):
     """
     ایموجی بازی را دانه‌دانه می‌فرستد تا مقدار دلخواه بیاید.
-    پیام‌های ناموفق را یکی‌یکی پاک می‌کند (گروه و پیوی).
+    پیام‌های ناموفق را پاک می‌کند (گروه و پیوی).
+    با ارسال «لغو» متوقف می‌شود.
     """
     async def _safe_delete(msg):
         if msg is None:
             return
         mid = getattr(msg, "id", None)
-        # روش اصلی: خود پیام
         try:
             await msg.delete()
             return
         except Exception:
             pass
-        # روش دوم: delete_messages
         if mid is not None:
-            try:
-                await client.delete_messages(chat_id, mid)
-                return
-            except Exception:
-                pass
-            try:
-                await client.delete_messages(chat_id, [mid])
-                return
-            except Exception:
-                pass
-            # raw
+            for ids in (mid, [mid]):
+                try:
+                    await client.delete_messages(chat_id, ids)
+                    return
+                except Exception:
+                    pass
             try:
                 await client.invoke(functions.messages.DeleteMessages(id=[mid], revoke=True))
             except Exception as e:
                 logging.warning(f"cheat delete fail mid={mid}: {e}")
 
+    if user_id:
+        CHEAT_CANCEL[user_id] = False
+        CHEAT_RUNNING[user_id] = chat_id
+
     last_msg = None
+    cancelled = False
     for attempt in range(1, max_tries + 1):
+        if user_id and CHEAT_CANCEL.get(user_id):
+            cancelled = True
+            break
         try:
-            await asyncio.sleep(random.uniform(1.5, 2.8))
+            await asyncio.sleep(random.uniform(1.4, 2.6))
+            if user_id and CHEAT_CANCEL.get(user_id):
+                cancelled = True
+                break
             msg = await client.send_dice(chat_id, emoji)
             value = getattr(getattr(msg, "dice", None), "value", None)
 
             if value is not None and value in targets:
-                # موفق — پیام قبلی ناموفق را پاک کن
                 if last_msg is not None and getattr(last_msg, "id", None) != msg.id:
                     await _safe_delete(last_msg)
+                if user_id:
+                    CHEAT_RUNNING.pop(user_id, None)
+                    CHEAT_CANCEL[user_id] = False
                 return True, value, attempt
 
-            # ناموفق — پیام قبلی را پاک کن، فعلی را نگه دار
             if last_msg is not None:
                 await _safe_delete(last_msg)
             last_msg = msg
@@ -787,6 +793,11 @@ async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tr
 
     if last_msg is not None:
         await _safe_delete(last_msg)
+    if user_id:
+        CHEAT_RUNNING.pop(user_id, None)
+        CHEAT_CANCEL[user_id] = False
+    if cancelled:
+        return None, None, attempt  # None = لغو شد
     return False, None, max_tries
 
 
@@ -1869,22 +1880,43 @@ def _utf16_len(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
 
 
-HELP_TEXT = """
-╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮
-    🛠 راهنمای ربات self MR
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
-
-⚠️ تنظیمات اصلی از طریق `پنل`
-
-✦ ذخیره / .ذخیره (ریپلای)
-✦ دانلود [لینک] | صوت [لینک]
-✦ آیدی | .آیدی
-✦ .دلار | .یورو | ...
-✦ .تبدیل متن به ویس [متن]
-✦ .تبدیل به استیکر
-✦ .ویدیو مسیج
-✦ .فونت بولد | خاموش
-"""
+HELP_TEXT = (
+"📖 راهنمای کامل self MR\n\n"
+"📱 پنل → دستور: پنل\n\n"
+"💎 الماس و سلف\n"
+"• فعال‌سازی سلف از ربات منیجر\n"
+"• کسر ساعتی الماس خودکار\n"
+"• زیرمجموعه‌گیری → الماس رایگان\n\n"
+"🔐 امنیت\n"
+"• هشدار حذف / ویرایش پیام\n"
+"• عضویت اجباری پیوی\n"
+"• اسکرین | فضول پروفایل | ضدلاگین\n\n"
+"✍️ متن و فونت\n"
+"• فونت متن و ساعت پروفایل\n"
+"• ترجمه (ریپلای + .ترجمه)\n"
+"• .هوش متن گسترده + متن\n\n"
+"🎨 ابزار رسانه\n"
+"• ریپلای + .ذخیره\n"
+"• دانلود / صوت + لینک\n"
+"• .تبدیل به استیکر | .ویدیو مسیج\n"
+"• .ویس به متن | .تبدیل متن به ویس\n"
+"• عکس↔PDF | کیفیت عکس | سرچ آهنگ\n\n"
+"👤 پروفایل\n"
+"• تغییر اسم / بیو / یوزرنیم\n"
+"• اسم چرخشی | آهنگ چرخشی | اکشن‌ها\n\n"
+"📩 منشی آفلاین\n"
+"• .منشی روشن / .منشی خاموش\n"
+"• .تنظیم منشی [متن]\n"
+"• .ریست منشی\n\n"
+"🎰 تقلب\n"
+"• .تاس 1-6 | .بولینگ | .بسکتبال | .فوتبال\n"
+"• .اسلات 777 و ...\n"
+"• توقف: لغو (پیام لغو پاک می‌شود)\n\n"
+"📣 دیگر\n"
+"• سندر فور | میو | انیمیشن\n"
+"• قیمت ارز | QR | آیدی | تگ اعضا\n\n"
+"⚠️ جزئیات هر بخش داخل پنل"
+)
 
 COMMAND_REGEX = r"^(راهنما|ذخیره|\.ذخیره|تکرار \d+|ریاکشن .*|ریاکشن خاموش|کپی روشن|کپی خاموش|لیست دشمن|تاس|تاس \d+|بولینگ|پنل|panel|تنظیم منشی .*|دانلود .*|صوت .*|آیدی|\.آیدی|\.دلار|\.یورو|\.صدا .*|\.تبدیل متن به ویس.*|\.فونت .*|\..+)$"
 
@@ -2086,7 +2118,10 @@ data_manager = DataManager(DATA_FILE)
 ACTIVE_BOTS = {}
 ACTIVE_ENEMIES = {}
 ENEMY_REPLY_QUEUES = {}
+SECRETARY_REPLY_MESSAGE = "در حال حاضر آفلاین هستم. پیامتون رو بذارید، به زودی جواب میدم."
 SECRETARY_MODE_STATUS = {}
+CHEAT_CANCEL = {}  # user_id -> True وقتی لغو تقلب
+CHEAT_RUNNING = {}  # user_id -> chat_id در حال تقلب
 SECRETARY_CUSTOM_MESSAGES = {}
 USERS_REPLIED_IN_SECRETARY = {}
 MUTED_USERS = {}
@@ -3678,20 +3713,44 @@ async def enemy_handler(client, message):
         pass
 
 async def secretary_auto_reply_handler(client, message):
-    owner_id = client.me.id
-    if message.from_user and SECRETARY_MODE_STATUS.get(owner_id, False):
+    """منشی آفلاین: فقط پیوی، یک‌بار برای هر نفر تا ریست"""
+    try:
+        if not message or not message.from_user:
+            return
+        if message.from_user.is_self or message.from_user.is_bot:
+            return
+        try:
+            owner_id = client.me.id if client.me else (await client.get_me()).id
+        except Exception:
+            return
+        if not SECRETARY_MODE_STATUS.get(owner_id, False):
+            return
+        # فقط چت خصوصی
+        try:
+            ctype = str(getattr(message.chat, "type", "")).lower()
+            if "private" not in ctype:
+                return
+        except Exception:
+            return
         target_id = message.from_user.id
-        replied = USERS_REPLIED_IN_SECRETARY.get(owner_id, set())
-        if target_id not in replied:
-            try:
-                custom_msg = SECRETARY_CUSTOM_MESSAGES.get(owner_id)
-                reply_msg = custom_msg if custom_msg else SECRETARY_REPLY_MESSAGE
-                await message.reply_text(reply_msg)
-                replied.add(target_id)
-                USERS_REPLIED_IN_SECRETARY[owner_id] = replied
-                data_manager.save_replied_users(owner_id, replied)
-            except:
-                pass
+        replied = USERS_REPLIED_IN_SECRETARY.get(owner_id) or set()
+        if target_id in replied:
+            return
+        custom_msg = (SECRETARY_CUSTOM_MESSAGES.get(owner_id) or "").strip()
+        reply_msg = custom_msg if custom_msg else SECRETARY_REPLY_MESSAGE
+        await message.reply_text(reply_msg)
+        replied.add(target_id)
+        USERS_REPLIED_IN_SECRETARY[owner_id] = replied
+        try:
+            data_manager.save_replied_users(owner_id, replied)
+        except Exception:
+            pass
+        try:
+            persist_all_user_settings(owner_id)
+        except Exception:
+            pass
+    except Exception as e:
+        logging.warning(f"secretary_auto_reply: {e}")
 
 async def incoming_message_manager(client, message):
     if not message.from_user:
@@ -5674,7 +5733,81 @@ async def reply_based_controller(client, message):
             pass
         return
 
-    # ========== 🎰 تقلب ==========
+        # ========== 📩 منشی آفلاین ==========
+    if cmd in (".منشی روشن", "منشی روشن"):
+        SECRETARY_MODE_STATUS[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("✅ منشی آفلاین روشن شد.\nهر کسی در پیوی پیام بدهد، یک‌بار پاسخ خودکار می‌گیرد.")
+        except Exception:
+            await message.reply_text("✅ منشی آفلاین روشن شد.")
+        return
+
+    if cmd in (".منشی خاموش", "منشی خاموش"):
+        SECRETARY_MODE_STATUS[user_id] = False
+        USERS_REPLIED_IN_SECRETARY[user_id] = set()
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("❌ منشی آفلاین خاموش شد.")
+        except Exception:
+            await message.reply_text("❌ منشی آفلاین خاموش شد.")
+        return
+
+    if cmd.startswith(".تنظیم منشی") or cmd.startswith("تنظیم منشی"):
+        new_msg = cmd.split("منشی", 1)[1].strip() if "منشی" in cmd else ""
+        # حذف پیشوند نقطه/فاصله
+        if new_msg.startswith("."):
+            new_msg = new_msg[1:].strip()
+        if not new_msg:
+            await message.edit_text("⚠️ مثال:\n`.تنظیم منشی الان در دسترس نیستم`")
+            return
+        SECRETARY_CUSTOM_MESSAGES[user_id] = new_msg
+        try:
+            data_manager.update_user_data(user_id, {"settings": {"secretary_msg": new_msg, "secretary": SECRETARY_MODE_STATUS.get(user_id, False)}})
+        except Exception:
+            pass
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text(f"✅ متن منشی:\n\n{new_msg}")
+        except Exception:
+            await message.reply_text(f"✅ متن منشی تنظیم شد.")
+        return
+
+    if cmd in (".ریست منشی", "ریست منشی"):
+        USERS_REPLIED_IN_SECRETARY[user_id] = set()
+        try:
+            data_manager.save_replied_users(user_id, set())
+        except Exception:
+            pass
+        try:
+            await message.edit_text("✅ لیست پاسخ‌داده‌شده‌های منشی پاک شد.")
+        except Exception:
+            pass
+        return
+
+    # لغو تقلب — پاک کردن پیام لغو، هیچ پیام اضافه‌ای نفرست
+    if cmd in ("لغو", ".لغو", ".لغو تقلب", "لغو تقلب") and CHEAT_RUNNING.get(user_id):
+        CHEAT_CANCEL[user_id] = True
+        try:
+            await message.delete()
+        except Exception:
+            try:
+                await client.delete_messages(message.chat.id, message.id)
+            except Exception:
+                pass
+        return
+
+
+# ========== 🎰 تقلب ==========
     cheat_cmd = (cmd or "").strip()
 
     async def _del_cmd_msg():
@@ -5689,8 +5822,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".بولینگ",):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎳", {6}, 40)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎳", {6}, 40, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ بعد از چند تلاش استرایک نیومد. دوباره بزن.")
             except Exception:
@@ -5699,8 +5832,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".بسکتبال",):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🏀", {5}, 40)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🏀", {5}, 40, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ توپ داخل سبد نیفتاد. دوباره امتحان کن.")
             except Exception:
@@ -5709,8 +5842,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".فوتبال",):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "⚽", {5}, 40)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "⚽", {5}, 40, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ گل نشد. دوباره بزن.")
             except Exception:
@@ -5722,8 +5855,8 @@ async def reply_based_controller(client, message):
     if dice_match:
         target = int(dice_match.group(1))
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {target}, 40)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎲", {target}, 40, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, f"❌ تاس {target} نیومد. دوباره بزن.")
             except Exception:
@@ -5732,8 +5865,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".اسلات 777", ".اسلات۷۷۷", ".اسلات ۷۷۷"):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {64}, 55)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {64}, 55, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ جکپات ۷۷۷ نیومد. دوباره بزن.")
             except Exception:
@@ -5742,8 +5875,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".اسلات لیمو",):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {43}, 50)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {43}, 50, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ سه لیمو نیومد.")
             except Exception:
@@ -5752,8 +5885,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".اسلات انگور",):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {22}, 50)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {22}, 50, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ سه انگور نیومد.")
             except Exception:
@@ -5762,8 +5895,8 @@ async def reply_based_controller(client, message):
 
     if cheat_cmd in (".اسلات Bar", ".اسلات bar", ".اسلات بار", ".اسلات BAR"):
         await _del_cmd_msg()
-        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {1}, 50)
-        if not ok:
+        ok, val, tries = await cheat_send_dice(client, message.chat.id, "🎰", {1}, 50, user_id=user_id)
+        if ok is False:
             try:
                 await client.send_message(message.chat.id, "❌ سه بار نیومد.")
             except Exception:
@@ -7416,6 +7549,7 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("⭐ ایموجی پریمیوم", f"panel_page_40_{user_id}", style="primary"),
+                _styled_btn("📩 منشی آفلاین", f"panel_page_41_{user_id}", style="primary"),
             ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
@@ -7530,10 +7664,17 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
+    if page == 41:
+        on = SECRETARY_MODE_STATUS.get(user_id, False)
+        return [
+            [_styled_btn(f"منشی: ({'on ✓' if on else 'off ✗'})", f"toggle_secretary_{user_id}", on)],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -8355,6 +8496,8 @@ async def callback_panel_handler(client, callback):
         elif action == "toggle_sec":
             SECRETARY_MODE_STATUS[target_user_id] = not SECRETARY_MODE_STATUS.get(target_user_id, False)
             settings_update["secretary"] = SECRETARY_MODE_STATUS[target_user_id]
+            if SECRETARY_MODE_STATUS[target_user_id]:
+                USERS_REPLIED_IN_SECRETARY[target_user_id] = set()
 
         elif action == "toggle_seen":
             AUTO_SEEN_STATUS[target_user_id] = not AUTO_SEEN_STATUS.get(target_user_id, False)
@@ -8664,7 +8807,11 @@ async def callback_panel_handler(client, callback):
                     "دستورات:\n"
                     ".بولینگ\n.بسکتبال\n.فوتبال\n"
                     ".تاس 1 تا .تاس 6\n"
-                    ".اسلات 777\n.اسلات لیمو\n.اسلات انگور\n.اسلات Bar"
+                    ".اسلات 777\n.اسلات لیمو\n.اسلات انگور\n.اسلات Bar\n\n"
+                    "⏹ توقف:\n"
+                    "اگر طول کشید بنویسید: لغو\n"
+                    "پیام لغو پاک می‌شود و دیگر چیزی فرستاده نمی‌شود.\n"
+                    "(گپ و پیوی)"
                 ),
                 25: (
                     "🎵 آهنگ چرخشی | self MR\n\n"
@@ -8777,6 +8924,18 @@ async def callback_panel_handler(client, callback):
                     ".تبدیل ایموجی خاموش\n"
                     ".تنظیم تبدیل ایموجی ❤\n"
                     "(ریپلای روی ایموجی پریمیوم)"
+                ),
+                                41: (
+                    "📩 منشی آفلاین | self MR\n\n"
+                    "وقتی روشن باشد، اگر کسی در پیوی پیام بدهد\n"
+                    "یک‌بار پاسخ خودکار می‌گیرد.\n\n"
+                    "دستورات:\n"
+                    ".منشی روشن\n"
+                    ".منشی خاموش\n"
+                    ".تنظیم منشی متن دلخواه\n"
+                    ".ریست منشی\n\n"
+                    "مثال:\n"
+                    ".تنظیم منشی الان در دسترس نیستم"
                 ),
             }
             try:

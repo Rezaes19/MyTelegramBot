@@ -2118,12 +2118,14 @@ data_manager = DataManager(DATA_FILE)
 ACTIVE_BOTS = {}
 ACTIVE_ENEMIES = {}
 ENEMY_REPLY_QUEUES = {}
-SECRETARY_REPLY_MESSAGE = "در حال حاضر آفلاین هستم. پیامتون رو بذارید، به زودی جواب میدم."
+SECRETARY_REPLY_MESSAGE = "آفلاینم فعلا بعدا جواب میدم"
 SECRETARY_MODE_STATUS = {}
 CHEAT_CANCEL = {}  # user_id -> True وقتی لغو تقلب
 CHEAT_RUNNING = {}  # user_id -> chat_id در حال تقلب
 SECRETARY_CUSTOM_MESSAGES = {}
 USERS_REPLIED_IN_SECRETARY = {}
+SECRETARY_LAST_REPLY = {}  # owner_id -> {peer_id: timestamp}
+SECRETARY_COOLDOWN_SEC = 600  # هر ۱۰ دقیقه یک‌بار
 MUTED_USERS = {}
 USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
@@ -2293,7 +2295,10 @@ def apply_user_settings_from_db(user_id: int):
         BOLD_MODE_STATUS[user_id] = bool(settings.get("bold", False))
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SECRETARY_MODE_STATUS[user_id] = bool(settings.get("secretary", False))
-        SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "") or ""
+        _sm = (settings.get("secretary_msg", "") or "").strip()
+        if _sm in ("رید", "rid", "test") or len(_sm) < 2:
+            _sm = ""
+        SECRETARY_CUSTOM_MESSAGES[user_id] = _sm
         AUTO_SEEN_STATUS[user_id] = bool(settings.get("auto_seen", False))
         PV_LOCK_STATUS[user_id] = bool(settings.get("pv_lock", False))
         PV_FILTER_STICKER[user_id] = bool(settings.get("pv_filter_sticker", False))
@@ -3793,22 +3798,18 @@ async def secretary_auto_reply_handler(client, message):
         except Exception:
             return
         target_id = message.from_user.id
-        replied = USERS_REPLIED_IN_SECRETARY.get(owner_id) or set()
-        if target_id in replied:
+        now = time.time()
+        last_map = SECRETARY_LAST_REPLY.get(owner_id) or {}
+        last_ts = float(last_map.get(target_id) or 0)
+        if last_ts and (now - last_ts) < SECRETARY_COOLDOWN_SEC:
             return
         custom_msg = (SECRETARY_CUSTOM_MESSAGES.get(owner_id) or "").strip()
-        reply_msg = custom_msg if custom_msg else SECRETARY_REPLY_MESSAGE
+        # متن خراب / کوتاه / «رید» را نادیده بگیر
+        bad = (not custom_msg) or (custom_msg in ("رید", "rid", "test", ".")) or (len(custom_msg) < 2)
+        reply_msg = SECRETARY_REPLY_MESSAGE if bad else custom_msg
         await message.reply_text(reply_msg)
-        replied.add(target_id)
-        USERS_REPLIED_IN_SECRETARY[owner_id] = replied
-        try:
-            data_manager.save_replied_users(owner_id, replied)
-        except Exception:
-            pass
-        try:
-            persist_all_user_settings(owner_id)
-        except Exception:
-            pass
+        last_map[target_id] = now
+        SECRETARY_LAST_REPLY[owner_id] = last_map
     except Exception as e:
         logging.warning(f"secretary_auto_reply: {e}")
 
@@ -5859,7 +5860,7 @@ async def reply_based_controller(client, message):
         except Exception:
             pass
         try:
-            await message.edit_text("✅ منشی آفلاین روشن شد.\nهر کسی در پیوی پیام بدهد، یک‌بار پاسخ خودکار می‌گیرد.")
+            await message.edit_text("✅ منشی آفلاین روشن شد.\nهر کسی در پیوی پیام بدهد، هر ۱۰ دقیقه یک‌بار پاسخ خودکار می‌دهد.")
         except Exception:
             await message.reply_text("✅ منشی آفلاین روشن شد.")
         return
@@ -8298,6 +8299,28 @@ async def callback_panel_handler(client, callback):
         await callback.answer()
         return
 
+    if data.startswith("close_panel_"):
+        try:
+            uid = int(data.split("_")[-1])
+            if callback.from_user and callback.from_user.id != uid:
+                await callback.answer("⛔️", show_alert=True)
+                return
+        except Exception:
+            pass
+        try:
+            if callback.inline_message_id:
+                await client.edit_inline_text(callback.inline_message_id, " پنل بسته شد.")
+            elif callback.message:
+                await callback.message.delete()
+        except Exception:
+            try:
+                if callback.message:
+                    await callback.message.edit_text(" پنل بسته شد.")
+            except Exception:
+                pass
+        await callback.answer("بسته شد")
+        return
+
     if data == "check_subscription":
         user_id = callback.from_user.id
         not_subscribed = await check_all_channels(user_id)
@@ -8722,6 +8745,47 @@ async def callback_panel_handler(client, callback):
             GLOBAL_ENEMY_STATUS[target_user_id] = not GLOBAL_ENEMY_STATUS.get(target_user_id, False)
             settings_update["global_enemy"] = GLOBAL_ENEMY_STATUS[target_user_id]
 
+        # ---- اعمال تاگل‌های ساده (منشی، فیلتر، قفل، …) ----
+        if settings_update:
+            try:
+                data_manager.update_user_data(target_user_id, {"settings": settings_update})
+            except Exception as e:
+                logging.warning(f"settings_update save: {e}")
+            try:
+                persist_all_user_settings(target_user_id)
+            except Exception:
+                pass
+            stay_page = 1
+            if "secretary" in settings_update:
+                stay_page = 41
+            elif "pv_filter_sticker" in settings_update:
+                stay_page = 42
+            elif "pv_filter_gif" in settings_update:
+                stay_page = 43
+            elif any(k in settings_update for k in ("auto_seen", "pv_lock", "anti_login", "global_enemy", "clock", "typing", "playing", "action")):
+                if any(k in settings_update for k in ("typing", "playing", "action")):
+                    stay_page = 4
+                elif "clock" in settings_update or "font" in settings_update:
+                    stay_page = 5
+                else:
+                    stay_page = 3
+            st_bits = []
+            for k, v in settings_update.items():
+                if isinstance(v, bool):
+                    st_bits.append(f"{k}: {'on' if v else 'off'}")
+            try:
+                await callback.answer(" | ".join(st_bits[:3]) if st_bits else "✅")
+            except Exception:
+                pass
+            try:
+                # صفحه راهنما برای منشی/فیلتر
+                if stay_page in (41, 42, 43) and stay_page in (HELP_TEXTS if False else []):
+                    pass
+                await edit_panel_colored(callback, target_user_id, stay_page)
+            except Exception as e:
+                logging.warning(f"toggle refresh page={stay_page}: {e}")
+            # رفرش پنل انجام شد
+            return
 
         elif action == "toggle_emoji_convert":
             EMOJI_PREMIUM_CONVERT[target_user_id] = not EMOJI_PREMIUM_CONVERT.get(target_user_id, False)
@@ -9073,7 +9137,7 @@ async def callback_panel_handler(client, callback):
                                 41: (
                     "📩 منشی آفلاین | self MR\n\n"
                     "وقتی روشن باشد، اگر کسی در پیوی پیام بدهد\n"
-                    "یک‌بار پاسخ خودکار می‌گیرد.\n\n"
+                    "هر ۱۰ دقیقه یک‌بار پاسخ خودکار می‌دهد.\n\n"
                     "دستورات:\n"
                     ".منشی روشن\n"
                     ".منشی خاموش\n"
@@ -9164,14 +9228,7 @@ async def callback_panel_handler(client, callback):
                 logging.error(f"panel_page error: {e}")
             return
 
-        
-        elif action.startswith("lang_"):
-            stay_page = 1
 
-        try:
-            await edit_panel_colored(callback, target_user_id, stay_page)
-        except:
-            pass
 
 # =============================================
 # 📥📤 بخش مدیریت دیتابیس (آپلود و دانلود) - نسخه فیکس شده

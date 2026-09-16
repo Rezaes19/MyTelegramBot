@@ -2183,13 +2183,59 @@ PREMIUM_LETTER_MAP.update({k.lower(): v for k, v in list(PREMIUM_LETTER_MAP.item
 # پک ایموجی پریمیوم: https://t.me/addemoji/thehornyclubemojis
 PREMIUM_EMOJI_PACK_SHORT = "thehornyclubemojis"
 PACK_EMOJI_CACHE = {}  # emoticon/alt -> custom_emoji document id
+PACK_DOC_BY_ID = {}  # document_id -> raw Document
 PACK_EMOJI_LOADED = False
 
 async def ensure_premium_emoji_pack(client) -> dict:
-    """لود پک addemoji و ساخت مپ کاراکتر/ایموجی -> document_id"""
-    global PACK_EMOJI_CACHE, PACK_EMOJI_LOADED
-    if PACK_EMOJI_CACHE:
+    """لود پک addemoji و ساخت مپ + نگه‌داشتن Document خام برای ارسال"""
+    global PACK_EMOJI_CACHE, PACK_EMOJI_LOADED, PACK_DOC_BY_ID
+    if PACK_EMOJI_CACHE and PACK_DOC_BY_ID:
         return PACK_EMOJI_CACHE
+    try:
+        from pyrogram.raw.functions.messages import GetStickerSet
+        from pyrogram.raw.types import InputStickerSetShortName
+        r = await client.invoke(
+            GetStickerSet(
+                stickerset=InputStickerSetShortName(short_name=PREMIUM_EMOJI_PACK_SHORT),
+                hash=0,
+            )
+        )
+        cache = {}
+        docs_map = {}
+        for d in (getattr(r, "documents", None) or []):
+            did = int(getattr(d, "id", 0) or 0)
+            if did:
+                docs_map[did] = d
+                for attr in (getattr(d, "attributes", None) or []):
+                    alt = getattr(attr, "alt", None)
+                    if alt:
+                        cache[str(alt)] = did
+                        cache[str(alt).replace("️", "").replace("︎", "")] = did
+        for p in (getattr(r, "packs", None) or []):
+            emo = getattr(p, "emoticon", None) or ""
+            dlist = getattr(p, "documents", None) or []
+            if emo and dlist:
+                eid = int(dlist[0])
+                cache[str(emo)] = eid
+                cache[str(emo).replace("️", "").replace("︎", "")] = eid
+        # fix fe0f keys
+        fixed = {}
+        for k, v in cache.items():
+            fixed[k] = v
+            fixed[k.replace("️", "").replace("︎", "")] = v
+        PACK_EMOJI_CACHE = fixed
+        PACK_DOC_BY_ID = docs_map
+        PACK_EMOJI_LOADED = True
+        logging.info(
+            "premium emoji pack loaded short=%s emotes=%s docs=%s",
+            PREMIUM_EMOJI_PACK_SHORT,
+            len(PACK_EMOJI_CACHE),
+            len(PACK_DOC_BY_ID),
+        )
+    except Exception as e:
+        logging.warning("ensure_premium_emoji_pack: %s", e)
+        PACK_EMOJI_LOADED = False
+    return PACK_EMOJI_CACHE
     try:
         from pyrogram.raw.functions.messages import GetStickerSet
         from pyrogram.raw.types import InputStickerSetShortName
@@ -3254,6 +3300,48 @@ async def upload_custom_emoji_to_helper_bot(custom_emoji_id: int, user_id: int, 
                 pass
 
 
+
+async def send_pack_emoji_media(client, chat_id: int, cid: int) -> bool:
+    """ارسال مدیا از Document پک (بدون GetCustomEmojiDocuments)"""
+    try:
+        await ensure_premium_emoji_pack(client)
+        doc = PACK_DOC_BY_ID.get(int(cid))
+        if not doc:
+            logging.warning("send_pack: no cached doc cid=%s", cid)
+            return False
+        path = await client.download_media(doc)
+        if not path:
+            # raw download via file location
+            try:
+                from pyrogram.raw.types import InputDocumentFileLocation
+                loc = InputDocumentFileLocation(
+                    id=int(doc.id),
+                    access_hash=int(doc.access_hash),
+                    file_reference=doc.file_reference,
+                    thumb_size="",
+                )
+                path = await client.download_media(loc)
+            except Exception as e2:
+                logging.warning("send_pack download2: %s", e2)
+                return False
+        if not path:
+            return False
+        try:
+            try:
+                await client.send_sticker(chat_id, path)
+            except Exception:
+                await client.send_document(chat_id, path)
+            return True
+        finally:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    except Exception as e:
+        logging.warning("send_pack_emoji_media: %s", e)
+        return False
+
+
 async def send_registered_emoji_sticker(client, chat_id: int, user_id: int, normal_key: str, cid: int) -> bool:
     tmap = EMOJI_PREMIUM_TEMPLATES.get(user_id) or {}
     prev = tmap.get(normal_key)
@@ -3581,17 +3669,27 @@ async def outgoing_message_modifier(client, message):
 
                     # ===== پیام خالص =====
                     if pure:
-                        # 1) استیکر / مدیا مستقیم (بهترین برای گپ و پیوی)
+                        # 0) مستقیم از پک thehornyclubemojis
                         try:
-                            ok = await send_registered_emoji_sticker(
-                                client, chat_id, user_id, matched_key, cid
-                            )
+                            ok = await send_pack_emoji_media(client, chat_id, cid)
                             if ok:
                                 await _del_orig()
-                                logging.info("premium STICKER ok uid=%s chat=%s", user_id, chat_id)
+                                logging.info("premium PACK media ok uid=%s cid=%s", user_id, cid)
                         except Exception as e:
-                            logging.warning("premium sticker: %s", e)
+                            logging.warning("premium pack media: %s", e)
                             ok = False
+                        # 1) استیکر ثبت‌شده
+                        if not ok:
+                            try:
+                                ok = await send_registered_emoji_sticker(
+                                    client, chat_id, user_id, matched_key, cid
+                                )
+                                if ok:
+                                    await _del_orig()
+                                    logging.info("premium STICKER ok uid=%s chat=%s", user_id, chat_id)
+                            except Exception as e:
+                                logging.warning("premium sticker: %s", e)
+                                ok = False
 
                         if not ok:
                             try:

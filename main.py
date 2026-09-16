@@ -3307,9 +3307,13 @@ async def send_pack_emoji_media(client, chat_id: int, cid: int) -> bool:
         await ensure_premium_emoji_pack(client)
         doc = PACK_DOC_BY_ID.get(int(cid))
         if not doc:
-            logging.warning("send_pack: no cached doc cid=%s", cid)
+            logging.warning("send_pack: no cached doc cid=%s cache_docs=%s", cid, len(PACK_DOC_BY_ID))
             return False
-        path = await client.download_media(doc)
+        path = None
+        try:
+            path = await client.download_media(doc)
+        except Exception as e_dl:
+            logging.warning("send_pack download_media: %s", e_dl)
         if not path:
             # raw download via file location
             try:
@@ -3638,7 +3642,10 @@ async def outgoing_message_modifier(client, message):
                         _PREMIUM_CONVERT_DONE.clear()
 
                     cid = int(mapping[matched_key])
-                    pure = (text.strip() == matched_key.strip())
+                    _tstrip = text.strip()
+                    pure = (_tstrip == matched_key.strip()) or (
+                        _tstrip.replace(matched_key, "").strip() == "" and matched_key in text
+                    )
                     await asyncio.sleep(0.12)
                     ok = False
                     chat_id = message.chat.id
@@ -3768,70 +3775,50 @@ async def outgoing_message_modifier(client, message):
 
                     # ===== متن + ایموجی =====
                     else:
-                        # اول entity روی کل متن
+                        # 1) پک مدیا + متن باقی‌مانده (قابل‌اطمینان‌تر از entity)
                         try:
-                            conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
-                            if conv_ents:
-                                try:
-                                    await client.edit_message_text(
-                                        chat_id, message.id, conv_text, entities=conv_ents
-                                    )
-                                    ok = True
-                                    logging.info("premium EDIT mixed ok uid=%s chat=%s", user_id, chat_id)
-                                except Exception as e_ed:
-                                    if "MESSAGE_NOT_MODIFIED" not in str(e_ed):
-                                        try:
-                                            await client.send_message(chat_id, conv_text, entities=conv_ents)
-                                            await _del_orig()
-                                            ok = True
-                                            logging.info("premium SEND mixed ok uid=%s", user_id)
-                                        except Exception as e_s:
-                                            logging.warning("premium send mixed: %s", e_s)
-                                    else:
-                                        logging.warning("premium edit not modified")
+                            rest = text
+                            for k in sorted((_emoji_map_for_user(user_id) or {}).keys(), key=len, reverse=True):
+                                if k:
+                                    rest = rest.replace(k, " ")
+                            rest = " ".join(rest.split())
+                            pack_ok = await send_pack_emoji_media(client, chat_id, cid)
+                            if pack_ok:
+                                if rest:
+                                    try:
+                                        await client.send_message(chat_id, rest)
+                                    except Exception:
+                                        pass
+                                await _del_orig()
+                                ok = True
+                                logging.info("premium MIXED pack ok uid=%s cid=%s rest=%r", user_id, cid, rest[:40] if rest else "")
                         except Exception as e:
-                            logging.warning("premium mixed: %s", e)
+                            logging.warning("premium mixed pack: %s", e)
 
-                        # اگر entity نشد: متن بدون ایموجی + استیکر جدا
+                        # 2) entity روی کل متن
                         if not ok:
                             try:
-                                rest = text
-                                for k in sorted(mapping.keys(), key=len, reverse=True):
-                                    rest = rest.replace(k, "")
-                                rest = " ".join(rest.split())
-                                st_ok = await send_registered_emoji_sticker(
-                                    client, chat_id, user_id, matched_key, cid
-                                )
-                                if not st_ok:
-                                    pc = await ensure_premium_client()
-                                    use_c = pc or client
-                                    from pyrogram.raw.functions.messages import GetCustomEmojiDocuments
-                                    r = await use_c.invoke(GetCustomEmojiDocuments(document_id=[int(cid)]))
-                                    docs = getattr(r, "documents", None) or []
-                                    if docs:
-                                        path = await use_c.download_media(docs[0])
-                                        if path:
+                                conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
+                                if conv_ents:
+                                    try:
+                                        await client.edit_message_text(
+                                            chat_id, message.id, conv_text, entities=conv_ents
+                                        )
+                                        ok = True
+                                        logging.info("premium EDIT mixed ok uid=%s chat=%s", user_id, chat_id)
+                                    except Exception as e_ed:
+                                        if "MESSAGE_NOT_MODIFIED" not in str(e_ed):
                                             try:
-                                                await client.send_sticker(chat_id, path)
-                                                st_ok = True
-                                            except Exception:
-                                                await client.send_document(chat_id, path)
-                                                st_ok = True
-                                            try:
-                                                os.remove(path)
-                                            except Exception:
-                                                pass
-                                if st_ok:
-                                    if rest:
-                                        try:
-                                            await client.send_message(chat_id, rest)
-                                        except Exception:
-                                            pass
-                                    await _del_orig()
-                                    ok = True
-                                    logging.info("premium MIXED sticker+text ok uid=%s", user_id)
+                                                await client.send_message(chat_id, conv_text, entities=conv_ents)
+                                                await _del_orig()
+                                                ok = True
+                                                logging.info("premium SEND mixed ok uid=%s", user_id)
+                                            except Exception as e_s:
+                                                logging.warning("premium send mixed: %s", e_s)
+                                        else:
+                                            logging.warning("premium edit not modified")
                             except Exception as e:
-                                logging.warning("premium mixed sticker: %s", e)
+                                logging.warning("premium mixed entity: %s", e)
 
                     if pure or ok:
                         return

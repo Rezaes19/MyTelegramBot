@@ -2180,6 +2180,55 @@ PREMIUM_LETTER_MAP = {
 # حروف کوچک هم همان ID
 PREMIUM_LETTER_MAP.update({k.lower(): v for k, v in list(PREMIUM_LETTER_MAP.items()) if k.isalpha()})
 
+# پک ایموجی پریمیوم: https://t.me/addemoji/thehornyclubemojis
+PREMIUM_EMOJI_PACK_SHORT = "thehornyclubemojis"
+PACK_EMOJI_CACHE = {}  # emoticon/alt -> custom_emoji document id
+PACK_EMOJI_LOADED = False
+
+async def ensure_premium_emoji_pack(client) -> dict:
+    """لود پک addemoji و ساخت مپ کاراکتر/ایموجی -> document_id"""
+    global PACK_EMOJI_CACHE, PACK_EMOJI_LOADED
+    if PACK_EMOJI_CACHE:
+        return PACK_EMOJI_CACHE
+    try:
+        from pyrogram.raw.functions.messages import GetStickerSet
+        from pyrogram.raw.types import InputStickerSetShortName
+        r = await client.invoke(
+            GetStickerSet(
+                stickerset=InputStickerSetShortName(short_name=PREMIUM_EMOJI_PACK_SHORT),
+                hash=0,
+            )
+        )
+        cache = {}
+        for p in (getattr(r, "packs", None) or []):
+            emo = getattr(p, "emoticon", None) or ""
+            docs = getattr(p, "documents", None) or []
+            if emo and docs:
+                eid = int(docs[0])
+                cache[str(emo)] = eid
+                cache[str(emo).replace("️", "").replace("︎", "")] = eid
+        for d in (getattr(r, "documents", None) or []):
+            did = int(getattr(d, "id", 0) or 0)
+            if not did:
+                continue
+            for attr in (getattr(d, "attributes", None) or []):
+                alt = getattr(attr, "alt", None)
+                if alt:
+                    cache[str(alt)] = did
+                    cache[str(alt).replace("️", "").replace("︎", "")] = did
+        PACK_EMOJI_CACHE = cache
+        PACK_EMOJI_LOADED = True
+        logging.info(
+            "premium emoji pack loaded short=%s items=%s",
+            PREMIUM_EMOJI_PACK_SHORT,
+            len(PACK_EMOJI_CACHE),
+        )
+    except Exception as e:
+        logging.warning("ensure_premium_emoji_pack: %s", e)
+        PACK_EMOJI_LOADED = False
+    return PACK_EMOJI_CACHE
+
+
 DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
     "❤": 5386650613544205592,
     "❤️": 5386650613544205592,
@@ -3239,8 +3288,13 @@ MAX_PREMIUM_EMOJI_SLOTS = 5
 
 
 def _emoji_map_for_user(user_id: int) -> dict:
-    """پک حروف پریمیوم + ایموجی‌های ثبت‌شده کاربر (اولویت با کاربر)"""
+    """پک thehornyclubemojis + حروف + ثبت‌شده کاربر (اولویت با کاربر)"""
     m = {}
+    try:
+        for k, v in PACK_EMOJI_CACHE.items():
+            m[str(k)] = int(v)
+    except Exception:
+        pass
     try:
         for k, v in PREMIUM_LETTER_MAP.items():
             m[str(k)] = int(v)
@@ -3368,6 +3422,64 @@ async def status_action_task(client: Client, user_id: int):
 
 
 
+
+async def outgoing_sticker_premium_handler(client, message):
+    """اگر فیلتر تبدیل روشن باشد: استیکر خروجی را با ایموجی پک thehornyclubemojis جایگزین کن"""
+    try:
+        is_out = bool(getattr(message, "outgoing", False))
+        is_self = bool(message.from_user and getattr(message.from_user, "is_self", False))
+        if not is_out and not is_self:
+            return
+        if not getattr(message, "sticker", None):
+            return
+        try:
+            user_id = client.me.id if client.me else (await client.get_me()).id
+        except Exception:
+            return
+        if not EMOJI_PREMIUM_CONVERT.get(user_id, False):
+            return
+        await ensure_premium_emoji_pack(client)
+        st = message.sticker
+        keys = []
+        if getattr(st, "emoji", None):
+            keys.append(st.emoji)
+            keys.append(str(st.emoji).replace("️", ""))
+        # match in pack
+        cid = None
+        matched = None
+        for k in keys:
+            if k and k in PACK_EMOJI_CACHE:
+                cid = PACK_EMOJI_CACHE[k]
+                matched = k
+                break
+        if not cid:
+            # fallback: first pack item with same set name if any
+            return
+        ph = matched or "⭐"
+        try:
+            from pyrogram.enums import MessageEntityType
+            from pyrogram.types import MessageEntity
+            ln = len(ph.encode("utf-16-le")) // 2
+            ents = [MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=0, length=ln, custom_emoji_id=int(cid),
+            )]
+            chat_id = message.chat.id
+            await client.send_message(chat_id, ph, entities=ents)
+            try:
+                await message.delete()
+            except Exception:
+                try:
+                    await client.delete_messages(chat_id, message.id)
+                except Exception:
+                    pass
+            logging.info("premium pack sticker->emoji ok uid=%s cid=%s key=%r", user_id, cid, matched)
+        except Exception as e:
+            logging.warning("outgoing_sticker_premium: %s", e)
+    except Exception as e:
+        logging.warning(f"outgoing_sticker_premium_handler: {e}")
+
+
 async def outgoing_message_modifier(client, message):
     """اعمال فونت متن پنل روی پیام‌های خروجی کاربر"""
     try:
@@ -3407,6 +3519,10 @@ async def outgoing_message_modifier(client, message):
         _em_on = bool(EMOJI_PREMIUM_CONVERT.get(user_id, False))
         if _em_on:
             try:
+                try:
+                    await ensure_premium_emoji_pack(client)
+                except Exception:
+                    pass
                 mapping = _emoji_map_for_user(user_id)
                 matched_key = None
                 matched_slot = -1
@@ -7540,6 +7656,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
             client.add_handler(MessageHandler(lambda c, m: c.read_chat_history(m.chat.id) if (c.me and AUTO_SEEN_STATUS.get(c.me.id)) else None, filters.private & ~filters.me), group=-4)
             client.add_handler(MessageHandler(incoming_message_manager, filters.all & ~filters.me), group=-3)
             # فونت متن — با اولویت بالا
+            client.add_handler(MessageHandler(outgoing_sticker_premium_handler, filters.sticker & (filters.outgoing | filters.me)), group=-21)
             client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.outgoing), group=-20)
             client.add_handler(MessageHandler(outgoing_message_modifier, filters.text & filters.me), group=-19)
             client.add_handler(MessageHandler(help_controller, filters.me & filters.regex("^راهنما$")))
@@ -10977,6 +11094,10 @@ async def main():
         logging.warning(f"helper bot start: {e}")
 
     logging.info("Premium inline helper username: @%s", HELPER_INLINE_BOT)
+    try:
+        await ensure_premium_emoji_pack(manager_bot)
+    except Exception as e:
+        logging.warning(f"pack load on start: {e}")
 
     await idle()
 

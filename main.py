@@ -2311,7 +2311,9 @@ DELETE_ALERT_STATUS = {}
 TTS_VOICE_STATUS = {}
 FIRST_COMMENT_STATUS = {}
 FIRST_COMMENT_TEXT = {}
-SONG_SEARCH_CACHE = {}  # user_id -> list[{artist, title, query}]
+SONG_SEARCH_CACHE = {}
+IMAGE_SEARCH_HISTORY = {}  # user_id -> list recent image urls
+  # user_id -> list[{artist, title, query}]
 PENDING_SONG_PICK = {}  # user_id -> True وقتی منتظر انتخاب شماره است
 TYPING_MODE_STATUS = {}
 PLAYING_MODE_STATUS = {}
@@ -3363,30 +3365,12 @@ def _emoji_map_for_user(user_id: int) -> dict:
 
 
 def format_emoji_premium_panel(user_id: int) -> str:
-    st = EMOJI_PREMIUM_CONVERT.get(user_id, False)
-    st_txt = "(✓ on)" if st else "(✗ off)"
-    m = _emoji_map_for_user(user_id)
-    lines = [
-        "⭐ ایموجی پریمیوم | self MR",
-        f"وضعیت: {st_txt}",
-        "",
-        "ثبت ایموجی:",
-        "`.ثبت ایموجی` + ایموجی‌پریمیوم + ایموجی عادی",
-        "",
-        "مثال:",
-        "`.ثبت ایموجی` ⭐ ❤",
-        "",
-        f"تعداد ثبت‌شده: {len(m)}/{MAX_PREMIUM_EMOJI_SLOTS}",
-        "",
-        "لیست ایموجی‌های شما:",
-    ]
-    if not m:
-        lines.append("خالی است.")
-    else:
-        for i, (normal, cid) in enumerate(m.items(), 1):
-            lines.append(f"ایموجی {i}: {normal} / id:{cid}")
-    return "\n".join(lines)
-
+    return (
+        "⭐ ایموجی پریمیوم | self MR\n\n"
+        "🔧 در دست تعمیر\n\n"
+        "این بخش موقتاً غیرفعال است.\n"
+        "به‌زودی برمی‌گردد."
+    )
 
 def convert_normal_emoji_to_premium_entities(text: str, user_id: int):
     """ایموجی‌های عادی ثبت‌شده را با entity کاستوم جایگزین می‌کند"""
@@ -4437,28 +4421,29 @@ async def force_join_pv_handler(client, message):
 
 
 async def save_message_powerful(client, reply):
-    """ذخیره قوی: متن، رسانه، عکس/ویدیو یک‌بارمصرف (view-once) و TTL"""
+    """ذخیره قوی + دور زدن view-once / TTL تا حد ممکن"""
     if not reply:
         return False, "❌ روی پیام ریپلای کنید."
 
     caption = reply.caption or ""
     text = reply.text or ""
+    chat_id = reply.chat.id if reply.chat else None
+    msg_id = reply.id
+
     ttl = getattr(reply, "ttl_seconds", None)
-    if ttl is None:
+    for obj_name in ("photo", "video", "document", "animation"):
+        if ttl is not None:
+            break
         try:
-            ttl = getattr(reply.photo, "ttl_seconds", None) if reply.photo else None
+            obj = getattr(reply, obj_name, None)
+            if obj is not None:
+                ttl = getattr(obj, "ttl_seconds", None)
         except Exception:
-            ttl = None
-    if ttl is None:
-        try:
-            ttl = getattr(reply.video, "ttl_seconds", None) if reply.video else None
-        except Exception:
-            ttl = None
-    # تشخیص view-once / یک‌بارمصرف
+            pass
     is_view_once = bool(ttl)
     try:
-        media_type = str(getattr(reply, "media", "") or "")
-        if "ttl" in media_type.lower() or "view" in media_type.lower():
+        mt = str(getattr(reply, "media", "") or "").lower()
+        if "ttl" in mt:
             is_view_once = True
     except Exception:
         pass
@@ -4466,62 +4451,102 @@ async def save_message_powerful(client, reply):
     path = None
     download_errors = []
 
+    async def _ok(p):
+        return bool(p and os.path.exists(p) and os.path.getsize(p) > 50)
+
     async def _try_download():
-        nonlocal path
-        # روش ۱: کل پیام (برای view-once هم گاهی جواب می‌دهد)
+        nonlocal path, reply
+        # رفرش پیام (file_reference تازه‌تر)
         try:
-            path = await client.download_media(reply)
-            if path and os.path.exists(path) and os.path.getsize(path) > 50:
-                return True
+            if chat_id and msg_id:
+                fresh = await client.get_messages(chat_id, msg_id)
+                if fresh:
+                    reply = fresh
         except Exception as e:
-            download_errors.append(f"msg:{type(e).__name__}:{e}")
-        # روش ۲: photo sizes — بزرگ‌ترین
-        try:
-            if reply.photo:
-                path = await client.download_media(reply.photo)
-                if path and os.path.exists(path) and os.path.getsize(path) > 50:
-                    return True
-        except Exception as e:
-            download_errors.append(f"photo:{type(e).__name__}")
-        try:
-            if reply.photo and getattr(reply.photo, "file_id", None):
-                path = await client.download_media(reply.photo.file_id)
-                if path and os.path.exists(path) and os.path.getsize(path) > 50:
-                    return True
-        except Exception as e:
-            download_errors.append(f"photo_id:{type(e).__name__}")
-        # روش ۳: سایر مدیا
-        for attr in ("video", "document", "animation", "voice", "audio", "video_note", "sticker"):
+            download_errors.append(f"refresh:{type(e).__name__}")
+
+        attempts = []
+        # 1) کل پیام
+        attempts.append(("msg", reply))
+        # 2) photo / video objects
+        if getattr(reply, "photo", None):
+            attempts.append(("photo", reply.photo))
             try:
-                media_obj = getattr(reply, attr, None)
-                if not media_obj:
-                    continue
-                path = await client.download_media(media_obj)
-                if path and os.path.exists(path) and os.path.getsize(path) > 50:
-                    return True
-                fid = getattr(media_obj, "file_id", None)
+                if getattr(reply.photo, "file_id", None):
+                    attempts.append(("photo_fid", reply.photo.file_id))
+            except Exception:
+                pass
+        for attr in ("video", "document", "animation", "voice", "audio", "video_note", "sticker"):
+            obj = getattr(reply, attr, None)
+            if obj is not None:
+                attempts.append((attr, obj))
+                fid = getattr(obj, "file_id", None)
                 if fid:
-                    path = await client.download_media(fid)
-                    if path and os.path.exists(path) and os.path.getsize(path) > 50:
-                        return True
+                    attempts.append((f"{attr}_fid", fid))
+
+        for name, target in attempts:
+            try:
+                p = await client.download_media(target)
+                if await _ok(p):
+                    path = p
+                    return True
             except Exception as e:
-                download_errors.append(f"{attr}:{type(e).__name__}")
-        # روش ۴: raw get messages + download
+                download_errors.append(f"{name}:{type(e).__name__}")
+
+        # in_memory
+        try:
+            bio = await client.download_media(reply, in_memory=True)
+            if bio is not None:
+                data = bio.getvalue() if hasattr(bio, "getvalue") else bytes(bio)
+                if data and len(data) > 50:
+                    ext = "bin"
+                    if reply.photo:
+                        ext = "jpg"
+                    elif reply.video:
+                        ext = "mp4"
+                    elif reply.animation:
+                        ext = "mp4"
+                    path = f"/tmp/vo_{msg_id}_{int(time.time())}.{ext}"
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    if await _ok(path):
+                        return True
+        except Exception as e:
+            download_errors.append(f"mem:{type(e).__name__}")
+
+        # raw GetMessages
         try:
             from pyrogram.raw.functions.messages import GetMessages
             from pyrogram.raw.types import InputMessageID
-            r = await client.invoke(GetMessages(id=[InputMessageID(id=reply.id)]))
-            msgs = getattr(r, "messages", None) or []
-            if msgs:
-                m0 = msgs[0]
-                media = getattr(m0, "media", None)
-                if media is not None:
-                    path = await client.download_media(reply)
-                    if path and os.path.exists(path) and os.path.getsize(path) > 50:
+            r = await client.invoke(GetMessages(id=[InputMessageID(id=int(msg_id))]))
+            for m in (getattr(r, "messages", None) or []):
+                media = getattr(m, "media", None)
+                if not media:
+                    continue
+                # تلاش دوباره با پیام رفرش‌شده
+                try:
+                    p = await client.download_media(reply)
+                    if await _ok(p):
+                        path = p
                         return True
+                except Exception as e:
+                    download_errors.append(f"rawdl:{type(e).__name__}")
         except Exception as e:
             download_errors.append(f"raw:{type(e).__name__}")
-        return bool(path and os.path.exists(path) and os.path.getsize(path) > 50)
+
+        # raw GetHistory around message (گاهی reference بهتر می‌دهد)
+        try:
+            if chat_id and msg_id:
+                hist = await client.get_messages(chat_id, msg_id)
+                if hist:
+                    p = await client.download_media(hist)
+                    if await _ok(p):
+                        path = p
+                        return True
+        except Exception as e:
+            download_errors.append(f"hist:{type(e).__name__}")
+
+        return False
 
     has_media = bool(
         getattr(reply, "media", None)
@@ -4532,8 +4557,20 @@ async def save_message_powerful(client, reply):
     if has_media:
         await _try_download()
 
-    # آپلود به Saved Messages
-    if path and os.path.exists(path) and os.path.getsize(path) > 50:
+    # حتی برای view-once اول copy/forward به me را امتحان کن (گاهی جواب می‌دهد)
+    if is_view_once or has_media:
+        if not (path and await _ok(path)):
+            for method in ("copy", "forward"):
+                try:
+                    if method == "copy":
+                        await reply.copy("me")
+                    else:
+                        await reply.forward("me")
+                    return True, None
+                except Exception as e:
+                    download_errors.append(f"{method}:{type(e).__name__}")
+
+    if path and await _ok(path):
         cap_parts = []
         if is_view_once or ttl:
             cap_parts.append("👁 یک‌بارمصرف / تایم‌دار")
@@ -4546,7 +4583,7 @@ async def save_message_powerful(client, reply):
             pl = path.lower()
             if reply.photo or pl.endswith((".jpg", ".jpeg", ".png", ".webp")):
                 await client.send_photo("me", path, caption=cap)
-            elif reply.video or pl.endswith((".mp4", ".mov", ".mkv")):
+            elif reply.video or pl.endswith((".mp4", ".mov", ".mkv", ".webm")):
                 await client.send_video("me", path, caption=cap)
             elif reply.voice or pl.endswith((".ogg", ".opus")):
                 await client.send_voice("me", path, caption=cap)
@@ -4574,7 +4611,6 @@ async def save_message_powerful(client, reply):
             except Exception:
                 pass
 
-    # فوروارد / کپی (برای غیر view-once)
     if not is_view_once:
         try:
             await reply.forward("me")
@@ -4587,7 +4623,6 @@ async def save_message_powerful(client, reply):
         except Exception as e2:
             logging.info(f"copy save failed: {e2}")
 
-    # فقط متن
     if text or caption:
         try:
             await client.send_message("me", f"💾 ذخیره متن\n\n{text or caption}")
@@ -4595,7 +4630,7 @@ async def save_message_powerful(client, reply):
         except Exception as e:
             return False, str(e)
 
-    detail = " | ".join(str(x)[:40] for x in download_errors[-4:]) if download_errors else "نامشخص"
+    detail = " | ".join(str(x)[:50] for x in download_errors[-5:]) if download_errors else "نامشخص"
     return False, f"❌ ذخیره ناموفق (view-once/محافظت‌شده). {detail}"
 
 
@@ -5475,7 +5510,7 @@ async def search_web_images(query: str, limit: int = 1):
     query = (query or "").strip()
     if not query:
         return []
-    limit = max(1, min(int(limit or 1), 3))
+    limit = max(1, min(int(limit or 1), 20))
     en_q = await _translate_query_for_search(query)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -5510,9 +5545,7 @@ async def search_web_images(query: str, limit: int = 1):
         except Exception as e:
             logging.warning(f"wiki fa: {e}")
 
-        if len(found) >= limit:
-            return found[:limit]
-
+        # برای تنوع، از ویکی فقط ۱ عکس بگیر و ادامه بده
         # ----- 2) Wikipedia EN -----
         try:
             url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(en_q)}"
@@ -5557,7 +5590,7 @@ async def search_web_images(query: str, limit: int = 1):
             # qft=photo برای عکس واقعی
             for q in (en_q, query):
                 search_url = (
-                    f"https://www.bing.com/images/search?q={quote(q)}"
+                    f"https://www.bing.com/images/search?q={quote(q)}&first={random.choice([1,11,21,31,41])}"
                     f"&qft=+filterui:photo-photo+filterui:aspect-square&form=IRFLTR"
                 )
                 async with session.get(search_url) as resp:
@@ -5960,15 +5993,28 @@ async def reply_based_controller(client, message):
             return
         await message.edit_text(f"🔍 در حال جستجوی تصویر برای:\\n`{q}`")
         try:
-            urls = await search_web_images(q, limit=1)
+            urls = await search_web_images(q, limit=15)
             if not urls:
                 await message.edit_text("❌ تصویری پیدا نشد.")
                 return
+            # تنوع: عکس‌های اخیراً استفاده‌شده را رد کن
+            try:
+                uid = client.me.id if client.me else user_id
+            except Exception:
+                uid = user_id
+            hist = list(IMAGE_SEARCH_HISTORY.get(uid) or [])
+            pool = [u for u in urls if u not in hist] or list(urls)
+            random.shuffle(pool)
             path = None
-            for u in urls:
+            chosen = None
+            for u in pool:
                 path = await download_image_bytes(u)
                 if path:
+                    chosen = u
                     break
+            if chosen:
+                hist.append(chosen)
+                IMAGE_SEARCH_HISTORY[uid] = hist[-40:]
             if not path:
                 await message.edit_text("❌ دانلود تصویر ناموفق بود.")
                 return
@@ -9436,20 +9482,10 @@ async def callback_panel_handler(client, callback):
                 ),
                                 40: (
                     "⭐ ایموجی پریمیوم | self MR\n\n"
-                    "دستورات:\n"
-                    ".ایموجی قلب\n"
-                    ".لیست ایموجی\n"
-                    ".افزودن ایموجی نام\n"
-                    "(ریپلای روی پیام دارای ایموجی پریمیوم)\n\n"
-                    "اعضای عادی هم می‌توانند استفاده کنند\n"
-                    "اگر اکانت سلف به آن ایموجی دسترسی داشته باشد.\n\n"
-                    "تبدیل خودکار:\n"
-                    ".تبدیل ایموجی روشن\n"
-                    ".تبدیل ایموجی خاموش\n"
-                    ".تنظیم تبدیل ایموجی ❤\n"
-                    "(ریپلای روی ایموجی پریمیوم)"
+                    "🔧 در دست تعمیر\n\n"
+                    "این بخش موقتاً غیرفعال است."
                 ),
-                                41: (
+                41: (
                     "📩 منشی آفلاین | self MR\n\n"
                     "وقتی روشن باشد، اگر کسی در پیوی پیام بدهد\n"
                     "هر ۱۰ دقیقه یک‌بار پاسخ خودکار می‌دهد.\n\n"
@@ -9457,9 +9493,7 @@ async def callback_panel_handler(client, callback):
                     ".منشی روشن\n"
                     ".منشی خاموش\n"
                     ".تنظیم منشی متن دلخواه\n"
-                    ".ریست منشی\n\n"
-                    "مثال:\n"
-                    ".تنظیم منشی الان در دسترس نیستم"
+                    ".ریست منشی"
                 ),
                 42: (
                     "🚫 فیلتر استیکر پیوی | self MR\n\n"

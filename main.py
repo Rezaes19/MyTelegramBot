@@ -3302,87 +3302,9 @@ async def upload_custom_emoji_to_helper_bot(custom_emoji_id: int, user_id: int, 
 
 
 async def send_pack_emoji_media(client, chat_id: int, cid: int) -> bool:
-    """ارسال از Document پک — بدون نیاز به file_id استرینگ"""
-    try:
-        await ensure_premium_emoji_pack(client)
-        doc = PACK_DOC_BY_ID.get(int(cid))
-        if not doc:
-            logging.warning("send_pack: no cached doc cid=%s docs=%s", cid, len(PACK_DOC_BY_ID))
-            return False
-
-        # روش ۱: SendMedia با InputDocument (بهترین)
-        try:
-            from pyrogram.raw.types import InputDocument, InputMediaDocument
-            from pyrogram.raw.functions.messages import SendMedia
-            peer = await client.resolve_peer(chat_id)
-            await client.invoke(
-                SendMedia(
-                    peer=peer,
-                    media=InputMediaDocument(
-                        id=InputDocument(
-                            id=int(doc.id),
-                            access_hash=int(doc.access_hash),
-                            file_reference=doc.file_reference,
-                        )
-                    ),
-                    message="",
-                    random_id=client.rnd_id(),
-                )
-            )
-            logging.info("send_pack InputDocument ok cid=%s chat=%s", cid, chat_id)
-            return True
-        except Exception as e1:
-            logging.warning("send_pack InputDocument: %s", e1)
-
-        # روش ۲: ساخت file_id و send_sticker
-        try:
-            from pyrogram.file_id import FileId, FileType
-            dc = int(getattr(doc, "dc_id", 0) or 0) or 2
-            for ftype in (FileType.STICKER, FileType.DOCUMENT, FileType.ANIMATION):
-                try:
-                    fid = FileId(
-                        file_type=ftype,
-                        dc_id=dc,
-                        file_reference=doc.file_reference,
-                        media_id=int(doc.id),
-                        access_hash=int(doc.access_hash),
-                    ).encode()
-                    try:
-                        await client.send_sticker(chat_id, fid)
-                    except Exception:
-                        await client.send_document(chat_id, fid)
-                    logging.info("send_pack FileId ok type=%s cid=%s", ftype, cid)
-                    return True
-                except Exception as e_ft:
-                    logging.warning("send_pack FileId %s: %s", ftype, e_ft)
-        except Exception as e2:
-            logging.warning("send_pack FileId block: %s", e2)
-
-        # روش ۳: دانلود با get_file
-        try:
-            from pyrogram.raw.functions.upload import GetFile
-            from pyrogram.raw.types import InputDocumentFileLocation
-            loc = InputDocumentFileLocation(
-                id=int(doc.id),
-                access_hash=int(doc.access_hash),
-                file_reference=doc.file_reference,
-                thumb_size="",
-            )
-            # pyrogram internal download
-            path = await client.download_media(message=None)  # placeholder fail
-        except Exception:
-            path = None
-        if not path:
-            try:
-                # write via invoke getFile chunks - skip heavy
-                pass
-            except Exception:
-                pass
-
-        return False
-    except Exception as e:
-        logging.warning("send_pack_emoji_media: %s", e)
-        return False
+    """کاستوم‌ایموجی پک با SendMedia معمولی DOCUMENT_INVALID می‌دهد — فقط False"""
+    # این نوع داکیومنت فقط با MessageEntity.CUSTOM_EMOJI قابل نمایش است
+    return False
 
 
 async def send_registered_emoji_sticker(client, chat_id: int, user_id: int, normal_key: str, cid: int) -> bool:
@@ -3735,7 +3657,7 @@ async def outgoing_message_modifier(client, message):
 
                     # ===== پیام خالص =====
                     if pure:
-                        # 0) ویرایش entity (همان روشی که در Saved جواب می‌دهد)
+                        # 0) ویرایش / ارسال entity (روش Saved Messages)
                         try:
                             from pyrogram.enums import MessageEntityType
                             from pyrogram.types import MessageEntity
@@ -3744,11 +3666,40 @@ async def outgoing_message_modifier(client, message):
                                 type=MessageEntityType.CUSTOM_EMOJI,
                                 offset=0, length=ln, custom_emoji_id=int(cid),
                             )]
-                            await client.edit_message_text(chat_id, message.id, matched_key, entities=ents)
-                            ok = True
-                            logging.info("premium ENTITY edit ok uid=%s chat=%s", user_id, chat_id)
+                            edit_clients = [client]
+                            try:
+                                pc = await ensure_premium_client()
+                                if pc and pc is not client:
+                                    edit_clients.insert(0, pc)
+                            except Exception:
+                                pass
+                            for ec in edit_clients:
+                                try:
+                                    await ec.edit_message_text(chat_id, message.id, matched_key, entities=ents)
+                                    ok = True
+                                    logging.info("premium ENTITY edit ok uid=%s chat=%s", user_id, chat_id)
+                                    break
+                                except Exception as e_ed:
+                                    err = str(e_ed)
+                                    if "MESSAGE_NOT_MODIFIED" in err:
+                                        # ممکن است از قبل entity داشته باشد
+                                        ok = True
+                                        logging.info("premium ENTITY already ok chat=%s", chat_id)
+                                        break
+                                    logging.warning("premium entity edit: %s", e_ed)
+                                    ok = False
+                            if not ok:
+                                # ارسال پیام جدید با entity + حذف قبلی
+                                try:
+                                    await client.send_message(chat_id, matched_key, entities=ents)
+                                    await _del_orig()
+                                    ok = True
+                                    logging.info("premium ENTITY send ok uid=%s chat=%s", user_id, chat_id)
+                                except Exception as e_s:
+                                    logging.warning("premium entity send: %s", e_s)
+                                    ok = False
                         except Exception as e0:
-                            logging.warning("premium entity edit: %s", e0)
+                            logging.warning("premium entity block: %s", e0)
                             ok = False
 
                         # 1) پک thehornyclubemojis با InputDocument
@@ -3871,7 +3822,7 @@ async def outgoing_message_modifier(client, message):
                         except Exception as e:
                             logging.warning("premium mixed pack: %s", e)
 
-                        # 2) entity روی کل متن
+                        # 2) entity روی کل متن (مثل Saved)
                         if not ok:
                             try:
                                 conv_text, conv_ents = convert_normal_emoji_to_premium_entities(text, user_id)
@@ -3883,16 +3834,18 @@ async def outgoing_message_modifier(client, message):
                                         ok = True
                                         logging.info("premium EDIT mixed ok uid=%s chat=%s", user_id, chat_id)
                                     except Exception as e_ed:
-                                        if "MESSAGE_NOT_MODIFIED" not in str(e_ed):
+                                        err = str(e_ed)
+                                        if "MESSAGE_NOT_MODIFIED" in err:
+                                            ok = True
+                                            logging.info("premium EDIT mixed already ok chat=%s", chat_id)
+                                        else:
                                             try:
                                                 await client.send_message(chat_id, conv_text, entities=conv_ents)
                                                 await _del_orig()
                                                 ok = True
-                                                logging.info("premium SEND mixed ok uid=%s", user_id)
+                                                logging.info("premium SEND mixed ok uid=%s chat=%s", user_id, chat_id)
                                             except Exception as e_s:
                                                 logging.warning("premium send mixed: %s", e_s)
-                                        else:
-                                            logging.warning("premium edit not modified")
                             except Exception as e:
                                 logging.warning("premium mixed entity: %s", e)
 
@@ -4484,89 +4437,136 @@ async def force_join_pv_handler(client, message):
 
 
 async def save_message_powerful(client, reply):
-    """ذخیره قوی: متن، رسانه، عکس/ویدیو نابودشونده (TTL) و view-once"""
+    """ذخیره قوی: متن، رسانه، عکس/ویدیو یک‌بارمصرف (view-once) و TTL"""
     if not reply:
         return False, "❌ روی پیام ریپلای کنید."
 
     caption = reply.caption or ""
     text = reply.text or ""
-    ttl = getattr(reply, "ttl_seconds", None) or getattr(getattr(reply, "media", None), "ttl_seconds", None)
-    is_view_once = bool(ttl) or bool(getattr(reply, "media", None) and getattr(reply.media, "ttl_seconds", None))
+    ttl = getattr(reply, "ttl_seconds", None)
+    if ttl is None:
+        try:
+            ttl = getattr(reply.photo, "ttl_seconds", None) if reply.photo else None
+        except Exception:
+            ttl = None
+    if ttl is None:
+        try:
+            ttl = getattr(reply.video, "ttl_seconds", None) if reply.video else None
+        except Exception:
+            ttl = None
+    # تشخیص view-once / یک‌بارمصرف
+    is_view_once = bool(ttl)
+    try:
+        media_type = str(getattr(reply, "media", "") or "")
+        if "ttl" in media_type.lower() or "view" in media_type.lower():
+            is_view_once = True
+    except Exception:
+        pass
 
-    # برای view-once / TTL اول دانلود کن (فوروارد معمولاً کار نمی‌کند)
     path = None
     download_errors = []
 
     async def _try_download():
         nonlocal path
-        # روش ۱: کل پیام
+        # روش ۱: کل پیام (برای view-once هم گاهی جواب می‌دهد)
         try:
             path = await client.download_media(reply)
-            if path and os.path.exists(path) and os.path.getsize(path) > 100:
+            if path and os.path.exists(path) and os.path.getsize(path) > 50:
                 return True
         except Exception as e:
-            download_errors.append(f"msg:{type(e).__name__}")
-        # روش ۲: file_id عکس (بزرگ‌ترین سایز)
+            download_errors.append(f"msg:{type(e).__name__}:{e}")
+        # روش ۲: photo sizes — بزرگ‌ترین
         try:
             if reply.photo:
-                path = await client.download_media(reply.photo.file_id)
-                if path and os.path.exists(path) and os.path.getsize(path) > 100:
+                path = await client.download_media(reply.photo)
+                if path and os.path.exists(path) and os.path.getsize(path) > 50:
                     return True
         except Exception as e:
             download_errors.append(f"photo:{type(e).__name__}")
-        # روش ۳: ویدیو / داکیومنت / انیمیشن / ویس / آهنگ
+        try:
+            if reply.photo and getattr(reply.photo, "file_id", None):
+                path = await client.download_media(reply.photo.file_id)
+                if path and os.path.exists(path) and os.path.getsize(path) > 50:
+                    return True
+        except Exception as e:
+            download_errors.append(f"photo_id:{type(e).__name__}")
+        # روش ۳: سایر مدیا
         for attr in ("video", "document", "animation", "voice", "audio", "video_note", "sticker"):
             try:
                 media_obj = getattr(reply, attr, None)
-                if media_obj and getattr(media_obj, "file_id", None):
-                    path = await client.download_media(media_obj.file_id)
-                    if path and os.path.exists(path) and os.path.getsize(path) > 100:
+                if not media_obj:
+                    continue
+                path = await client.download_media(media_obj)
+                if path and os.path.exists(path) and os.path.getsize(path) > 50:
+                    return True
+                fid = getattr(media_obj, "file_id", None)
+                if fid:
+                    path = await client.download_media(fid)
+                    if path and os.path.exists(path) and os.path.getsize(path) > 50:
                         return True
             except Exception as e:
                 download_errors.append(f"{attr}:{type(e).__name__}")
-        return False
+        # روش ۴: raw get messages + download
+        try:
+            from pyrogram.raw.functions.messages import GetMessages
+            from pyrogram.raw.types import InputMessageID
+            r = await client.invoke(GetMessages(id=[InputMessageID(id=reply.id)]))
+            msgs = getattr(r, "messages", None) or []
+            if msgs:
+                m0 = msgs[0]
+                media = getattr(m0, "media", None)
+                if media is not None:
+                    path = await client.download_media(reply)
+                    if path and os.path.exists(path) and os.path.getsize(path) > 50:
+                        return True
+        except Exception as e:
+            download_errors.append(f"raw:{type(e).__name__}")
+        return bool(path and os.path.exists(path) and os.path.getsize(path) > 50)
 
-    # اگر مدیا دارد سعی کن دانلود کن
-    if reply.media or reply.photo or reply.video or reply.document:
+    has_media = bool(
+        getattr(reply, "media", None)
+        or reply.photo or reply.video or reply.document
+        or reply.animation or reply.voice or reply.audio
+        or reply.video_note or reply.sticker
+    )
+    if has_media:
         await _try_download()
 
-    # اگر دانلود موفق بود → آپلود به Saved
-    if path and os.path.exists(path) and os.path.getsize(path) > 100:
-        cap = "💾 ذخیره | self MR"
+    # آپلود به Saved Messages
+    if path and os.path.exists(path) and os.path.getsize(path) > 50:
+        cap_parts = []
         if is_view_once or ttl:
-            cap += "\n👁 رسانه یک‌بارمصرف / تایم‌دار ذخیره شد"
+            cap_parts.append("👁 یک‌بارمصرف / تایم‌دار")
         if ttl:
-            cap += f"\n⏱ TTL: {ttl}s"
+            cap_parts.append(f"⏱ TTL: {ttl}s")
         if caption:
-            cap += f"\n\n{caption}"
+            cap_parts.append(caption)
+        cap = ("\n".join(cap_parts)) if cap_parts else None
         try:
             pl = path.lower()
-            if reply.photo or pl.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
+            if reply.photo or pl.endswith((".jpg", ".jpeg", ".png", ".webp")):
                 await client.send_photo("me", path, caption=cap)
-            elif reply.video or pl.endswith((".mp4", ".mov", ".mkv", ".webm")):
+            elif reply.video or pl.endswith((".mp4", ".mov", ".mkv")):
                 await client.send_video("me", path, caption=cap)
-            elif reply.voice or (pl.endswith(".ogg") and not reply.audio):
+            elif reply.voice or pl.endswith((".ogg", ".opus")):
                 await client.send_voice("me", path, caption=cap)
-            elif reply.video_note:
-                try:
-                    await client.send_video_note("me", path)
-                    await client.send_message("me", cap)
-                except Exception:
-                    await client.send_video("me", path, caption=cap)
-            elif reply.audio or pl.endswith((".mp3", ".m4a", ".flac", ".aac")):
+            elif reply.audio or pl.endswith((".mp3", ".m4a", ".flac", ".wav")):
                 await client.send_audio("me", path, caption=cap)
             elif reply.animation or pl.endswith(".gif"):
                 await client.send_animation("me", path, caption=cap)
             elif reply.sticker:
+                await client.send_sticker("me", path)
+            elif reply.video_note:
                 try:
-                    await client.send_sticker("me", path)
+                    await client.send_video_note("me", path)
                 except Exception:
-                    await client.send_document("me", path, caption=cap)
+                    await client.send_video("me", path, caption=cap)
             else:
                 await client.send_document("me", path, caption=cap)
             return True, None
         except Exception as e:
-            logging.warning(f"save reupload failed: {e}")
+            logging.warning(f"save upload to me: {e}")
+            download_errors.append(f"upload:{type(e).__name__}")
         finally:
             try:
                 if path and os.path.exists(path):
@@ -4574,7 +4574,7 @@ async def save_message_powerful(client, reply):
             except Exception:
                 pass
 
-    # فوروارد / کپی برای پیام‌های عادی
+    # فوروارد / کپی (برای غیر view-once)
     if not is_view_once:
         try:
             await reply.forward("me")
@@ -4589,11 +4589,14 @@ async def save_message_powerful(client, reply):
 
     # فقط متن
     if text or caption:
-        await client.send_message("me", f"💾 ذخیره متن | self MR\n\n{text or caption}")
-        return True, None
+        try:
+            await client.send_message("me", f"💾 ذخیره متن\n\n{text or caption}")
+            return True, None
+        except Exception as e:
+            return False, str(e)
 
-    detail = " | ".join(download_errors[-4:]) if download_errors else "نامشخص"
-    return False, f"❌ ذخیره ناموفق (view-once/محافظت‌شده).\n🔧 {detail}"
+    detail = " | ".join(str(x)[:40] for x in download_errors[-4:]) if download_errors else "نامشخص"
+    return False, f"❌ ذخیره ناموفق (view-once/محافظت‌شده). {detail}"
 
 
 async def convert_video_to_note(client, message):
@@ -7681,21 +7684,27 @@ async def reply_based_controller(client, message):
     target_id = message.reply_to_message.from_user.id if message.reply_to_message.from_user else None
 
     if cmd in ("ذخیره", ".ذخیره"):
+        reply = message.reply_to_message
+        # پاک کردن بی‌صدا دستور تا طرف مقابل نفهمد
         try:
-            await message.edit_text("⏳ در حال ذخیره...")
+            await message.delete()
+        except Exception:
+            try:
+                await client.delete_messages(message.chat.id, message.id)
+            except Exception:
+                try:
+                    await message.edit_text("⁣")  # نامرئی — آخرین تلاش
+                except Exception:
+                    pass
+        ok, err = await save_message_powerful(client, reply)
+        # فقط در Saved Messages اطلاع بده — نه در همان چت
+        try:
+            if ok:
+                await client.send_message("me", "✅ ذخیره شد (مخفی)")
+            else:
+                await client.send_message("me", err or "❌ ذخیره ناموفق")
         except Exception:
             pass
-        ok, err = await save_message_powerful(client, message.reply_to_message)
-        if ok:
-            try:
-                await message.edit_text("💾 ذخیره شد | self MR")
-            except Exception:
-                pass
-        else:
-            try:
-                await message.edit_text(err or "❌ ذخیره ناموفق")
-            except Exception:
-                await client.send_message(message.chat.id, err or "❌ ذخیره ناموفق")
         return
 
     if cmd.startswith("تکرار "):

@@ -11555,6 +11555,128 @@ async def hourly_diamond_deduction_task():
             await asyncio.sleep(60)
 
 
+
+
+# =============================================
+# 🤖 هلپر اینلاین / پریمیوم (مثل Premiumemoji bots)
+# =============================================
+async def helper_start_handler(client, message):
+    """استارت هلپر — راهنما"""
+    uname = HELPER_INLINE_BOT or "helperselfmr_bot"
+    text = (
+        "⭐ <b>هلپر ایموجی پریمیوم | self MR</b>\n\n"
+        "این ربات برای <b>ارسال و ثبت ایموجی پریمیوم</b> با Bot API است.\n\n"
+        "📌 <b>ثبت ایموجی:</b>\n"
+        "همین‌جا یک پیام با ایموجی پریمیوم بفرستید.\n\n"
+        "📌 <b>دستورات:</b>\n"
+        "/start — راهنما\n"
+        "/list — لیست ایموجی‌های ثبت‌شده\n"
+        "/test — تست ارسال پریمیوم\n\n"
+        "📌 <b>اینلاین:</b>\n"
+        f"در هر چت بنویسید:\n"
+        f"<code>@{uname}</code> + فاصله\n\n"
+        "اگر ایموجی پریمیوم فرستادید و پیش‌نمایش آمد، یعنی درست کار می‌کند."
+    )
+    try:
+        await message.reply_text(text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.warning(f"helper_start: {e}")
+        try:
+            await message.reply_text("⭐ هلپر self MR آماده است.\nیک ایموجی پریمیوم بفرستید.")
+        except Exception:
+            pass
+
+
+async def helper_premium_message_handler(client, message):
+    """ثبت ایموجی پریمیوم روی هلپر + نمایش با tg-emoji"""
+    try:
+        if not message.from_user:
+            return
+        text = (message.text or "").strip()
+        if text in ("/start", "start"):
+            return
+        if text in ("/list", "list", "لیست"):
+            if not MANAGER_PREMIUM_EMOJIS:
+                await message.reply_text("لیست خالی است.\nیک ایموجی پریمیوم بفرستید.")
+                return
+            parts = ["📋 <b>لیست ایموجی‌ها</b>", ""]
+            for i, (k, v) in enumerate(list(MANAGER_PREMIUM_EMOJIS.items())[:40], 1):
+                cid = v.get("id") or k
+                fb = v.get("fallback") or "⭐"
+                parts.append(f"{i}. {html_tg_emoji(cid, fb)} <code>{cid}</code>")
+            await message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
+            return
+        if text in ("/test", "test", "تست"):
+            items = list(MANAGER_PREMIUM_EMOJIS.values())[:15]
+            if not items:
+                await message.reply_text("اول یک ایموجی پریمیوم بفرستید.")
+                return
+            html = " ".join(html_tg_emoji(v.get("id"), v.get("fallback") or "⭐") for v in items)
+            await message.reply_text(f"🧪 <b>تست</b>\n\n{html}", parse_mode=ParseMode.HTML)
+            return
+
+        found = extract_custom_emojis_from_message(message)
+        if not found:
+            # اگر فقط متن عادی بود
+            if text and not text.startswith("/"):
+                await message.reply_text(
+                    "⭐ برای ثبت، یک <b>ایموجی پریمیوم</b> بفرستید.\n"
+                    "ایموجی عادی (غیرپریمیوم) قابل ثبت با Bot API نیست.",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
+        lines = ["✅ <b>ثبت شد | هلپر self MR</b>", ""]
+        html_parts = []
+        for cid, fb in found[:20]:
+            save_manager_premium_emoji(cid, fb)
+            html_parts.append(html_tg_emoji(cid, fb))
+            lines.append(f"• ID: <code>{cid}</code>")
+        lines.append("")
+        lines.append("پیش‌نمایش:")
+        lines.append(" ".join(html_parts))
+        await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.warning(f"helper_premium_message_handler: {e}")
+
+
+async def start_helper_bot():
+    """استارت جداگانه هلپر با /start + اینلاین"""
+    global HELPER_BOT_INSTANCE
+    token = (HELPER_BOT_TOKEN or "").strip()
+    if not token:
+        logging.warning("HELPER_BOT_TOKEN خالی است — هلپر جدا استارت نشد (از منیجر استفاده می‌شود)")
+        return None
+    if token == BOT_TOKEN:
+        logging.info("HELPER_BOT_TOKEN = BOT_TOKEN — هندلرهای هلپر روی منیجر هم کافی است")
+        return None
+    try:
+        from pyrogram.handlers import InlineQueryHandler, MessageHandler
+        helper_bot = Client(
+            "helper_inline_bot",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=token,
+        )
+        helper_bot.add_handler(MessageHandler(helper_start_handler, filters.command("start") & filters.private))
+        helper_bot.add_handler(MessageHandler(helper_premium_message_handler, filters.private & filters.incoming))
+        helper_bot.add_handler(InlineQueryHandler(inline_panel_handler))
+        await helper_bot.start()
+        try:
+            me = await helper_bot.get_me()
+            logging.info("✅ Helper bot started @%s id=%s", me.username, me.id)
+        except Exception:
+            logging.info("✅ Helper bot started")
+        HELPER_BOT_INSTANCE = helper_bot
+        return helper_bot
+    except Exception as e:
+        logging.error(f"❌ Helper bot failed: {e}")
+        return None
+
+
+HELPER_BOT_INSTANCE = None
+
+
 async def main():
     try:
         init_session_db()
@@ -11629,20 +11751,9 @@ async def main():
     except Exception as e:
         logging.warning(f"premium client: {e}")
 
-    # اگر هلپر توکن جدا دارد و یوزرنیمش با منیجر فرق دارد
+    # هلپر جدا (توکن HELPER_BOT_TOKEN) — استارت + اینلاین + ثبت ایموجی
     try:
-        if HELPER_BOT_TOKEN and HELPER_BOT_TOKEN != BOT_TOKEN:
-            helper_bot = Client(
-                "helper_inline_bot",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                bot_token=HELPER_BOT_TOKEN,
-            )
-            # همان هندلر اینلاین منیجر را روی هلپر هم ثبت کن
-            from pyrogram.handlers import InlineQueryHandler
-            helper_bot.add_handler(InlineQueryHandler(inline_panel_handler))
-            await helper_bot.start()
-            logging.info("✅ Helper inline bot started (separate token) @%s", HELPER_INLINE_BOT)
+        await start_helper_bot()
     except Exception as e:
         logging.warning(f"helper bot start: {e}")
 

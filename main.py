@@ -11618,17 +11618,13 @@ def _html_escape(s: str) -> str:
 
 
 def message_to_premium_html(message) -> str:
-    """
-    تبدیل متن/کپشن پیام به HTML با <tg-emoji> برای ایموجی پریمیوم
-    تا بدون مربع و دقیق همان ایموجی ارسال شود.
-    """
+    """HTML با tg-emoji (fallback)."""
     text = message.text or message.caption or ""
     if not text:
         return ""
     entities = list(getattr(message, "entities", None) or []) + list(
         getattr(message, "caption_entities", None) or []
     )
-    # فقط entityهای مرتبط با نمایش
     useful = []
     for ent in entities:
         t = str(getattr(ent, "type", "") or "").upper()
@@ -11638,17 +11634,13 @@ def message_to_premium_html(message) -> str:
             continue
         if any(x in t for x in ("BOLD", "ITALIC", "CODE", "PRE", "UNDERLINE", "STRIKETHROUGH", "TEXT_LINK", "URL", "SPOILER")):
             useful.append(ent)
-
     if not useful:
         return _html_escape(text)
-
-    # مرتب‌سازی بر اساس offset
     useful.sort(key=lambda e: int(getattr(e, "offset", 0) or 0))
-
     encoded = text.encode("utf-16-le")
     total_u16 = len(encoded) // 2
     parts = []
-    cursor = 0  # utf-16 cursor
+    cursor = 0
 
     def slice_u16(start, end):
         return encoded[start * 2 : end * 2].decode("utf-16-le")
@@ -11670,7 +11662,6 @@ def message_to_premium_html(message) -> str:
                 cid = None
             if cid:
                 fb = seg if seg.strip() else "⭐"
-                # ثبت برای استفاده‌های بعدی
                 try:
                     save_manager_premium_emoji(cid, fb)
                 except Exception:
@@ -11700,107 +11691,215 @@ def message_to_premium_html(message) -> str:
         else:
             parts.append(_html_escape(seg))
         cursor = off + ln
-
     if cursor < total_u16:
         parts.append(_html_escape(slice_u16(cursor, total_u16)))
     return "".join(parts)
 
 
+def message_to_premium_entities(message):
+    """
+    برگرداندن (plain_text, entities) با MessageEntityType.CUSTOM_EMOJI
+    تا ایموجی پریمیوم واقعی در کانال برود نه شکل ساده.
+    """
+    from pyrogram.enums import MessageEntityType
+    from pyrogram.types import MessageEntity as PEntity
+
+    text = message.text or message.caption or ""
+    if not text:
+        return "", []
+    raw_ents = list(getattr(message, "entities", None) or []) + list(
+        getattr(message, "caption_entities", None) or []
+    )
+    out = []
+    for ent in raw_ents:
+        try:
+            off = int(getattr(ent, "offset", 0) or 0)
+            ln = int(getattr(ent, "length", 0) or 0)
+            cid = getattr(ent, "custom_emoji_id", None)
+            t = getattr(ent, "type", None)
+            t_str = str(t or "").upper()
+
+            if cid or "CUSTOM_EMOJI" in t_str:
+                try:
+                    cid = int(cid)
+                except Exception:
+                    continue
+                try:
+                    save_manager_premium_emoji(cid, "⭐")
+                except Exception:
+                    pass
+                out.append(
+                    PEntity(
+                        type=MessageEntityType.CUSTOM_EMOJI,
+                        offset=off,
+                        length=ln,
+                        custom_emoji_id=cid,
+                    )
+                )
+                continue
+
+            # بقیه استایل‌ها
+            type_map = {
+                "BOLD": MessageEntityType.BOLD,
+                "ITALIC": MessageEntityType.ITALIC,
+                "UNDERLINE": MessageEntityType.UNDERLINE,
+                "STRIKETHROUGH": MessageEntityType.STRIKETHROUGH,
+                "CODE": MessageEntityType.CODE,
+                "PRE": MessageEntityType.PRE,
+                "SPOILER": MessageEntityType.SPOILER,
+                "URL": MessageEntityType.URL,
+                "TEXT_LINK": MessageEntityType.TEXT_LINK,
+            }
+            mt = None
+            for k, v in type_map.items():
+                if k in t_str:
+                    mt = v
+                    break
+            if mt is None:
+                # enum مستقیم
+                try:
+                    if t is not None:
+                        out.append(ent)
+                except Exception:
+                    pass
+                continue
+            kwargs = {"type": mt, "offset": off, "length": ln}
+            if mt == MessageEntityType.TEXT_LINK:
+                kwargs["url"] = getattr(ent, "url", None) or ""
+            if mt == MessageEntityType.PRE:
+                kwargs["language"] = getattr(ent, "language", None) or ""
+            out.append(PEntity(**kwargs))
+        except Exception as e:
+            logging.debug(f"entity convert: {e}")
+    return text, out
+
+
 async def helper_send_message_to_channel(client, channel_id, src_message) -> tuple:
-    """ارسال پیام طراحی‌شده به کانال با حفظ ایموجی پریمیوم. (ok, err)"""
+    """ارسال به کانال با حفظ ایموجی پریمیوم واقعی."""
     try:
+        # ۱) بهترین روش: کپی مستقیم (entityهای اصلی تلگرام حفظ می‌شوند)
+        try:
+            await client.copy_message(
+                chat_id=channel_id,
+                from_chat_id=src_message.chat.id,
+                message_id=src_message.id,
+            )
+            return True, None
+        except Exception as e_copy:
+            logging.warning(f"copy_message to channel failed: {e_copy}")
+
+        try:
+            await src_message.copy(channel_id)
+            return True, None
+        except Exception as e_copy2:
+            logging.warning(f"message.copy failed: {e_copy2}")
+
+        # ۲) ساخت entity دستی CUSTOM_EMOJI
+        plain, ents = message_to_premium_entities(src_message)
         html = message_to_premium_html(src_message)
+
+        async def _send_text_body(body_plain, body_html, entities, as_caption=False, media_coro=None):
+            # اول با entities
+            if body_plain and entities:
+                try:
+                    if media_coro:
+                        return await media_coro(caption=body_plain, caption_entities=entities)
+                    return await client.send_message(
+                        channel_id,
+                        body_plain,
+                        entities=entities,
+                    )
+                except Exception as e1:
+                    logging.warning(f"send with entities failed: {e1}")
+            # بعد HTML tg-emoji
+            if body_html:
+                try:
+                    if media_coro:
+                        return await media_coro(caption=body_html, parse_mode=ParseMode.HTML)
+                    return await client.send_message(
+                        channel_id,
+                        body_html,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception as e2:
+                    logging.warning(f"send HTML tg-emoji failed: {e2}")
+            # آخر متن ساده
+            if body_plain:
+                if media_coro:
+                    return await media_coro(caption=body_plain)
+                return await client.send_message(channel_id, body_plain)
+            return None
+
         # استیکر
         if src_message.sticker:
             try:
                 await client.send_sticker(channel_id, src_message.sticker.file_id)
-                if html:
-                    await client.send_message(channel_id, html, parse_mode=ParseMode.HTML)
+                if plain or html:
+                    await _send_text_body(plain, html, ents)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # انیمیشن / گیف
+
         if src_message.animation:
+            async def _anim(**kw):
+                return await client.send_animation(channel_id, src_message.animation.file_id, **kw)
             try:
-                await client.send_animation(
-                    channel_id,
-                    src_message.animation.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_anim)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # عکس
+
         if src_message.photo:
+            async def _photo(**kw):
+                return await client.send_photo(channel_id, src_message.photo.file_id, **kw)
             try:
-                await client.send_photo(
-                    channel_id,
-                    src_message.photo.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_photo)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # ویدیو
+
         if src_message.video:
+            async def _video(**kw):
+                return await client.send_video(channel_id, src_message.video.file_id, **kw)
             try:
-                await client.send_video(
-                    channel_id,
-                    src_message.video.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_video)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # سند
+
         if src_message.document:
+            async def _doc(**kw):
+                return await client.send_document(channel_id, src_message.document.file_id, **kw)
             try:
-                await client.send_document(
-                    channel_id,
-                    src_message.document.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_doc)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # ویس / صوت
+
         if src_message.voice:
+            async def _voice(**kw):
+                return await client.send_voice(channel_id, src_message.voice.file_id, **kw)
             try:
-                await client.send_voice(
-                    channel_id,
-                    src_message.voice.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_voice)
                 return True, None
             except Exception as e:
                 return False, str(e)
+
         if src_message.audio:
+            async def _audio(**kw):
+                return await client.send_audio(channel_id, src_message.audio.file_id, **kw)
             try:
-                await client.send_audio(
-                    channel_id,
-                    src_message.audio.file_id,
-                    caption=html or None,
-                    parse_mode=ParseMode.HTML if html else None,
-                )
+                await _send_text_body(plain, html, ents, media_coro=_audio)
                 return True, None
             except Exception as e:
                 return False, str(e)
-        # فقط متن
-        if html or (src_message.text or src_message.caption):
-            body = html or _html_escape(src_message.text or src_message.caption or "")
-            await client.send_message(channel_id, body, parse_mode=ParseMode.HTML)
+
+        # متن خالی
+        if plain or html:
+            await _send_text_body(plain, html, ents)
             return True, None
-        # fallback: کپی خام
-        try:
-            await src_message.copy(channel_id)
-            return True, None
-        except Exception as e:
-            return False, str(e)
+
+        return False, "پیام قابل ارسال نبود"
     except Exception as e:
         return False, str(e)
 

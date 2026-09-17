@@ -239,6 +239,58 @@ async def resolve_post_channel(client):
         return None, f"کانال پیدا نشد: {e}"
 
 
+
+async def send_premium_ids_to_channel(client, channel_id, text: str, extra_caption: str = ""):
+    """ارسال پست به کانال از روی آیدی عددی custom_emoji (بدون مربع)"""
+    from pyrogram.enums import MessageEntityType
+    from pyrogram.types import MessageEntity
+    ids = re.findall(r"\b(\d{15,22})\b", text or "")
+    if not ids:
+        return False, "آیدی عددی ایموجی پریمیوم پیدا نشد (۱۵ تا ۲۲ رقم)."
+    # متن باقی‌مانده بدون آیدی‌ها
+    rest = text or ""
+    for i in ids:
+        rest = rest.replace(i, " ")
+    rest = " ".join(rest.split())
+    if extra_caption:
+        rest = (rest + "\n" + extra_caption).strip() if rest else extra_caption
+
+    # ساخت متن با placeholder ستاره برای هر ایموجی
+    pieces = []
+    entities = []
+    offset = 0
+    for cid in ids[:30]:
+        fb = "⭐"
+        ln = len(fb.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntityType.CUSTOM_EMOJI,
+            offset=offset,
+            length=ln,
+            custom_emoji_id=int(cid),
+        ))
+        pieces.append(fb)
+        offset += ln
+        pieces.append(" ")
+        offset += 1
+    body = "".join(pieces).rstrip()
+    if rest:
+        body = body + "\n\n" + rest
+    try:
+        await client.send_message(channel_id, body, entities=entities)
+        return True, None
+    except Exception as e1:
+        logging.warning(f"send_premium_ids entity: {e1}")
+    # HTML fallback
+    try:
+        html = " ".join(html_tg_emoji(int(i), "⭐") for i in ids[:30])
+        if rest:
+            html = html + "\n\n" + rest
+        await client.send_message(channel_id, html, parse_mode=ParseMode.HTML)
+        return True, None
+    except Exception as e2:
+        return False, str(e2)
+
+
 async def copy_message_to_channel(client, message, channel_id) -> tuple:
     """کپی پیام (با ایموجی پریمیوم) به کانال — بدون مربع"""
     try:
@@ -2477,6 +2529,7 @@ SECRETARY_COOLDOWN_SEC = 600  # هر ۱۰ دقیقه یک‌بار
 MUTED_USERS = {}
 USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
+PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عکس پروفایل
 ROTATING_NAMES = {}
 ROTATING_NAME_INTERVAL = {}
 ROTATING_NAME_STATUS = {}
@@ -2682,6 +2735,7 @@ def load_all_states():
         settings = user_data.get("settings", {}) or {}
         USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
         CLOCK_STATUS[user_id] = settings.get("clock", True)
+        PROFILE_PHOTO_CLOCK[user_id] = bool(settings.get("photo_clock", False))
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
@@ -2852,6 +2906,7 @@ def persist_all_user_settings(user_id: int):
         settings = {
             "font": USER_FONT_CHOICES.get(user_id, "bold"),
             "clock": CLOCK_STATUS.get(user_id, True),
+            "photo_clock": bool(PROFILE_PHOTO_CLOCK.get(user_id, False)),
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
@@ -3317,6 +3372,129 @@ async def rotate_profile_music_task(client: Client, user_id: int):
             logging.error(f"rotate_profile_music_task: {e}")
             await asyncio.sleep(120)
 
+
+
+
+async def build_profile_clock_image(client, user_id: int) -> str:
+    """ساخت عکس پروفایل با قاب ساعت دور حاشیه (هر دقیقه آپدیت)"""
+    from PIL import Image, ImageDraw, ImageFont
+    import math
+    size = 640
+    path_out = f"/tmp/profile_clock_{user_id}.png"
+    # عکس فعلی پروفایل
+    base = None
+    try:
+        photos = []
+        async for p in client.get_chat_photos("me", limit=1):
+            photos.append(p)
+        if photos:
+            p0 = photos[0]
+            dl = await client.download_media(p0, file_name=f"/tmp/pf_src_{user_id}.jpg")
+            if dl and os.path.exists(dl):
+                base = Image.open(dl).convert("RGBA")
+                base = base.resize((size, size), Image.LANCZOS)
+    except Exception as e:
+        logging.warning(f"profile photo dl: {e}")
+    if base is None:
+        base = Image.new("RGBA", (size, size), (30, 30, 30, 255))
+
+    # ماسک دایره برای خود عکس
+    mask = Image.new("L", (size, size), 0)
+    md = ImageDraw.Draw(mask)
+    margin = 48
+    md.ellipse((margin, margin, size - margin, size - margin), fill=255)
+    circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    circ.paste(base, (0, 0), mask=mask)
+
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 255))
+    canvas.paste(circ, (0, 0), circ)
+
+    draw = ImageDraw.Draw(canvas)
+    cx = cy = size // 2
+    outer_r = size // 2 - 6
+    inner_r = outer_r - 28
+
+    # حلقه بیرونی
+    draw.ellipse((cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r), outline=(220, 220, 220, 255), width=4)
+    draw.ellipse((cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r), outline=(180, 180, 180, 180), width=2)
+
+    # عقربه‌ها / تیک‌های ساعت
+    now = datetime.now(TEHRAN_TIMEZONE)
+    h, m, s = now.hour % 12, now.minute, now.second
+    for i in range(60):
+        ang = math.radians(i * 6 - 90)
+        r1 = outer_r - (14 if i % 5 == 0 else 8)
+        r2 = outer_r - 2
+        x1, y1 = cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)
+        x2, y2 = cx + r2 * math.cos(ang), cy + r2 * math.sin(ang)
+        w = 3 if i % 5 == 0 else 1
+        col = (240, 240, 240, 255) if i % 5 == 0 else (160, 160, 160, 200)
+        draw.line([(x1, y1), (x2, y2)], fill=col, width=w)
+
+    def hand(angle_deg, length, width, color):
+        ang = math.radians(angle_deg - 90)
+        x = cx + length * math.cos(ang)
+        y = cy + length * math.sin(ang)
+        draw.line([(cx, cy), (x, y)], fill=color, width=width)
+
+    hand(h * 30 + m * 0.5, inner_r * 0.45, 6, (255, 255, 255, 255))
+    hand(m * 6, inner_r * 0.65, 4, (230, 230, 230, 255))
+    hand(s * 6, inner_r * 0.72, 2, (255, 80, 80, 255))
+    # مرکز
+    draw.ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 255, 255, 255))
+
+    # زمان دیجیتال پایین
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+    tstr = now.strftime("%H:%M")
+    try:
+        draw.text((cx - 18, size - 36), tstr, fill=(220, 220, 220, 255), font=font)
+    except Exception:
+        pass
+
+    canvas = canvas.convert("RGB")
+    canvas.save(path_out, "PNG", quality=95)
+    return path_out
+
+
+async def update_profile_photo_clock_task(client: Client, user_id: int):
+    """هر دقیقه عکس پروفایل را با قاب ساعت به‌روز می‌کند"""
+    await asyncio.sleep(5)
+    while user_id in ACTIVE_BOTS:
+        try:
+            if not PROFILE_PHOTO_CLOCK.get(user_id, False):
+                await asyncio.sleep(5)
+                continue
+            until = PROFILE_FLOOD_UNTIL.get(user_id, 0)
+            if time.time() < until:
+                await asyncio.sleep(min(60, max(5, until - time.time())))
+                continue
+            path = await build_profile_clock_image(client, user_id)
+            if path and os.path.exists(path):
+                try:
+                    await client.set_profile_photo(photo=path)
+                    logging.info(f"profile photo clock updated uid={user_id}")
+                except Exception as e:
+                    err = str(e)
+                    logging.warning(f"set_profile_photo clock: {e}")
+                    if "FLOOD_WAIT" in err:
+                        m = re.search(r"(\d+)", err)
+                        sec = int(m.group(1)) if m else 300
+                        PROFILE_FLOOD_UNTIL[user_id] = time.time() + sec + 5
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            # تا دقیقه بعد
+            wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.3
+            await asyncio.sleep(max(5, wait))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.warning(f"update_profile_photo_clock_task: {e}")
+            await asyncio.sleep(30)
 
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -7344,6 +7522,24 @@ async def reply_based_controller(client, message):
 
 
     # ========== تبدیل ایموجی عادی به پریمیوم (سبک VTR) ==========
+    
+    if cmd in (".ساعت پروفایل روشن", "ساعت پروفایل روشن"):
+        PROFILE_PHOTO_CLOCK[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text("✅ ساعت گرافیکی پروفایل روشن شد.\nهر دقیقه عکس پروفایل با قاب ساعت به‌روز می‌شود.")
+        return
+    if cmd in (".ساعت پروفایل خاموش", "ساعت پروفایل خاموش"):
+        PROFILE_PHOTO_CLOCK[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        await message.edit_text("❌ ساعت گرافیکی پروفایل خاموش شد.")
+        return
+
     if cmd in (".تبدیل ایموجی روشن", "تبدیل ایموجی روشن", ".ایموجی پریمیوم روشن"):
         EMOJI_PREMIUM_CONVERT[user_id] = True
         try:
@@ -8274,6 +8470,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 
     tasks = [
         asyncio.create_task(update_profile_clock(client, user_id)),
+        asyncio.create_task(update_profile_photo_clock_task(client, user_id)),
         asyncio.create_task(rotate_profile_name_task(client, user_id)),
         asyncio.create_task(rotate_profile_music_task(client, user_id)),
         asyncio.create_task(sender_loop_task(client, user_id)),
@@ -8326,7 +8523,8 @@ def build_panel_keyboard(user_id, page=1):
     if page == 1:
         return [
             [
-                _styled_btn("⏰ ساعت", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
+                _styled_btn("⏰ ساعت اسم", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
+                _styled_btn("🕰 ساعت پروفایل", f"toggle_photo_clock_{user_id}", PROFILE_PHOTO_CLOCK.get(user_id, False)),
                 _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
                 _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
             ],
@@ -8787,6 +8985,28 @@ async def callback_panel_handler(client, callback):
     data = callback.data or ""
 
     # ===== دانلود آهنگ از سرچ (دکمه‌ها از manager_bot) =====
+    if data.startswith("toggle_photo_clock_"):
+        try:
+            target_user_id = int(data.split("_")[-1])
+        except Exception:
+            await callback.answer("خطا", show_alert=True)
+            return
+        if callback.from_user.id != target_user_id and callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("دسترسی ندارید", show_alert=True)
+            return
+        new_state = not PROFILE_PHOTO_CLOCK.get(target_user_id, False)
+        PROFILE_PHOTO_CLOCK[target_user_id] = new_state
+        try:
+            persist_all_user_settings(target_user_id)
+        except Exception:
+            pass
+        await callback.answer("ساعت پروفایل: " + ("روشن ✅" if new_state else "خاموش ❌"))
+        try:
+            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
+        except Exception:
+            pass
+        return
+
     if data.startswith("song_dl_"):
         await song_download_callback(client, callback)
         return
@@ -10555,10 +10775,11 @@ async def admin_post_to_channel_start(client, message):
     await message.reply_text(
         "📨 <b>ارسال پست به کانال</b>\n\n"
         f"کانال: <code>{ch}</code>\n\n"
-        "پیامی که در Saved Messages با ایموجی پریمیوم طراحی کردید را:\n"
-        "• به اینجا <b>فوروارد</b> کنید\n"
-        "یا همین‌جا بفرستید.\n\n"
-        "ربات همان پیام را با همان ایموجی‌ها به کانال می‌فرستد.\n"
+        "فوروارد از Saved ایموجی را عادی می‌کند.\n\n"
+        "آیدی عددی ایموجی پریمیوم را بفرستید:\n"
+        "<code>6033087002449022135</code>\n\n"
+        "چند آیدی + متن هم مجاز است.\n"
+        "ربات همان را به‌صورت پریمیوم واقعی در کانال پست می‌کند.\n\n"
         "برای لغو: لغو",
         parse_mode=ParseMode.HTML,
     )
@@ -10641,10 +10862,32 @@ async def admin_channel_post_state_handler(client, message):
                 ADMIN_STATES[uid] = None
                 message.stop_propagation()
                 return
+            raw_txt = message.text or message.caption or ""
+            if re.search(r"\b\d{15,22}\b", raw_txt or ""):
+                ok, result = await send_premium_ids_to_channel(client, channel_id, raw_txt)
+                if ok:
+                    ADMIN_STATES[uid] = None
+                    await message.reply_text("✅ پست پریمیوم (آیدی عددی) به کانال ارسال شد.")
+                else:
+                    await message.reply_text(f"❌ ارسال ناموفق:\n{result}")
+                message.stop_propagation()
+                return
+            found = extract_custom_emojis_from_message(message)
+            if found:
+                ids_line = " ".join(str(cid) for cid, _ in found)
+                cap = message.text or message.caption or ""
+                ok, result = await send_premium_ids_to_channel(client, channel_id, ids_line, extra_caption=cap)
+                if ok:
+                    ADMIN_STATES[uid] = None
+                    await message.reply_text("✅ پست پریمیوم به کانال ارسال شد.")
+                else:
+                    await message.reply_text(f"❌ ارسال ناموفق:\n{result}")
+                message.stop_propagation()
+                return
             ok, result = await copy_message_to_channel(client, message, channel_id)
             if ok:
                 ADMIN_STATES[uid] = None
-                await message.reply_text("✅ پست با موفقیت به کانال ارسال شد.")
+                await message.reply_text("✅ پست ارسال شد (برای پریمیوم از آیدی عددی استفاده کنید).")
             else:
                 await message.reply_text(f"❌ ارسال ناموفق:\n{result}")
             message.stop_propagation()

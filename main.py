@@ -10396,6 +10396,28 @@ async def start_login(client, message):
 
 
 
+@manager_bot.on_message(filters.private & filters.incoming, group=2)
+async def manager_helper_admin_bridge(client, message):
+    """
+    اگر هلپر جدا نباشد (توکن خالی یا همان منیجر)،
+    منوی ارسال پست کانال روی منیجر فقط برای ادمین فعال است.
+    """
+    try:
+        if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+            return
+        token = (HELPER_BOT_TOKEN or "").strip()
+        if token and token != BOT_TOKEN:
+            return  # هلپر جدا هندل می‌کند
+        handled = await helper_admin_post_handler(client, message)
+        if handled:
+            try:
+                message.stop_propagation()
+            except Exception:
+                pass
+    except Exception as e:
+        logging.warning(f"manager_helper_admin_bridge: {e}")
+
+
 @manager_bot.on_message(filters.private & filters.incoming, group=3)
 async def manager_premium_emoji_catcher(client, message):
     """ثبت و نمایش ایموجی پریمیوم با Bot API (tg-emoji)"""
@@ -11558,14 +11580,251 @@ async def hourly_diamond_deduction_task():
 
 
 # =============================================
-# 🤖 هلپر اینلاین / پریمیوم (مثل Premiumemoji bots)
+# 🤖 هلپر اینلاین / پریمیوم + ارسال پست کانال (فقط ادمین)
 # =============================================
+HELPER_ADMIN_STATES = {}  # user_id -> state str
+
+
+def get_post_channels() -> list:
+    try:
+        chs = data_manager.data.get("post_channels") or []
+        if not isinstance(chs, list):
+            return []
+        return chs
+    except Exception:
+        return []
+
+
+def save_post_channels(channels: list):
+    try:
+        data_manager.data["post_channels"] = channels
+        data_manager.save_data()
+    except Exception as e:
+        logging.error(f"save_post_channels: {e}")
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _html_escape(s: str) -> str:
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def message_to_premium_html(message) -> str:
+    """
+    تبدیل متن/کپشن پیام به HTML با <tg-emoji> برای ایموجی پریمیوم
+    تا بدون مربع و دقیق همان ایموجی ارسال شود.
+    """
+    text = message.text or message.caption or ""
+    if not text:
+        return ""
+    entities = list(getattr(message, "entities", None) or []) + list(
+        getattr(message, "caption_entities", None) or []
+    )
+    # فقط entityهای مرتبط با نمایش
+    useful = []
+    for ent in entities:
+        t = str(getattr(ent, "type", "") or "").upper()
+        cid = getattr(ent, "custom_emoji_id", None)
+        if cid or "CUSTOM_EMOJI" in t:
+            useful.append(ent)
+            continue
+        if any(x in t for x in ("BOLD", "ITALIC", "CODE", "PRE", "UNDERLINE", "STRIKETHROUGH", "TEXT_LINK", "URL", "SPOILER")):
+            useful.append(ent)
+
+    if not useful:
+        return _html_escape(text)
+
+    # مرتب‌سازی بر اساس offset
+    useful.sort(key=lambda e: int(getattr(e, "offset", 0) or 0))
+
+    encoded = text.encode("utf-16-le")
+    total_u16 = len(encoded) // 2
+    parts = []
+    cursor = 0  # utf-16 cursor
+
+    def slice_u16(start, end):
+        return encoded[start * 2 : end * 2].decode("utf-16-le")
+
+    for ent in useful:
+        off = int(getattr(ent, "offset", 0) or 0)
+        ln = int(getattr(ent, "length", 0) or 0)
+        if off < cursor:
+            continue
+        if off > cursor:
+            parts.append(_html_escape(slice_u16(cursor, off)))
+        seg = slice_u16(off, off + ln)
+        t = str(getattr(ent, "type", "") or "").upper()
+        cid = getattr(ent, "custom_emoji_id", None)
+        if cid or "CUSTOM_EMOJI" in t:
+            try:
+                cid = int(cid)
+            except Exception:
+                cid = None
+            if cid:
+                fb = seg if seg.strip() else "⭐"
+                # ثبت برای استفاده‌های بعدی
+                try:
+                    save_manager_premium_emoji(cid, fb)
+                except Exception:
+                    pass
+                parts.append(html_tg_emoji(cid, fb))
+            else:
+                parts.append(_html_escape(seg))
+        elif "BOLD" in t:
+            parts.append(f"<b>{_html_escape(seg)}</b>")
+        elif "ITALIC" in t:
+            parts.append(f"<i>{_html_escape(seg)}</i>")
+        elif "UNDERLINE" in t:
+            parts.append(f"<u>{_html_escape(seg)}</u>")
+        elif "STRIKETHROUGH" in t:
+            parts.append(f"<s>{_html_escape(seg)}</s>")
+        elif "CODE" in t:
+            parts.append(f"<code>{_html_escape(seg)}</code>")
+        elif "PRE" in t:
+            parts.append(f"<pre>{_html_escape(seg)}</pre>")
+        elif "SPOILER" in t:
+            parts.append(f'<span class="tg-spoiler">{_html_escape(seg)}</span>')
+        elif "TEXT_LINK" in t:
+            url = getattr(ent, "url", None) or ""
+            parts.append(f'<a href="{_html_escape(url)}">{_html_escape(seg)}</a>')
+        elif "URL" in t:
+            parts.append(f'<a href="{_html_escape(seg)}">{_html_escape(seg)}</a>')
+        else:
+            parts.append(_html_escape(seg))
+        cursor = off + ln
+
+    if cursor < total_u16:
+        parts.append(_html_escape(slice_u16(cursor, total_u16)))
+    return "".join(parts)
+
+
+async def helper_send_message_to_channel(client, channel_id, src_message) -> tuple:
+    """ارسال پیام طراحی‌شده به کانال با حفظ ایموجی پریمیوم. (ok, err)"""
+    try:
+        html = message_to_premium_html(src_message)
+        # استیکر
+        if src_message.sticker:
+            try:
+                await client.send_sticker(channel_id, src_message.sticker.file_id)
+                if html:
+                    await client.send_message(channel_id, html, parse_mode=ParseMode.HTML)
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # انیمیشن / گیف
+        if src_message.animation:
+            try:
+                await client.send_animation(
+                    channel_id,
+                    src_message.animation.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # عکس
+        if src_message.photo:
+            try:
+                await client.send_photo(
+                    channel_id,
+                    src_message.photo.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # ویدیو
+        if src_message.video:
+            try:
+                await client.send_video(
+                    channel_id,
+                    src_message.video.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # سند
+        if src_message.document:
+            try:
+                await client.send_document(
+                    channel_id,
+                    src_message.document.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # ویس / صوت
+        if src_message.voice:
+            try:
+                await client.send_voice(
+                    channel_id,
+                    src_message.voice.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        if src_message.audio:
+            try:
+                await client.send_audio(
+                    channel_id,
+                    src_message.audio.file_id,
+                    caption=html or None,
+                    parse_mode=ParseMode.HTML if html else None,
+                )
+                return True, None
+            except Exception as e:
+                return False, str(e)
+        # فقط متن
+        if html or (src_message.text or src_message.caption):
+            body = html or _html_escape(src_message.text or src_message.caption or "")
+            await client.send_message(channel_id, body, parse_mode=ParseMode.HTML)
+            return True, None
+        # fallback: کپی خام
+        try:
+            await src_message.copy(channel_id)
+            return True, None
+        except Exception as e:
+            return False, str(e)
+    except Exception as e:
+        return False, str(e)
+
+
+def helper_admin_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📢 ثبت کانال پست"), KeyboardButton("📋 لیست کانال پست")],
+            [KeyboardButton("📤 ارسال پست به کانال"), KeyboardButton("🗑 حذف کانال پست")],
+            [KeyboardButton("📋 لیست ایموجی"), KeyboardButton("🧪 تست ایموجی")],
+            [KeyboardButton("❌ لغو عملیات")],
+        ],
+        resize_keyboard=True,
+    )
+
+
 async def helper_start_handler(client, message):
-    """استارت هلپر — راهنما"""
+    """استارت هلپر — راهنما + منوی ادمین"""
     uname = HELPER_INLINE_BOT or "helperselfmr_bot"
+    is_admin = message.from_user and message.from_user.id in GOD_ADMIN_IDS
     text = (
         "⭐ <b>هلپر ایموجی پریمیوم | self MR</b>\n\n"
-        "این ربات برای <b>ارسال و ثبت ایموجی پریمیوم</b> با Bot API است.\n\n"
+        "این ربات برای <b>ارسال و ثبت ایموجی پریمیوم</b> و "
+        "<b>ارسال پست به کانال</b> است.\n\n"
         "📌 <b>ثبت ایموجی:</b>\n"
         "همین‌جا یک پیام با ایموجی پریمیوم بفرستید.\n\n"
         "📌 <b>دستورات:</b>\n"
@@ -11573,10 +11832,21 @@ async def helper_start_handler(client, message):
         "/list — لیست ایموجی‌های ثبت‌شده\n"
         "/test — تست ارسال پریمیوم\n\n"
         "📌 <b>اینلاین:</b>\n"
-        f"در هر چت بنویسید:\n"
-        f"<code>@{uname}</code> + فاصله\n\n"
-        "اگر ایموجی پریمیوم فرستادید و پیش‌نمایش آمد، یعنی درست کار می‌کند."
+        f"<code>@{uname}</code> + فاصله\n"
     )
+    if is_admin:
+        text += (
+            "\n🛠 <b>منوی ادمین:</b>\n"
+            "• ثبت کانال پست\n"
+            "• ارسال پست به کانال\n"
+            "• طراحی پست را در Saved Messages بسازید، "
+            "بعد همان پیام را اینجا فوروارد/ارسال کنید."
+        )
+        try:
+            await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=helper_admin_keyboard())
+            return
+        except Exception as e:
+            logging.warning(f"helper_start admin: {e}")
     try:
         await message.reply_text(text, parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -11587,11 +11857,203 @@ async def helper_start_handler(client, message):
             pass
 
 
+async def helper_admin_post_handler(client, message):
+    """مدیریت ثبت کانال / ارسال پست — فقط GOD_ADMIN روی هلپر"""
+    if not message.from_user or message.from_user.id not in GOD_ADMIN_IDS:
+        return False
+    uid = message.from_user.id
+    text = (message.text or "").strip()
+    state = HELPER_ADMIN_STATES.get(uid)
+
+    # دکمه‌های منو
+    if text in ("❌ لغو عملیات", "لغو", "/cancel"):
+        HELPER_ADMIN_STATES.pop(uid, None)
+        await message.reply_text("✅ عملیات لغو شد.", reply_markup=helper_admin_keyboard())
+        return True
+
+    if text in ("📢 ثبت کانال پست", "ثبت کانال پست"):
+        HELPER_ADMIN_STATES[uid] = "await_channel"
+        await message.reply_text(
+            "📢 آیدی عددی یا یوزرنیم کانال را بفرستید.\n"
+            "مثال:\n<code>@mychannel</code>\n<code>-1001234567890</code>\n\n"
+            "⚠️ ربات هلپر باید در کانال <b>ادمین</b> باشد.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=helper_admin_keyboard(),
+        )
+        return True
+
+    if text in ("📋 لیست کانال پست", "لیست کانال پست"):
+        chs = get_post_channels()
+        if not chs:
+            await message.reply_text("لیست کانال پست خالی است.")
+            return True
+        lines = ["📋 <b>کانال‌های ثبت‌شده</b>", ""]
+        for i, c in enumerate(chs, 1):
+            lines.append(
+                f"{i}. {c.get('title') or '—'} | "
+                f"<code>{c.get('id')}</code> | @{c.get('username') or '—'}"
+            )
+        await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return True
+
+    if text in ("🗑 حذف کانال پست", "حذف کانال پست"):
+        chs = get_post_channels()
+        if not chs:
+            await message.reply_text("لیستی برای حذف نیست.")
+            return True
+        HELPER_ADMIN_STATES[uid] = "await_del_channel"
+        lines = ["شماره کانال برای حذف را بفرستید:", ""]
+        for i, c in enumerate(chs, 1):
+            lines.append(f"{i}. {c.get('title') or c.get('id')}")
+        await message.reply_text("\n".join(lines))
+        return True
+
+    if text in ("📤 ارسال پست به کانال", "ارسال پست به کانال"):
+        chs = get_post_channels()
+        if not chs:
+            await message.reply_text(
+                "❌ اول کانال را ثبت کنید.\nدکمه «ثبت کانال پست» را بزنید."
+            )
+            return True
+        HELPER_ADMIN_STATES[uid] = "await_post"
+        await message.reply_text(
+            "📤 پست طراحی‌شده را <b>فوروارد</b> یا <b>ارسال</b> کنید.\n\n"
+            "می‌توانید در Saved Messages با ایموجی/استیکر پریمیوم بسازید "
+            "بعد همان پیام را اینجا بفرستید.\n"
+            "ایموجی پریمیوم بدون مربع و دقیق ارسال می‌شود.",
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    if text in ("📋 لیست ایموجی", "لیست ایموجی"):
+        if not MANAGER_PREMIUM_EMOJIS:
+            await message.reply_text("لیست خالی است.")
+            return True
+        parts = ["📋 <b>لیست ایموجی‌ها</b>", ""]
+        for i, (k, v) in enumerate(list(MANAGER_PREMIUM_EMOJIS.items())[:40], 1):
+            cid = v.get("id") or k
+            fb = v.get("fallback") or "⭐"
+            parts.append(f"{i}. {html_tg_emoji(cid, fb)} <code>{cid}</code>")
+        await message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
+        return True
+
+    if text in ("🧪 تست ایموجی", "تست ایموجی"):
+        items = list(MANAGER_PREMIUM_EMOJIS.values())[:15]
+        if not items:
+            await message.reply_text("اول یک ایموجی پریمیوم بفرستید.")
+            return True
+        html = " ".join(html_tg_emoji(v.get("id"), v.get("fallback") or "⭐") for v in items)
+        await message.reply_text(f"🧪 <b>تست</b>\n\n{html}", parse_mode=ParseMode.HTML)
+        return True
+
+    # ---- state: ثبت کانال ----
+    if state == "await_channel" and text:
+        raw = text.strip().replace("https://t.me/", "").replace("t.me/", "").strip()
+        try:
+            chat = await client.get_chat(raw if raw.startswith("@") or raw.lstrip("-").isdigit() else f"@{raw}")
+            ch_id = chat.id
+            title = chat.title or str(ch_id)
+            uname = getattr(chat, "username", None) or ""
+            # چک ادمین بودن ربات
+            try:
+                me = await client.get_me()
+                member = await client.get_chat_member(ch_id, me.id)
+                st = str(getattr(member, "status", "")).lower()
+                if "administrator" not in st and "creator" not in st:
+                    await message.reply_text(
+                        "❌ ربات در این کانال ادمین نیست.\nاول هلپر را ادمین کانال کنید."
+                    )
+                    return True
+            except Exception as e:
+                await message.reply_text(f"❌ دسترسی به کانال ممکن نشد:\n{e}")
+                return True
+            chs = get_post_channels()
+            # جلوگیری از تکراری
+            chs = [c for c in chs if str(c.get("id")) != str(ch_id)]
+            chs.append({"id": ch_id, "title": title, "username": uname})
+            save_post_channels(chs)
+            HELPER_ADMIN_STATES.pop(uid, None)
+            await message.reply_text(
+                f"✅ کانال ثبت شد:\n<b>{title}</b>\n<code>{ch_id}</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=helper_admin_keyboard(),
+            )
+        except Exception as e:
+            await message.reply_text(f"❌ خطا در ثبت کانال:\n{e}")
+        return True
+
+    # ---- state: حذف کانال ----
+    if state == "await_del_channel" and text:
+        chs = get_post_channels()
+        try:
+            idx = int(text.strip()) - 1
+            if idx < 0 or idx >= len(chs):
+                await message.reply_text("❌ شماره نامعتبر است.")
+                return True
+            removed = chs.pop(idx)
+            save_post_channels(chs)
+            HELPER_ADMIN_STATES.pop(uid, None)
+            await message.reply_text(
+                f"✅ حذف شد: {removed.get('title') or removed.get('id')}",
+                reply_markup=helper_admin_keyboard(),
+            )
+        except Exception:
+            await message.reply_text("❌ یک عدد معتبر بفرستید.")
+        return True
+
+    # ---- state: دریافت پست و ارسال ----
+    if state == "await_post":
+        # پیام‌های دکمه‌ای را رد نکن — بالاتر هندل شدند
+        if text in (
+            "📢 ثبت کانال پست", "📋 لیست کانال پست", "📤 ارسال پست به کانال",
+            "🗑 حذف کانال پست", "📋 لیست ایموجی", "🧪 تست ایموجی",
+        ):
+            return False
+        chs = get_post_channels()
+        if not chs:
+            HELPER_ADMIN_STATES.pop(uid, None)
+            await message.reply_text("❌ کانالی ثبت نشده.")
+            return True
+        # ثبت ایموجی‌های داخل پست
+        try:
+            for cid, fb in extract_custom_emojis_from_message(message):
+                save_manager_premium_emoji(cid, fb)
+        except Exception:
+            pass
+        await message.reply_text("⏳ در حال ارسال به کانال(ها)...")
+        ok_n, fail_n = 0, 0
+        errors = []
+        for c in chs:
+            cid = c.get("id")
+            ok, err = await helper_send_message_to_channel(client, cid, message)
+            if ok:
+                ok_n += 1
+            else:
+                fail_n += 1
+                errors.append(f"{c.get('title') or cid}: {err}")
+        HELPER_ADMIN_STATES.pop(uid, None)
+        msg = f"✅ ارسال شد: {ok_n}\n❌ ناموفق: {fail_n}"
+        if errors:
+            msg += "\n\n" + "\n".join(errors[:5])
+        await message.reply_text(msg, reply_markup=helper_admin_keyboard())
+        return True
+
+    return False
+
+
 async def helper_premium_message_handler(client, message):
-    """ثبت ایموجی پریمیوم روی هلپر + نمایش با tg-emoji"""
+    """ثبت ایموجی پریمیوم + منوی ادمین ارسال پست (فقط روی هلپر)"""
     try:
         if not message.from_user:
             return
+        # اول ادمین/پست کانال
+        try:
+            handled = await helper_admin_post_handler(client, message)
+            if handled:
+                return
+        except Exception as e:
+            logging.warning(f"helper_admin_post_handler: {e}")
+
         text = (message.text or "").strip()
         if text in ("/start", "start"):
             return
@@ -11617,8 +12079,7 @@ async def helper_premium_message_handler(client, message):
 
         found = extract_custom_emojis_from_message(message)
         if not found:
-            # اگر فقط متن عادی بود
-            if text and not text.startswith("/"):
+            if text and not text.startswith("/") and message.from_user.id not in GOD_ADMIN_IDS:
                 await message.reply_text(
                     "⭐ برای ثبت، یک <b>ایموجی پریمیوم</b> بفرستید.\n"
                     "ایموجی عادی (غیرپریمیوم) قابل ثبت با Bot API نیست.",
@@ -11641,14 +12102,14 @@ async def helper_premium_message_handler(client, message):
 
 
 async def start_helper_bot():
-    """استارت جداگانه هلپر با /start + اینلاین"""
+    """استارت جداگانه هلپر با /start + اینلاین + ارسال پست کانال"""
     global HELPER_BOT_INSTANCE
     token = (HELPER_BOT_TOKEN or "").strip()
     if not token:
         logging.warning("HELPER_BOT_TOKEN خالی است — هلپر جدا استارت نشد (از منیجر استفاده می‌شود)")
         return None
     if token == BOT_TOKEN:
-        logging.info("HELPER_BOT_TOKEN = BOT_TOKEN — هندلرهای هلپر روی منیجر هم کافی است")
+        logging.info("HELPER_BOT_TOKEN = BOT_TOKEN — هندلرهای هلپر روی منیجر ثبت می‌شود")
         return None
     try:
         from pyrogram.handlers import InlineQueryHandler, MessageHandler

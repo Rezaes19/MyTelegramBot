@@ -5506,99 +5506,126 @@ async def _translate_query_for_search(query: str) -> str:
 
 
 async def search_web_images(query: str, limit: int = 1):
-    """فقط دقیق‌ترین یک (یا چند) تصویر مرتبط"""
+    """جستجوی تصویر دقیق و مرتبط (امتیازدهی + فیلتر بی‌ربط)"""
     query = (query or "").strip()
     if not query:
         return []
     limit = max(1, min(int(limit or 1), 20))
     en_q = await _translate_query_for_search(query)
+    # کوئری‌های دقیق‌تر برای عکس واقعی (نه جلد کتاب/لوگو)
+    search_terms = []
+    for base in (en_q, query):
+        if not base:
+            continue
+        search_terms.append(base)
+        if not re.search(r"(photo|image|pic\b)", base, re.I):
+            search_terms.append(f"{base} photo")
+            search_terms.append(f"{base} animal" if re.search(
+                r"[\u0600-\u06FF]|snake|cat|dog|bird|fish|lion|tiger|cow|horse|monkey|bear|wolf|fox|eagle|shark|spider|insect",
+                base, re.I
+            ) or re.search(r"(گاو|مار|سگ|گربه|شیر|ببر|اسب|میگو|ماهی|عقاب|روباه|خرس|میمون|شتر|مرغ|خروس|گوسفند)", query) else f"{base}")
+    # یکتا
+    seen_t = set()
+    terms = []
+    for t in search_terms:
+        t = t.strip()
+        if t and t.lower() not in seen_t:
+            seen_t.add(t.lower())
+            terms.append(t)
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
     }
-    found = []
 
-    async def _add(u):
+    BAD_URL = (
+        "favicon", "logo", "sprite", "1x1", "pixel", "icon", "badge",
+        "amazon.com", "goodreads", "books.google", "bookcover", "book-cover",
+        "ebay.", "aliexpress", "pinterest.com/favicon",
+    )
+    BAD_TITLE = (
+        "book", "cover", "novel", "ebook", "pdf", "isbn", "paperback", "hardcover",
+        "logo", "icon", "clipart", "vector", "silhouette", "drawing", "cartoon",
+        "album cover", "movie poster", "stock photo id", "shutterstock",
+        "جلد", "کتاب", "رمان", "لوگو", "آیکون",
+    )
+
+    q_tokens = set()
+    for part in (query, en_q):
+        for tok in re.findall(r"[\w\u0600-\u06FF]{2,}", (part or "").lower()):
+            q_tokens.add(tok)
+    # انگلیسی رایج برای حیوانات فارسی
+    FA_EN = {
+        "مار": "snake", "گاو": "cow", "سگ": "dog", "گربه": "cat", "شیر": "lion",
+        "ببر": "tiger", "اسب": "horse", "ماهی": "fish", "مرغ": "chicken",
+        "خروس": "rooster", "شتر": "camel", "خرس": "bear", "روباه": "fox",
+        "میمون": "monkey", "عقاب": "eagle", "گرگ": "wolf", "موش": "mouse",
+        "کون": "ass butt", "سینه": "breast", "کص": "pussy", "کیر": "penis",
+    }
+    for fa, en in FA_EN.items():
+        if fa in query:
+            for t in en.split():
+                q_tokens.add(t.lower())
+
+    scored = []  # (score, url)
+
+    def _score(url: str, title: str = "") -> int:
+        low_u = (url or "").lower()
+        low_t = (title or "").lower()
+        if any(b in low_u for b in BAD_URL):
+            return -100
+        if any(b in low_t for b in BAD_TITLE):
+            return -50
+        sc = 0
+        for tok in q_tokens:
+            if tok in low_t:
+                sc += 4
+            if tok in low_u:
+                sc += 1
+        if re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low_u):
+            sc += 1
+        if "wikimedia" in low_u or "wikipedia" in low_u:
+            sc += 3
+        if any(x in low_u for x in ("cdn", "images", "img", "photo", "static")):
+            sc += 1
+        # جریمه جلد کتاب در URL
+        if any(x in low_u for x in ("book", "cover", "amazon", "goodreads")):
+            sc -= 8
+        return sc
+
+    def _add(u, title=""):
         if not u or not isinstance(u, str):
             return
         u = u.strip()
         if not u.startswith("http"):
             return
-        # فیلتر thumbnailهای بی‌ربط/آیکون
-        low = u.lower()
-        if any(x in low for x in ("favicon", "logo", "sprite", "1x1", "pixel")):
+        sc = _score(u, title)
+        if sc < 0:
             return
-        if u not in found:
-            found.append(u)
+        # جلوگیری از تکراری
+        for i, (s, existing) in enumerate(scored):
+            if existing == u:
+                if sc > s:
+                    scored[i] = (sc, u)
+                return
+        scored.append((sc, u))
 
-    timeout = aiohttp.ClientTimeout(total=20)
+    timeout = aiohttp.ClientTimeout(total=22)
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        # ----- 1) Wikipedia FA -----
+        # ----- Bing Images (اصلی — دقیق‌تر) -----
         try:
-            url = f"https://fa.wikipedia.org/api/rest_v1/page/summary/{quote(query)}"
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    thumb = (data.get("thumbnail") or {}).get("source")
-                    original = (data.get("originalimage") or {}).get("source")
-                    await _add(original or thumb)
-        except Exception as e:
-            logging.warning(f"wiki fa: {e}")
-
-        # برای تنوع، از ویکی فقط ۱ عکس بگیر و ادامه بده
-        # ----- 2) Wikipedia EN -----
-        try:
-            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(en_q)}"
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    thumb = (data.get("thumbnail") or {}).get("source")
-                    original = (data.get("originalimage") or {}).get("source")
-                    await _add(original or thumb)
-        except Exception as e:
-            logging.warning(f"wiki en: {e}")
-
-        if len(found) >= limit:
-            return found[:limit]
-
-        # ----- 3) DuckDuckGo instant -----
-        try:
-            for q in (query, en_q):
-                url = f"https://api.duckduckgo.com/?q={quote(q)}&format=json&no_redirect=1&no_html=1"
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                        img = data.get("Image") or data.get("ImageURL")
-                        if img:
-                            if img.startswith("/"):
-                                img = "https://duckduckgo.com" + img
-                            await _add(img)
-                        for t in (data.get("RelatedTopics") or [])[:5]:
-                            if isinstance(t, dict):
-                                i2 = (t.get("Icon") or {}).get("URL")
-                                if i2:
-                                    if i2.startswith("/"):
-                                        i2 = "https://duckduckgo.com" + i2
-                                    await _add(i2)
-                if len(found) >= limit:
-                    return found[:limit]
-        except Exception as e:
-            logging.warning(f"ddg: {e}")
-
-        # ----- 4) Bing images (اولین نتایج واقعی) -----
-        try:
-            # qft=photo برای عکس واقعی
-            for q in (en_q, query):
+            from bs4 import BeautifulSoup
+            for q in terms[:4]:
+                first = random.choice([1, 1, 11, 21])
                 search_url = (
-                    f"https://www.bing.com/images/search?q={quote(q)}&first={random.choice([1,11,21,31,41])}"
-                    f"&qft=+filterui:photo-photo+filterui:aspect-square&form=IRFLTR"
+                    f"https://www.bing.com/images/search?q={quote(q)}"
+                    f"&first={first}&form=HDRSC2&qft=+filterui:photo-photo"
                 )
-                async with session.get(search_url) as resp:
-                    if resp.status != 200:
-                        continue
-                    html = await resp.text()
                 try:
-                    from bs4 import BeautifulSoup
+                    async with session.get(search_url) as resp:
+                        if resp.status != 200:
+                            continue
+                        html = await resp.text()
                     soup = BeautifulSoup(html, "lxml")
                     for a in soup.select("a.iusc"):
                         m = a.get("m")
@@ -5608,35 +5635,91 @@ async def search_web_images(query: str, limit: int = 1):
                             data = json.loads(m)
                         except Exception:
                             continue
-                        u = data.get("murl") or ""
-                        t = (data.get("t") or data.get("desc") or "").lower()
-                        # ترجیح اگر عنوان به کوئری نزدیک باشد
-                        await _add(u)
-                        if len(found) >= limit:
-                            return found[:limit]
+                        u = data.get("murl") or data.get("turl") or ""
+                        t = (data.get("t") or data.get("desc") or "")
+                        _add(u, t)
+                    if len(scored) >= limit * 3:
+                        break
                 except Exception as e:
-                    logging.warning(f"bing parse: {e}")
+                    logging.warning(f"bing term={q[:30]}: {e}")
         except Exception as e:
             logging.warning(f"bing: {e}")
 
-        # ----- 5) Google images (fallback سبک) -----
+        # ----- Wikipedia فقط اگر عنوان صفحه به کوئری نزدیک باشد -----
+        for lang, qpage in (("fa", query), ("en", en_q)):
+            try:
+                url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(qpage)}"
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                    title = (data.get("title") or "")
+                    desc = (data.get("extract") or data.get("description") or "")
+                    # اگر صفحه بی‌ربط باشد رد کن
+                    sc_page = _score("https://wikipedia.org/" + title, title + " " + desc)
+                    if sc_page < 2 and not any(tok in title.lower() for tok in q_tokens if len(tok) > 2):
+                        continue
+                    thumb = (data.get("thumbnail") or {}).get("source")
+                    original = (data.get("originalimage") or {}).get("source")
+                    _add(original or thumb, title)
+            except Exception as e:
+                logging.warning(f"wiki {lang}: {e}")
+
+        # ----- DuckDuckGo -----
         try:
-            g_url = f"https://www.google.com/search?q={quote(en_q)}&tbm=isch&hl=en&safe=active"
+            for q in (en_q, query):
+                url = f"https://api.duckduckgo.com/?q={quote(q)}&format=json&no_redirect=1&no_html=1"
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                    img = data.get("Image") or ""
+                    if img:
+                        if img.startswith("/"):
+                            img = "https://duckduckgo.com" + img
+                        _add(img, data.get("Heading") or q)
+                    for t in (data.get("RelatedTopics") or []):
+                        if isinstance(t, dict):
+                            ic = (t.get("Icon") or {}).get("URL") or ""
+                            if ic:
+                                if ic.startswith("/"):
+                                    ic = "https://duckduckgo.com" + ic
+                                _add(ic, t.get("Text") or "")
+        except Exception as e:
+            logging.warning(f"ddg: {e}")
+
+        # ----- Google images (بدون safe سخت برای دقت بیشتر) -----
+        try:
+            g_url = f"https://www.google.com/search?q={quote(en_q + ' photo')}&tbm=isch&hl=en&safe=off"
             async with session.get(g_url) as resp:
                 if resp.status == 200:
                     html = await resp.text()
-                    # استخراج از AF_initDataKeys سخت است؛ regex روی https://...
                     for m in re.finditer(r"\"(https://[^\"]+\.(?:jpg|jpeg|png|webp)[^\"]*)\"", html, re.I):
                         u = m.group(1)
-                        if "gstatic" in u or "google" in u and "encrypted" in u:
+                        if "gstatic.com/favicon" in u:
                             continue
-                        await _add(u)
-                        if len(found) >= limit:
+                        if "encrypted-tbn" in u:
+                            continue
+                        _add(u, en_q)
+                        if len(scored) >= limit * 4:
                             break
         except Exception as e:
             logging.warning(f"google img: {e}")
 
-    return found[:limit]
+    # مرتب‌سازی بر اساس امتیاز مرتبط بودن
+    scored.sort(key=lambda x: x[0], reverse=True)
+    # حداقل امتیاز معقول
+    good = [u for sc, u in scored if sc >= 2]
+    if not good:
+        good = [u for sc, u in scored if sc >= 0]
+    # یکتا نگه دار
+    out = []
+    for u in good:
+        if u not in out:
+            out.append(u)
+        if len(out) >= limit:
+            break
+    return out
 
 
 async def download_image_bytes(url: str):

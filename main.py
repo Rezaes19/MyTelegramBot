@@ -2530,6 +2530,7 @@ MUTED_USERS = {}
 USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
 PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عکس پروفایل
+PROFILE_PHOTO_CLOCK_BASE = {}  # user_id -> path عکس اصلی بدون قاب
 ROTATING_NAMES = {}
 ROTATING_NAME_INTERVAL = {}
 ROTATING_NAME_STATUS = {}
@@ -3376,60 +3377,65 @@ async def rotate_profile_music_task(client: Client, user_id: int):
 
 
 async def build_profile_clock_image(client, user_id: int) -> str:
-    """ساخت عکس پروفایل با قاب ساعت دور حاشیه (هر دقیقه آپدیت)"""
-    from PIL import Image, ImageDraw, ImageFont
+    """قاب ساعت روی عکس اصلی پروفایل — فقط ۲ عقربه (دقیقه + ثانیه) وقت تهران"""
+    from PIL import Image, ImageDraw
     import math
     size = 640
     path_out = f"/tmp/profile_clock_{user_id}.png"
-    # عکس فعلی پروفایل
+
+    # همیشه از عکس پایه (اصلی) استفاده کن نه از عکس قبلیِ ساعت‌دار
     base = None
+    base_path = PROFILE_PHOTO_CLOCK_BASE.get(user_id)
     try:
-        photos = []
-        async for p in client.get_chat_photos("me", limit=1):
-            photos.append(p)
-        if photos:
-            p0 = photos[0]
-            dl = await client.download_media(p0, file_name=f"/tmp/pf_src_{user_id}.jpg")
-            if dl and os.path.exists(dl):
-                base = Image.open(dl).convert("RGBA")
-                base = base.resize((size, size), Image.LANCZOS)
-    except Exception as e:
-        logging.warning(f"profile photo dl: {e}")
+        if base_path and os.path.exists(base_path):
+            base = Image.open(base_path).convert("RGBA").resize((size, size), Image.LANCZOS)
+    except Exception:
+        base = None
+    if base is None:
+        try:
+            photos = []
+            async for p in client.get_chat_photos("me", limit=1):
+                photos.append(p)
+            if photos:
+                dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                if dl and os.path.exists(dl):
+                    PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
+                    base = Image.open(dl).convert("RGBA").resize((size, size), Image.LANCZOS)
+        except Exception as e:
+            logging.warning(f"profile photo dl: {e}")
     if base is None:
         base = Image.new("RGBA", (size, size), (30, 30, 30, 255))
 
-    # ماسک دایره برای خود عکس
     mask = Image.new("L", (size, size), 0)
     md = ImageDraw.Draw(mask)
-    margin = 48
+    margin = 52
     md.ellipse((margin, margin, size - margin, size - margin), fill=255)
     circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     circ.paste(base, (0, 0), mask=mask)
 
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 255))
     canvas.paste(circ, (0, 0), circ)
-
     draw = ImageDraw.Draw(canvas)
     cx = cy = size // 2
-    outer_r = size // 2 - 6
-    inner_r = outer_r - 28
+    outer_r = size // 2 - 8
+    inner_r = outer_r - 30
 
-    # حلقه بیرونی
-    draw.ellipse((cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r), outline=(220, 220, 220, 255), width=4)
-    draw.ellipse((cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r), outline=(180, 180, 180, 180), width=2)
+    draw.ellipse((cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r), outline=(230, 230, 230, 255), width=5)
+    draw.ellipse((cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r), outline=(160, 160, 160, 200), width=2)
 
-    # عقربه‌ها / تیک‌های ساعت
+    # وقت واقعی تهران
     now = datetime.now(TEHRAN_TIMEZONE)
-    h, m, s = now.hour % 12, now.minute, now.second
+    m, s = now.minute, now.second
+
+    # تیک‌های دقیقه (فقط خطوط کوتاه — نه عقربه اضافه)
     for i in range(60):
         ang = math.radians(i * 6 - 90)
-        r1 = outer_r - (14 if i % 5 == 0 else 8)
-        r2 = outer_r - 2
+        long = (i % 5 == 0)
+        r1 = outer_r - (16 if long else 9)
+        r2 = outer_r - 3
         x1, y1 = cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)
         x2, y2 = cx + r2 * math.cos(ang), cy + r2 * math.sin(ang)
-        w = 3 if i % 5 == 0 else 1
-        col = (240, 240, 240, 255) if i % 5 == 0 else (160, 160, 160, 200)
-        draw.line([(x1, y1), (x2, y2)], fill=col, width=w)
+        draw.line([(x1, y1), (x2, y2)], fill=(230, 230, 230, 255) if long else (140, 140, 140, 220), width=3 if long else 1)
 
     def hand(angle_deg, length, width, color):
         ang = math.radians(angle_deg - 90)
@@ -3437,31 +3443,19 @@ async def build_profile_clock_image(client, user_id: int) -> str:
         y = cy + length * math.sin(ang)
         draw.line([(cx, cy), (x, y)], fill=color, width=width)
 
-    hand(h * 30 + m * 0.5, inner_r * 0.45, 6, (255, 255, 255, 255))
-    hand(m * 6, inner_r * 0.65, 4, (230, 230, 230, 255))
-    hand(s * 6, inner_r * 0.72, 2, (255, 80, 80, 255))
-    # مرکز
-    draw.ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 255, 255, 255))
-
-    # زمان دیجیتال پایین
-    try:
-        font = ImageFont.load_default()
-    except Exception:
-        font = None
-    tstr = now.strftime("%H:%M")
-    try:
-        draw.text((cx - 18, size - 36), tstr, fill=(220, 220, 220, 255), font=font)
-    except Exception:
-        pass
+    # فقط ۲ عقربه: دقیقه (بزرگ) + ثانیه (کوچک)
+    hand(m * 6 + s * 0.1, inner_r * 0.62, 5, (255, 255, 255, 255))  # دقیقه
+    hand(s * 6, inner_r * 0.78, 2, (255, 70, 70, 255))  # ثانیه
+    draw.ellipse((cx - 7, cy - 7, cx + 7, cy + 7), fill=(255, 255, 255, 255))
 
     canvas = canvas.convert("RGB")
-    canvas.save(path_out, "PNG", quality=95)
+    canvas.save(path_out, "PNG")
     return path_out
 
 
 async def update_profile_photo_clock_task(client: Client, user_id: int):
-    """هر دقیقه عکس پروفایل را با قاب ساعت به‌روز می‌کند"""
-    await asyncio.sleep(5)
+    """هر دقیقه عکس پروفایل را جایگزین می‌کند (عکس جدید اضافه انباشته نمی‌شود)"""
+    await asyncio.sleep(4)
     while user_id in ACTIVE_BOTS:
         try:
             if not PROFILE_PHOTO_CLOCK.get(user_id, False):
@@ -3469,13 +3463,54 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 continue
             until = PROFILE_FLOOD_UNTIL.get(user_id, 0)
             if time.time() < until:
-                await asyncio.sleep(min(60, max(5, until - time.time())))
+                await asyncio.sleep(min(60, max(3, until - time.time())))
                 continue
+
+            # اگر پایه نداریم، یک‌بار عکس فعلی را به‌عنوان اصل ذخیره کن
+            if not PROFILE_PHOTO_CLOCK_BASE.get(user_id) or not os.path.exists(PROFILE_PHOTO_CLOCK_BASE.get(user_id) or ""):
+                try:
+                    photos = []
+                    async for p in client.get_chat_photos("me", limit=1):
+                        photos.append(p)
+                    if photos:
+                        dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                        if dl:
+                            PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
+                except Exception as e:
+                    logging.warning(f"save base profile photo: {e}")
+
             path = await build_profile_clock_image(client, user_id)
             if path and os.path.exists(path):
                 try:
+                    # لیست عکس‌های قبلی
+                    old_ids = []
+                    try:
+                        async for p in client.get_chat_photos("me", limit=8):
+                            fid = getattr(p, "file_id", None)
+                            if fid:
+                                old_ids.append(fid)
+                    except Exception:
+                        pass
+
                     await client.set_profile_photo(photo=path)
-                    logging.info(f"profile photo clock updated uid={user_id}")
+                    logging.info(f"profile photo clock set uid={user_id} tehran={datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M:%S')}")
+
+                    # حذف عکس‌های قدیمی تا انباشته / چندعقربه دیده نشود
+                    await asyncio.sleep(1.2)
+                    try:
+                        # جدیدترین را نگه دار، بقیه را پاک کن
+                        current = []
+                        async for p in client.get_chat_photos("me", limit=10):
+                            current.append(p)
+                        for p in current[1:]:
+                            try:
+                                fid = getattr(p, "file_id", None)
+                                if fid:
+                                    await client.delete_profile_photos(fid)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logging.warning(f"delete old profile photos: {e}")
                 except Exception as e:
                     err = str(e)
                     logging.warning(f"set_profile_photo clock: {e}")
@@ -3484,17 +3519,19 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                         sec = int(m.group(1)) if m else 300
                         PROFILE_FLOOD_UNTIL[user_id] = time.time() + sec + 5
                 try:
-                    os.remove(path)
+                    if path and os.path.exists(path):
+                        os.remove(path)
                 except Exception:
                     pass
-            # تا دقیقه بعد
-            wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.3
-            await asyncio.sleep(max(5, wait))
+
+            # هم‌تراز با دقیقه تهران
+            wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.25
+            await asyncio.sleep(max(3, wait))
         except asyncio.CancelledError:
             break
         except Exception as e:
             logging.warning(f"update_profile_photo_clock_task: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(20)
 
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -7526,10 +7563,21 @@ async def reply_based_controller(client, message):
     if cmd in (".ساعت پروفایل روشن", "ساعت پروفایل روشن"):
         PROFILE_PHOTO_CLOCK[user_id] = True
         try:
+            photos = []
+            async for p in client.get_chat_photos("me", limit=1):
+                photos.append(p)
+            if photos:
+                dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                if dl:
+                    PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
+        except Exception:
+            pass
+        try:
             persist_all_user_settings(user_id)
         except Exception:
             pass
-        await message.edit_text("✅ ساعت گرافیکی پروفایل روشن شد.\nهر دقیقه عکس پروفایل با قاب ساعت به‌روز می‌شود.")
+        await message.edit_text("✅ ساعت پروفایل روشن شد (تهران — عقربه دقیقه و ثانیه).")
+        return
         return
     if cmd in (".ساعت پروفایل خاموش", "ساعت پروفایل خاموش"):
         PROFILE_PHOTO_CLOCK[user_id] = False
@@ -8996,15 +9044,34 @@ async def callback_panel_handler(client, callback):
             return
         new_state = not PROFILE_PHOTO_CLOCK.get(target_user_id, False)
         PROFILE_PHOTO_CLOCK[target_user_id] = new_state
+        # هنگام روشن شدن، عکس فعلی را به‌عنوان پایه ذخیره کن
+        if new_state:
+            try:
+                cl = None
+                if target_user_id in ACTIVE_BOTS:
+                    cl = ACTIVE_BOTS[target_user_id][0]
+                if cl:
+                    photos = []
+                    async for p in cl.get_chat_photos("me", limit=1):
+                        photos.append(p)
+                    if photos:
+                        dl = await cl.download_media(photos[0], file_name=f"/tmp/pf_base_{target_user_id}.jpg")
+                        if dl:
+                            PROFILE_PHOTO_CLOCK_BASE[target_user_id] = dl
+            except Exception as e:
+                logging.warning(f"capture base on toggle: {e}")
         try:
             persist_all_user_settings(target_user_id)
         except Exception:
             pass
         await callback.answer("ساعت پروفایل: " + ("روشن ✅" if new_state else "خاموش ❌"))
         try:
-            await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
+            await edit_panel_colored(callback, target_user_id, 1)
         except Exception:
-            pass
+            try:
+                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
+            except Exception:
+                pass
         return
 
     if data.startswith("song_dl_"):

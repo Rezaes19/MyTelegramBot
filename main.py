@@ -2239,6 +2239,8 @@ data_manager = DataManager(DATA_FILE)
 # =============================================
 ACTIVE_BOTS = {}
 ACTIVE_ENEMIES = {}
+ACTIVE_FRIENDS = {}
+FRIEND_REPLY_QUEUES = {}
 ENEMY_REPLY_QUEUES = {}
 SECRETARY_REPLY_MESSAGE = "آفلاینم فعلا بعدا جواب میدم"
 SECRETARY_MODE_STATUS = {}
@@ -2608,6 +2610,10 @@ def apply_user_settings_from_db(user_id: int):
         FIRST_COMMENT_STATUS[user_id] = bool(settings.get("first_comment", False))
         FIRST_COMMENT_TEXT[user_id] = settings.get("first_comment_text", "🔥") or "🔥"
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
+        try:
+            ACTIVE_FRIENDS[user_id] = set(tuple(item) for item in user_data.get("friends", []))
+        except Exception:
+            ACTIVE_FRIENDS[user_id] = set()
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
         AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
         USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))

@@ -801,6 +801,128 @@ async def cheat_send_dice(client, chat_id: int, emoji: str, targets: set, max_tr
     return False, None, max_tries
 
 
+FRIEND_REPLIES = [
+    "رفیق جان دلم برات تنگ شده 💙",
+    "هر جا باشی پشتتم داداش 🤝",
+    "دوست داشتنت جزو عادت‌های قشنگ منه 🌸",
+    "بودنت حال آدم رو خوب می‌کنه ✨",
+    "قربون اون قلب مهربونت 🫶",
+    "هیچ‌وقت تنهات نمی‌ذارم رفیق 💪",
+    "حرفات برام ارزشمنده، همیشه گوش می‌دم 👂",
+    "دنیای بدون دوستایی مثل تو بی‌معنیه 🌍",
+    "لبخندت روزمو می‌سازه 😊",
+    "هر وقت خواستی من اینجام 🌙",
+    "رفاقت با تو یه نعمت واقعیه 🙏",
+    "دمت گرم که هستی 🔥",
+    "بعضی دوستی‌ها مثل طلا می‌مونن؛ مثل مال ما 🥇",
+    "از ته دل برات احترام قائلم 🤍",
+    "همیشه بهترین‌ها نصیبت بشه دوست خوبم 🌟",
+    "با تو حرف زدن آرومم می‌کنه 🍃",
+    "تو از اونایی هستی که کم پیدا می‌شن 💎",
+    "هر روزت پر از انرژی مثبت باشه ☀️",
+    "قربون وفاداریت رفیق 🫂",
+    "یادت نره چقدر برات ارزش قائلم 💌",
+    "در هر حال و هوایی کنارت می‌مونم 🌈",
+    "صداقتت برام گرونه 🫡",
+    "لحظه‌های خوبمون تموم‌نشدنیه 📸",
+    "تو تکه‌ای از آرامش روزانه‌ای 🕊️",
+    "هیچ فاصله‌ای دوستی ما رو کم‌رنگ نمی‌کنه 💫",
+    "خوشحالم که تورو دارم 🥰",
+    "برای تو هزار تا دلیل دارم که بگم ممنونم 🙌",
+    "رفیق واقعی یعنی تو 🎯",
+    "قلبم برای دوستی‌مون جا داره همیشه ❤️",
+    "تو باعث افتخارمی 🏅",
+    "حرف نداره رفاقتت 👌",
+    "با تو بودن مثل خونه خود آدمه 🏠",
+    "انرژی مثبتت مسریه ⚡",
+    "تو بهترین اتفاقی بودی که افتاد برام 🍀",
+    "قدر تو رو می‌دونم، همیشه 📿",
+    "دلم می‌خواد همیشه بخندی 😁",
+    "دوستی ما از جنس موندنه 🕰️",
+    "هر پیام تو یه لبخنده برای من 📲",
+    "با تو غصه‌ها کوچیک می‌شن 🎈",
+    "تو تکیه‌گاه امنمی 🛡️",
+    "ممنون که هستی و می‌مونی 🌹",
+    "دوست دارم به معنی واقعی کلمه 💞",
+    "بعضی آدما نورن؛ تو یکی از اونایی 💡",
+    "رفاقت یعنی بی‌ریا بودن، مثل تو 🌿",
+    "تو دلیل لبخندای بی‌دلیل منی 😏",
+    "همیشه برات دعا می‌کنم 🕌",
+    "تو بخش قشنگ داستان زندگی منی 📖",
+    "با تو حتی سکوت هم قشنگه 🤫",
+    "برای تو وقت می‌ذارم چون می‌ارزی ⏳",
+    "دلم تنگ می‌شه وقتی دیر خبر می‌دی 😢",
+    "تو ستاره ثابت آسمون رفاقتی ⭐",
+    "مراقب خودت باش، برام مهمه 🩹",
+    "رفیق جون، دنیا با تو قشنگ‌تره 🌺",
+    "تو رو دوست دارم بدون شرط 💖",
+    "هر جا بری دعای من باهات میاد ✈️",
+    "هیچ‌کس جاتو نمی‌گیره 👑",
+    "یادته چقدر خندیدیم با هم؟ 😂",
+    "پیامت مثل یه فنجون چای گرمه ☕",
+    "تو بهترین شنونده‌ای که می‌شناسم 🎧",
+    "دوست دارم بدونی تنها نیستی 🌐",
+    "تو روحیه‌ی منی وقتی کم میارم 💪",
+    "رفاقت ما از جنس ماندگاره 🏛️",
+    "قربون خنده‌ی قشنگت 😆",
+    "هر وقت لازم داشتی، یک تماس کافیه 📞",
+    "تو سرمایه‌ی عاطفی منی 💰",
+    "دوست خوبم، عاشق روح بزرگتم 🦋",
+    "لبخند بزن، دنیا قشنگه 🌞",
+    "رفیق من، نور چشمی 👁️",
+    "با تو بودن یعنی احساس امنیت 🔐",
+    "تو بهترین اتفاق این سال‌های منی 📅",
+    "تو رو به هیچ‌کس تعویض نمی‌کنم 🔄",
+    "هر پیام صبح بخیرت روزمو می‌سازه 🌅",
+    "دوست دارم، ساده و بی‌حاشیه 🤍",
+    "رفیق جانی، قربونت برم 🌹",
+    "با تو خندیدن از هر چیزی بهتره 🤪",
+    "دوست دارم همیشه سرت سلامت باشه 🩺",
+    "هیچ غمی با حضور تو دوام نمیاره 🧨",
+    "قربون اون قلب پاکت 💓",
+    "تو گنج پنهان زندگی منی 🗺️",
+    "هر روز خدا رو شکر می‌کنم بابت تو 🙌",
+    "رفیق من، تا ابد ♾️",
+    "با تو بودن مثل نفس کشیدن تو هوای تازه‌ست 🌬️",
+    "تو تکیه‌گاه قلبمی 💝",
+    "همیشه برات می‌جنگم 🗡️",
+    "دوست دارم بدونی چقدر خاصی 🎁",
+    "آرامش صدات برام داروه 🎵",
+    "هیچ چیز جای حرف زدن با تو رو نمی‌گیره 🗨️",
+    "تو رو در شادی و غم می‌خوام کنارم 🎭",
+    "هر لحظه کنار تو خاطره‌ست 📷",
+    "دوست دارم بدون اینکه دلیل بیارم 💫",
+    "بعضی دوستی‌ها تقدیره؛ مال ما هم همینه ✨",
+    "تو آرامش بعد از طوفانی 🌊",
+    "دوستی با تو افتخاره برام 🎓",
+    "تو رو به عنوان دوست زندگی انتخاب کردم 📌",
+    "هر روز که می‌گذره دوستی‌مون محکم‌تره 🧱",
+    "دمت گرم که مراقب حالمی 🩹",
+    "برای موفقیتت از ته دل خوشحالم 🥂",
+    "با تو حتی مسیر سخت هم آسونه 🛤️",
+    "دلم می‌خواد دنیا بهت لبخند بزنه 🌍",
+    "ممنون که تحملم کردی همیشه 🙈",
+    "تو دلیل ایمان من به رفاقتی 🌟",
+    "دوست داشتنت کار راحته برای من 😄",
+    "هیچ‌وقت فراموشت نمی‌کنم دوست عزیزم 🕊️",
+    "تو از اون دوستایی هستی که باید نگه داشت 🔒",
+    "با تو شدن یعنی خوشحال شدن 🥳",
+    "حرفات تو گوشه‌ی ذهنمه همیشه 🧩",
+    "تو تکه‌ای از روزای خوب منی ☀️",
+    "رفیق واقعی در روزای سخت پیدا می‌شه؛ تو همونی 🏔️",
+    "قدرت دوستی ما تو سادگیشه 🪴",
+    "هر بار که می‌ای حس خوبی دارم 🌸",
+    "تو رو دوست دارم چون خودتی 🌈",
+    "هیچ روزی بدون فکر به تو تموم نمی‌شه 💭",
+    "تو تکه گم‌شده‌ی پازل آرامشمی 🧩",
+    "همیشه یه جای خالی برات دارم 🪑",
+    "با تو غصه هم قشنگه 🎭",
+    "دوست دارم بدونی که برات ارزش قائلم 📿",
+    "تو نوری وسط روزای شلوغ منی 💡",
+    "رفاقت یعنی تو 🎯",
+    "تا آخرش با همیم 🚀",
+]
+
 ENEMY_REPLIES = [
     "کیرم تو رحم اجاره ای و خونی مالی مادرت",
     "دو میلیون شبی پول ویلا بدم تا مادرتو تو گوشه کناراش بگام",
@@ -2399,6 +2521,10 @@ def load_all_states():
         FIRST_COMMENT_STATUS[user_id] = bool(settings.get("first_comment", False))
         FIRST_COMMENT_TEXT[user_id] = settings.get("first_comment_text", "🔥") or "🔥"
         ACTIVE_ENEMIES[user_id] = set(tuple(item) for item in user_data.get("enemies", []))
+        try:
+            ACTIVE_FRIENDS[user_id] = set(tuple(item) for item in user_data.get("friends", []))
+        except Exception:
+            ACTIVE_FRIENDS[user_id] = set()
         MUTED_USERS[user_id] = set(tuple(item) for item in user_data.get("muted", []))
         AUTO_REACTION_TARGETS[user_id] = user_data.get("reactions", {}) or {}
         USERS_REPLIED_IN_SECRETARY[user_id] = set(user_data.get("replied_users", []))
@@ -3950,6 +4076,19 @@ async def outgoing_message_modifier(client, message):
     except Exception as e:
         logging.error(f"outgoing_message_modifier: {e}")
 
+
+
+
+async def friend_handler(client, message):
+    """پاسخ صمیمانه به دوستان ثبت‌شده"""
+    try:
+        user_id = client.me.id
+        if user_id not in FRIEND_REPLY_QUEUES or not FRIEND_REPLY_QUEUES[user_id]:
+            FRIEND_REPLY_QUEUES[user_id] = random.sample(FRIEND_REPLIES, len(FRIEND_REPLIES))
+        reply_text = FRIEND_REPLY_QUEUES[user_id].pop(0)
+        await message.reply_text(reply_text)
+    except Exception as e:
+        logging.warning(f"friend_handler: {e}")
 
 
 async def enemy_handler(client, message):
@@ -5506,168 +5645,58 @@ async def _translate_query_for_search(query: str) -> str:
 
 
 async def search_web_images(query: str, limit: int = 1):
-    """جستجوی تصویر دقیق و مرتبط (امتیازدهی + فیلتر بی‌ربط)"""
+    """جستجوی ساده و مرتبط — یک تصویر خوب"""
     query = (query or "").strip()
     if not query:
         return []
-    limit = max(1, min(int(limit or 1), 20))
+    limit = max(1, min(int(limit or 1), 5))
     en_q = await _translate_query_for_search(query)
-    # کوئری‌های دقیق‌تر برای عکس واقعی (نه جلد کتاب/لوگو)
-    search_terms = []
-    for base in (en_q, query):
-        if not base:
-            continue
-        search_terms.append(base)
-        if not re.search(r"(photo|image|pic\b)", base, re.I):
-            search_terms.append(f"{base} photo")
-            search_terms.append(f"{base} animal" if re.search(
-                r"[\u0600-\u06FF]|snake|cat|dog|bird|fish|lion|tiger|cow|horse|monkey|bear|wolf|fox|eagle|shark|spider|insect",
-                base, re.I
-            ) or re.search(r"(گاو|مار|سگ|گربه|شیر|ببر|اسب|میگو|ماهی|عقاب|روباه|خرس|میمون|شتر|مرغ|خروس|گوسفند)", query) else f"{base}")
-    # یکتا
-    seen_t = set()
-    terms = []
-    for t in search_terms:
-        t = t.strip()
-        if t and t.lower() not in seen_t:
-            seen_t.add(t.lower())
-            terms.append(t)
-
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
     }
+    found = []
 
-    BAD_URL = (
-        "favicon", "logo", "sprite", "1x1", "pixel", "icon", "badge",
-        "amazon.com", "goodreads", "books.google", "bookcover", "book-cover",
-        "ebay.", "aliexpress", "pinterest.com/favicon",
-    )
-    BAD_TITLE = (
-        "book", "cover", "novel", "ebook", "pdf", "isbn", "paperback", "hardcover",
-        "logo", "icon", "clipart", "vector", "silhouette", "drawing", "cartoon",
-        "album cover", "movie poster", "stock photo id", "shutterstock",
-        "جلد", "کتاب", "رمان", "لوگو", "آیکون",
-    )
-
-    q_tokens = set()
-    for part in (query, en_q):
-        for tok in re.findall(r"[\w\u0600-\u06FF]{2,}", (part or "").lower()):
-            q_tokens.add(tok)
-    # انگلیسی رایج برای حیوانات فارسی
-    FA_EN = {
-        "مار": "snake", "گاو": "cow", "سگ": "dog", "گربه": "cat", "شیر": "lion",
-        "ببر": "tiger", "اسب": "horse", "ماهی": "fish", "مرغ": "chicken",
-        "خروس": "rooster", "شتر": "camel", "خرس": "bear", "روباه": "fox",
-        "میمون": "monkey", "عقاب": "eagle", "گرگ": "wolf", "موش": "mouse",
-        "کون": "ass butt", "سینه": "breast", "کص": "pussy", "کیر": "penis",
-    }
-    for fa, en in FA_EN.items():
-        if fa in query:
-            for t in en.split():
-                q_tokens.add(t.lower())
-
-    scored = []  # (score, url)
-
-    def _score(url: str, title: str = "") -> int:
-        low_u = (url or "").lower()
-        low_t = (title or "").lower()
-        if any(b in low_u for b in BAD_URL):
-            return -100
-        if any(b in low_t for b in BAD_TITLE):
-            return -50
-        sc = 0
-        for tok in q_tokens:
-            if tok in low_t:
-                sc += 4
-            if tok in low_u:
-                sc += 1
-        if re.search(r"\.(jpg|jpeg|png|webp)(\?|$)", low_u):
-            sc += 1
-        if "wikimedia" in low_u or "wikipedia" in low_u:
-            sc += 3
-        if any(x in low_u for x in ("cdn", "images", "img", "photo", "static")):
-            sc += 1
-        # جریمه جلد کتاب در URL
-        if any(x in low_u for x in ("book", "cover", "amazon", "goodreads")):
-            sc -= 8
-        return sc
-
-    def _add(u, title=""):
+    async def _add(u):
         if not u or not isinstance(u, str):
             return
         u = u.strip()
         if not u.startswith("http"):
             return
-        sc = _score(u, title)
-        if sc < 0:
+        low = u.lower()
+        if any(x in low for x in ("favicon", "logo", "sprite", "1x1", "pixel")):
             return
-        # جلوگیری از تکراری
-        for i, (s, existing) in enumerate(scored):
-            if existing == u:
-                if sc > s:
-                    scored[i] = (sc, u)
-                return
-        scored.append((sc, u))
+        if u not in found:
+            found.append(u)
 
-    timeout = aiohttp.ClientTimeout(total=22)
+    timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        # ----- Bing Images (اصلی — دقیق‌تر) -----
         try:
-            from bs4 import BeautifulSoup
-            for q in terms[:4]:
-                first = random.choice([1, 1, 11, 21])
-                search_url = (
-                    f"https://www.bing.com/images/search?q={quote(q)}"
-                    f"&first={first}&form=HDRSC2&qft=+filterui:photo-photo"
-                )
-                try:
-                    async with session.get(search_url) as resp:
-                        if resp.status != 200:
-                            continue
-                        html = await resp.text()
-                    soup = BeautifulSoup(html, "lxml")
-                    for a in soup.select("a.iusc"):
-                        m = a.get("m")
-                        if not m:
-                            continue
-                        try:
-                            data = json.loads(m)
-                        except Exception:
-                            continue
-                        u = data.get("murl") or data.get("turl") or ""
-                        t = (data.get("t") or data.get("desc") or "")
-                        _add(u, t)
-                    if len(scored) >= limit * 3:
-                        break
-                except Exception as e:
-                    logging.warning(f"bing term={q[:30]}: {e}")
-        except Exception as e:
-            logging.warning(f"bing: {e}")
-
-        # ----- Wikipedia فقط اگر عنوان صفحه به کوئری نزدیک باشد -----
-        for lang, qpage in (("fa", query), ("en", en_q)):
-            try:
-                url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(qpage)}"
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        continue
+            url = f"https://fa.wikipedia.org/api/rest_v1/page/summary/{quote(query)}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
                     data = await resp.json()
-                    title = (data.get("title") or "")
-                    desc = (data.get("extract") or data.get("description") or "")
-                    # اگر صفحه بی‌ربط باشد رد کن
-                    sc_page = _score("https://wikipedia.org/" + title, title + " " + desc)
-                    if sc_page < 2 and not any(tok in title.lower() for tok in q_tokens if len(tok) > 2):
-                        continue
                     thumb = (data.get("thumbnail") or {}).get("source")
                     original = (data.get("originalimage") or {}).get("source")
-                    _add(original or thumb, title)
-            except Exception as e:
-                logging.warning(f"wiki {lang}: {e}")
-
-        # ----- DuckDuckGo -----
+                    await _add(original or thumb)
+        except Exception as e:
+            logging.warning(f"wiki fa: {e}")
+        if len(found) >= limit:
+            return found[:limit]
         try:
-            for q in (en_q, query):
+            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(en_q)}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    thumb = (data.get("thumbnail") or {}).get("source")
+                    original = (data.get("originalimage") or {}).get("source")
+                    await _add(original or thumb)
+        except Exception as e:
+            logging.warning(f"wiki en: {e}")
+        if len(found) >= limit:
+            return found[:limit]
+        try:
+            for q in (query, en_q):
                 url = f"https://api.duckduckgo.com/?q={quote(q)}&format=json&no_redirect=1&no_html=1"
                 async with session.get(url) as resp:
                     if resp.status != 200:
@@ -5677,49 +5706,34 @@ async def search_web_images(query: str, limit: int = 1):
                     if img:
                         if img.startswith("/"):
                             img = "https://duckduckgo.com" + img
-                        _add(img, data.get("Heading") or q)
-                    for t in (data.get("RelatedTopics") or []):
-                        if isinstance(t, dict):
-                            ic = (t.get("Icon") or {}).get("URL") or ""
-                            if ic:
-                                if ic.startswith("/"):
-                                    ic = "https://duckduckgo.com" + ic
-                                _add(ic, t.get("Text") or "")
+                        await _add(img)
+                    if len(found) >= limit:
+                        return found[:limit]
         except Exception as e:
             logging.warning(f"ddg: {e}")
-
-        # ----- Google images (بدون safe سخت برای دقت بیشتر) -----
         try:
-            g_url = f"https://www.google.com/search?q={quote(en_q + ' photo')}&tbm=isch&hl=en&safe=off"
-            async with session.get(g_url) as resp:
-                if resp.status == 200:
+            from bs4 import BeautifulSoup
+            for q in (en_q, query):
+                search_url = f"https://www.bing.com/images/search?q={quote(q)}&form=HDRSC2"
+                async with session.get(search_url) as resp:
+                    if resp.status != 200:
+                        continue
                     html = await resp.text()
-                    for m in re.finditer(r"\"(https://[^\"]+\.(?:jpg|jpeg|png|webp)[^\"]*)\"", html, re.I):
-                        u = m.group(1)
-                        if "gstatic.com/favicon" in u:
-                            continue
-                        if "encrypted-tbn" in u:
-                            continue
-                        _add(u, en_q)
-                        if len(scored) >= limit * 4:
-                            break
+                soup = BeautifulSoup(html, "lxml")
+                for a in soup.select("a.iusc"):
+                    m = a.get("m")
+                    if not m:
+                        continue
+                    try:
+                        data = json.loads(m)
+                    except Exception:
+                        continue
+                    await _add(data.get("murl") or "")
+                    if len(found) >= limit:
+                        return found[:limit]
         except Exception as e:
-            logging.warning(f"google img: {e}")
-
-    # مرتب‌سازی بر اساس امتیاز مرتبط بودن
-    scored.sort(key=lambda x: x[0], reverse=True)
-    # حداقل امتیاز معقول
-    good = [u for sc, u in scored if sc >= 2]
-    if not good:
-        good = [u for sc, u in scored if sc >= 0]
-    # یکتا نگه دار
-    out = []
-    for u in good:
-        if u not in out:
-            out.append(u)
-        if len(out) >= limit:
-            break
-    return out
+            logging.warning(f"bing: {e}")
+    return found[:limit]
 
 
 async def download_image_bytes(url: str):
@@ -7886,6 +7900,33 @@ async def reply_based_controller(client, message):
         await message.edit_text("🏳️ دشمن حذف شد.")
         return
 
+    if cmd in ("دوست روشن", ".دوست روشن"):
+        s = ACTIVE_FRIENDS.get(user_id, set())
+        s.add((target_id, message.chat.id))
+        ACTIVE_FRIENDS[user_id] = s
+        try:
+            data_manager.update_user_data(user_id, {"friends": [list(x) for x in s]})
+        except Exception:
+            pass
+        await message.edit_text("💗 به لیست دوستان اضافه شد.")
+        return
+
+    if cmd in ("دوست خاموش", ".دوست خاموش"):
+        s = ACTIVE_FRIENDS.get(user_id, set())
+        s.discard((target_id, message.chat.id))
+        ACTIVE_FRIENDS[user_id] = s
+        try:
+            data_manager.update_user_data(user_id, {"friends": [list(x) for x in s]})
+        except Exception:
+            pass
+        await message.edit_text("🤍 از لیست دوستان حذف شد.")
+        return
+
+    if cmd in ("لیست دوستان", ".لیست دوستان"):
+        s = ACTIVE_FRIENDS.get(user_id, set()) or set()
+        await message.edit_text(f"💗 تعداد دوستان فعال: {len(s)}")
+        return
+
     if cmd == "بلاک روشن":
         await client.block_user(target_id)
         await message.edit_text("🚫 کاربر بلاک شد.")
@@ -7995,6 +8036,8 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
 
     enemy_filter = filters.create(lambda _, c, m: bool(m.from_user and ((m.from_user.id, m.chat.id) in ACTIVE_ENEMIES.get(c.me.id, set()) or GLOBAL_ENEMY_STATUS.get(c.me.id))))
     client.add_handler(MessageHandler(enemy_handler, enemy_filter & ~filters.me), group=1)
+    friend_filter = filters.create(lambda _, c, m: bool(m.from_user and (m.from_user.id, m.chat.id) in ACTIVE_FRIENDS.get(c.me.id, set())))
+    client.add_handler(MessageHandler(friend_handler, friend_filter & ~filters.me), group=1)
 
     client.add_handler(MessageHandler(pv_filter_media_handler, filters.private & ~filters.me), group=0)
     client.add_handler(MessageHandler(secretary_auto_reply_handler, filters.private & ~filters.me), group=1)
@@ -8118,6 +8161,15 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🚫 فیلتر استیکر پیوی", f"panel_page_42_{user_id}", style="primary"),
                 _styled_btn("🎞 فیلتر گیف پیوی", f"panel_page_43_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("⚔️ دشمن", f"panel_page_44_{user_id}", style="primary"),
+                _styled_btn("💗 دوست", f"panel_page_45_{user_id}", style="primary"),
+                _styled_btn("👍 ریاکشن", f"panel_page_46_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("🔁 تکرار", f"panel_page_47_{user_id}", style="primary"),
+                _styled_btn("🔇 سکوت/بلاک", f"panel_page_48_{user_id}", style="primary"),
             ],
             [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
         ]
@@ -8256,7 +8308,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 42: 1, 43: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -8274,6 +8326,17 @@ def generate_panel_markup(user_id, page=1):
         ])
     return InlineKeyboardMarkup(rows)
 
+
+    if page == 44:
+        return [[_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")]]
+    if page == 45:
+        return [[_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")]]
+    if page == 46:
+        return [[_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")]]
+    if page == 47:
+        return [[_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")]]
+    if page == 48:
+        return [[_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")]]
 
 async def edit_panel_colored(callback, user_id, page=1):
     """ویرایش پنل با دکمه‌های رنگی واقعی از طریق Bot API"""
@@ -9595,6 +9658,44 @@ async def callback_panel_handler(client, callback):
                     ".فیلتر گیف خاموش\n\n"
                     "با روشن بودن، هر گیفی که در پیوی\n"
                     "برای شما ارسال شود خودکار پاک می‌شود."
+                ),
+                44: (
+                    "⚔️ دشمن | self MR\n\n"
+                    "دستورات (ریپلای روی شخص):\n"
+                    "دشمن روشن\n"
+                    "دشمن خاموش\n"
+                    "لیست دشمن"
+                ),
+                45: (
+                    "💗 دوست | self MR\n\n"
+                    "وقتی دوست پیام بدهد متن صمیمانه\n"
+                    "تصادفی پاسخ داده می‌شود.\n\n"
+                    "دستورات (ریپلای):\n"
+                    "دوست روشن\n"
+                    "دوست خاموش\n"
+                    "لیست دوستان"
+                ),
+                46: (
+                    "👍 ریاکشن خودکار | self MR\n\n"
+                    "دستورات (ریپلای):\n"
+                    "ریاکشن ❤️\n"
+                    "ریاکشن 👍\n"
+                    "ریاکشن خاموش"
+                ),
+                47: (
+                    "🔁 تکرار | self MR\n\n"
+                    "دستورات (ریپلای):\n"
+                    "تکرار 3\n"
+                    "تکرار 5\n\n"
+                    "پیام ریپلای‌شده چند بار ارسال می‌شود."
+                ),
+                48: (
+                    "🔇 سکوت و بلاک | self MR\n\n"
+                    "دستورات (ریپلای):\n"
+                    "سکوت روشن\n"
+                    "سکوت خاموش\n"
+                    "بلاک روشن\n"
+                    "بلاک خاموش"
                 )
             }
             try:

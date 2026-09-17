@@ -2531,6 +2531,7 @@ USER_FONT_CHOICES = {}
 CLOCK_STATUS = {}
 PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عکس پروفایل
 PROFILE_PHOTO_CLOCK_BASE = {}  # user_id -> path عکس اصلی بدون قاب
+PROFILE_PHOTO_CLOCK_LAST = {}  # user_id -> file_id آخرین عکس ساعت (فقط همان پاک شود)
 ROTATING_NAMES = {}
 ROTATING_NAME_INTERVAL = {}
 ROTATING_NAME_STATUS = {}
@@ -3377,13 +3378,12 @@ async def rotate_profile_music_task(client: Client, user_id: int):
 
 
 async def build_profile_clock_image(client, user_id: int) -> str:
-    """قاب ساعت روی عکس اصلی پروفایل — فقط ۲ عقربه (دقیقه + ثانیه) وقت تهران"""
-    from PIL import Image, ImageDraw
+    """قاب ساعت روی عکس اصلی — وقت تهران مثل ساعت اسم (HH:MM) با عقربه ساعت و دقیقه"""
+    from PIL import Image, ImageDraw, ImageFont
     import math
     size = 640
     path_out = f"/tmp/profile_clock_{user_id}.png"
 
-    # همیشه از عکس پایه (اصلی) استفاده کن نه از عکس قبلیِ ساعت‌دار
     base = None
     base_path = PROFILE_PHOTO_CLOCK_BASE.get(user_id)
     try:
@@ -3404,11 +3404,11 @@ async def build_profile_clock_image(client, user_id: int) -> str:
         except Exception as e:
             logging.warning(f"profile photo dl: {e}")
     if base is None:
-        base = Image.new("RGBA", (size, size), (30, 30, 30, 255))
+        base = Image.new("RGBA", (size, size), (25, 25, 25, 255))
 
     mask = Image.new("L", (size, size), 0)
     md = ImageDraw.Draw(mask)
-    margin = 52
+    margin = 50
     md.ellipse((margin, margin, size - margin, size - margin), fill=255)
     circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     circ.paste(base, (0, 0), mask=mask)
@@ -3416,45 +3416,69 @@ async def build_profile_clock_image(client, user_id: int) -> str:
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 255))
     canvas.paste(circ, (0, 0), circ)
     draw = ImageDraw.Draw(canvas)
-    cx = cy = size // 2
-    outer_r = size // 2 - 8
-    inner_r = outer_r - 30
+    cx = cy = size / 2.0
+    outer_r = size / 2.0 - 8
+    inner_r = outer_r - 32
 
-    draw.ellipse((cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r), outline=(230, 230, 230, 255), width=5)
-    draw.ellipse((cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r), outline=(160, 160, 160, 200), width=2)
+    draw.ellipse([cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r], outline=(235, 235, 235, 255), width=5)
+    draw.ellipse([cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r], outline=(150, 150, 150, 180), width=2)
 
-    # وقت واقعی تهران
-    now = datetime.now(TEHRAN_TIMEZONE)
-    m, s = now.minute, now.second
+    # همان منبع وقت ساعت اسم
+    tehran_time = datetime.now(TEHRAN_TIMEZONE)
+    current_time_str = tehran_time.strftime("%H:%M")
+    h12 = tehran_time.hour % 12
+    m = tehran_time.minute
+    # زاویه استاندارد ساعت: ۰ بالا، ساعت‌گرد
+    # عقربه ساعت: ۳۰ درجه به ازای هر ساعت + ۰.۵ به ازای هر دقیقه
+    # عقربه دقیقه: ۶ درجه به ازای هر دقیقه
+    hour_angle = (h12 * 30) + (m * 0.5)
+    minute_angle = m * 6
 
-    # تیک‌های دقیقه (فقط خطوط کوتاه — نه عقربه اضافه)
     for i in range(60):
         ang = math.radians(i * 6 - 90)
         long = (i % 5 == 0)
-        r1 = outer_r - (16 if long else 9)
+        r1 = outer_r - (18 if long else 10)
         r2 = outer_r - 3
-        x1, y1 = cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)
-        x2, y2 = cx + r2 * math.cos(ang), cy + r2 * math.sin(ang)
-        draw.line([(x1, y1), (x2, y2)], fill=(230, 230, 230, 255) if long else (140, 140, 140, 220), width=3 if long else 1)
+        draw.line(
+            [(cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)),
+             (cx + r2 * math.cos(ang), cy + r2 * math.sin(ang))],
+            fill=(240, 240, 240, 255) if long else (130, 130, 130, 220),
+            width=3 if long else 1,
+        )
 
     def hand(angle_deg, length, width, color):
         ang = math.radians(angle_deg - 90)
-        x = cx + length * math.cos(ang)
-        y = cy + length * math.sin(ang)
-        draw.line([(cx, cy), (x, y)], fill=color, width=width)
+        draw.line(
+            [(cx, cy), (cx + length * math.cos(ang), cy + length * math.sin(ang))],
+            fill=color,
+            width=width,
+        )
 
-    # فقط ۲ عقربه: دقیقه (بزرگ) + ثانیه (کوچک)
-    hand(m * 6 + s * 0.1, inner_r * 0.62, 5, (255, 255, 255, 255))  # دقیقه
-    hand(s * 6, inner_r * 0.78, 2, (255, 70, 70, 255))  # ثانیه
-    draw.ellipse((cx - 7, cy - 7, cx + 7, cy + 7), fill=(255, 255, 255, 255))
+    # عقربه ساعت (کوتاه/ضخیم) + دقیقه (بلند) — مطابق HH:MM اسم
+    hand(hour_angle, inner_r * 0.42, 7, (255, 255, 255, 255))
+    hand(minute_angle, inner_r * 0.70, 4, (230, 230, 230, 255))
+    draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=(255, 255, 255, 255))
 
-    canvas = canvas.convert("RGB")
-    canvas.save(path_out, "PNG")
+    # متن دیجیتال عین ساعت اسم
+    try:
+        # تلاش برای فونت بزرگ‌تر
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+        except Exception:
+            font = ImageFont.load_default()
+        # سایه
+        draw.text((cx - 49, size - 52), current_time_str, fill=(0, 0, 0, 180), font=font)
+        draw.text((cx - 50, size - 53), current_time_str, fill=(255, 255, 255, 255), font=font)
+    except Exception:
+        pass
+
+    canvas.convert("RGB").save(path_out, "PNG")
+    logging.info(f"clock image built uid={user_id} time={current_time_str} h_ang={hour_angle:.1f} m_ang={minute_angle:.1f}")
     return path_out
 
 
 async def update_profile_photo_clock_task(client: Client, user_id: int):
-    """هر دقیقه عکس پروفایل را جایگزین می‌کند (عکس جدید اضافه انباشته نمی‌شود)"""
+    """هر دقیقه عکس ساعت را ست می‌کند — عکس‌های قدیمی کاربر پاک نمی‌شوند"""
     await asyncio.sleep(4)
     while user_id in ACTIVE_BOTS:
         try:
@@ -3466,7 +3490,6 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 await asyncio.sleep(min(60, max(3, until - time.time())))
                 continue
 
-            # اگر پایه نداریم، یک‌بار عکس فعلی را به‌عنوان اصل ذخیره کن
             if not PROFILE_PHOTO_CLOCK_BASE.get(user_id) or not os.path.exists(PROFILE_PHOTO_CLOCK_BASE.get(user_id) or ""):
                 try:
                     photos = []
@@ -3482,35 +3505,26 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
             path = await build_profile_clock_image(client, user_id)
             if path and os.path.exists(path):
                 try:
-                    # لیست عکس‌های قبلی
-                    old_ids = []
-                    try:
-                        async for p in client.get_chat_photos("me", limit=8):
-                            fid = getattr(p, "file_id", None)
-                            if fid:
-                                old_ids.append(fid)
-                    except Exception:
-                        pass
-
+                    prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
                     await client.set_profile_photo(photo=path)
-                    logging.info(f"profile photo clock set uid={user_id} tehran={datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M:%S')}")
-
-                    # حذف عکس‌های قدیمی تا انباشته / چندعقربه دیده نشود
-                    await asyncio.sleep(1.2)
+                    logging.info(
+                        f"profile photo clock set uid={user_id} tehran={datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')}"
+                    )
+                    # فقط همان عکس قبلیِ ساعت را پاک کن — نه بقیه پروفایل‌ها
+                    await asyncio.sleep(1.0)
                     try:
-                        # جدیدترین را نگه دار، بقیه را پاک کن
-                        current = []
-                        async for p in client.get_chat_photos("me", limit=10):
-                            current.append(p)
-                        for p in current[1:]:
+                        photos = []
+                        async for p in client.get_chat_photos("me", limit=3):
+                            photos.append(p)
+                        if photos:
+                            PROFILE_PHOTO_CLOCK_LAST[user_id] = getattr(photos[0], "file_id", None)
+                        if prev_id:
                             try:
-                                fid = getattr(p, "file_id", None)
-                                if fid:
-                                    await client.delete_profile_photos(fid)
+                                await client.delete_profile_photos(prev_id)
                             except Exception:
                                 pass
                     except Exception as e:
-                        logging.warning(f"delete old profile photos: {e}")
+                        logging.warning(f"delete only last clock photo: {e}")
                 except Exception as e:
                     err = str(e)
                     logging.warning(f"set_profile_photo clock: {e}")
@@ -3524,7 +3538,6 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 except Exception:
                     pass
 
-            # هم‌تراز با دقیقه تهران
             wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.25
             await asyncio.sleep(max(3, wait))
         except asyncio.CancelledError:

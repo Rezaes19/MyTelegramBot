@@ -78,6 +78,104 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 # اینلاین هلپر ایموجی پریمیوم (بات ساخته‌شده با اکانت پریمیوم)
 HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "helperselfmr_bot").strip().lstrip("@")
+
+# =============================================
+# ایموجی پریمیوم برای ربات منیجر (Bot API / tg-emoji)
+# =============================================
+MANAGER_PREMIUM_EMOJIS = {}  # str(id) -> {"id": int, "fallback": str}
+
+
+def html_tg_emoji(custom_emoji_id, fallback: str = "⭐") -> str:
+    """ساخت تگ HTML رسمی تلگرام برای ایموجی پریمیوم (Bot API)"""
+    try:
+        cid = int(custom_emoji_id)
+    except Exception:
+        return fallback or "⭐"
+    fb = (fallback or "⭐").replace("<", "").replace(">", "")
+    return f'<tg-emoji emoji-id="{cid}">{fb}</tg-emoji>'
+
+
+def extract_custom_emojis_from_message(message) -> list:
+    """لیست (custom_emoji_id, fallback) از پیام"""
+    found = []
+    if not message:
+        return found
+    text = message.text or message.caption or ""
+    entities = list(getattr(message, "entities", None) or []) + list(
+        getattr(message, "caption_entities", None) or []
+    )
+    # برای استخراج fallback با offsetهای UTF-16
+    def _utf16_slice(s: str, offset: int, length: int) -> str:
+        try:
+            encoded = s.encode("utf-16-le")
+            start = offset * 2
+            end = (offset + length) * 2
+            return encoded[start:end].decode("utf-16-le")
+        except Exception:
+            return "⭐"
+
+    for ent in entities:
+        cid = getattr(ent, "custom_emoji_id", None)
+        if not cid:
+            # بعضی نسخه‌ها type را جدا دارند
+            t = str(getattr(ent, "type", "") or "")
+            if "CUSTOM_EMOJI" not in t.upper() and "custom_emoji" not in t.lower():
+                continue
+            cid = getattr(ent, "custom_emoji_id", None)
+        if not cid:
+            continue
+        off = int(getattr(ent, "offset", 0) or 0)
+        ln = int(getattr(ent, "length", 0) or 0)
+        fb = _utf16_slice(text, off, ln) if text and ln else "⭐"
+        if not fb.strip():
+            fb = "⭐"
+        found.append((int(cid), fb))
+    return found
+
+
+def save_manager_premium_emoji(custom_emoji_id: int, fallback: str = "⭐"):
+    global MANAGER_PREMIUM_EMOJIS
+    cid = int(custom_emoji_id)
+    MANAGER_PREMIUM_EMOJIS[str(cid)] = {"id": cid, "fallback": fallback or "⭐"}
+    try:
+        data_manager.data.setdefault("manager_premium_emojis", {})[str(cid)] = {
+            "id": cid,
+            "fallback": fallback or "⭐",
+        }
+        data_manager.save_data()
+    except Exception as e:
+        logging.warning(f"save_manager_premium_emoji: {e}")
+
+
+def load_manager_premium_emojis():
+    global MANAGER_PREMIUM_EMOJIS
+    try:
+        raw = (data_manager.data or {}).get("manager_premium_emojis") or {}
+        for k, v in raw.items():
+            if isinstance(v, dict) and v.get("id"):
+                MANAGER_PREMIUM_EMOJIS[str(k)] = {
+                    "id": int(v["id"]),
+                    "fallback": v.get("fallback") or "⭐",
+                }
+            else:
+                try:
+                    MANAGER_PREMIUM_EMOJIS[str(k)] = {"id": int(k), "fallback": "⭐"}
+                except Exception:
+                    pass
+        logging.info("manager premium emojis loaded: %s", len(MANAGER_PREMIUM_EMOJIS))
+    except Exception as e:
+        logging.warning(f"load_manager_premium_emojis: {e}")
+
+
+async def manager_reply_premium(message, custom_emoji_id, fallback="⭐", extra_text=""):
+    """پاسخ با ایموجی پریمیوم واقعی از طریق Bot API"""
+    html = html_tg_emoji(custom_emoji_id, fallback)
+    body = html
+    if extra_text:
+        body = html + "\n\n" + str(extra_text)
+    await message.reply_text(body, parse_mode=ParseMode.HTML)
+
+
 # اگر توکن هلپر جدا از منیجر است در env بگذار؛ وگرنه از BOT_TOKEN استفاده می‌شود
 HELPER_BOT_TOKEN = os.environ.get("HELPER_BOT_TOKEN", "").strip()
 PREMIUM_CLIENT = None  # Client سشن اکانت پریمیوم (از سرور)
@@ -10284,7 +10382,8 @@ async def start_login(client, message):
             [
                 [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
                 [KeyboardButton("💎 پنل الماس"), KeyboardButton("🛠 پنل ادمین")],
-                [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")],
+                [KeyboardButton("📋 لیست ایموجی پریمیوم"), KeyboardButton("🧪 تست ایموجی پریمیوم")],
+        [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")],
             ],
             resize_keyboard=True
         )
@@ -10294,6 +10393,66 @@ async def start_login(client, message):
             pass
 
     await send_main_menu(client, message, user_id, edit=False)
+
+
+
+@manager_bot.on_message(filters.private & filters.incoming, group=3)
+async def manager_premium_emoji_catcher(client, message):
+    """ثبت و نمایش ایموجی پریمیوم با Bot API (tg-emoji)"""
+    try:
+        if not message.from_user:
+            return
+        found = extract_custom_emojis_from_message(message)
+        if not found:
+            return
+        lines = ["✅ <b>ایموجی پریمیوم ثبت شد | self MR</b>", ""]
+        html_parts = []
+        for cid, fb in found[:20]:
+            save_manager_premium_emoji(cid, fb)
+            html_parts.append(html_tg_emoji(cid, fb))
+            lines.append(f"• ID: <code>{cid}</code>")
+        lines.append("")
+        lines.append("پیش‌نمایش:")
+        lines.append(" ".join(html_parts))
+        lines.append("")
+        lines.append("ربات منیجر می‌تواند همین ایموجی را با Bot API ارسال کند.")
+        await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        message.stop_propagation()
+    except Exception as e:
+        logging.warning(f"manager_premium_emoji_catcher: {e}")
+
+
+@manager_bot.on_message(filters.private & filters.regex(r"^(📋 لیست ایموجی پریمیوم|لیست ایموجی پریمیوم)$"))
+async def manager_list_premium_emojis(client, message):
+    try:
+        if not MANAGER_PREMIUM_EMOJIS:
+            await message.reply_text("لیست خالی است.\nیک پیام حاوی ایموجی پریمیوم برای ربات بفرستید.")
+            return
+        parts = ["📋 <b>لیست ایموجی‌های ثبت‌شده</b>", ""]
+        for i, (k, v) in enumerate(list(MANAGER_PREMIUM_EMOJIS.items())[:40], 1):
+            cid = v.get("id") or k
+            fb = v.get("fallback") or "⭐"
+            parts.append(f"{i}. {html_tg_emoji(cid, fb)} <code>{cid}</code>")
+        await message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await message.reply_text(f"خطا: {e}")
+
+
+@manager_bot.on_message(filters.private & filters.regex(r"^(🧪 تست ایموجی پریمیوم|تست ایموجی پریمیوم)$"))
+async def manager_test_premium_emojis(client, message):
+    """ارسال چند ایموجی ثبت‌شده برای تست"""
+    try:
+        items = list(MANAGER_PREMIUM_EMOJIS.values())[:15]
+        if not items:
+            await message.reply_text("اول یک ایموجی پریمیوم برای ربات بفرستید تا ثبت شود.")
+            return
+        html = " ".join(html_tg_emoji(v.get("id"), v.get("fallback") or "⭐") for v in items)
+        await message.reply_text(
+            f"🧪 <b>تست ایموجی پریمیوم</b>\n\n{html}",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        await message.reply_text(f"خطا: {e}")
 
 
 @manager_bot.on_message(filters.private, group=-1)

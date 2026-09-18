@@ -356,6 +356,10 @@ async def manager_reply_premium(message, custom_emoji_id, fallback="⭐", extra_
 
 # اگر توکن هلپر جدا از منیجر است در env بگذار؛ وگرنه از BOT_TOKEN استفاده می‌شود
 HELPER_BOT_TOKEN = os.environ.get("HELPER_BOT_TOKEN", "").strip()
+# اگر توکن هلپر خراب/منقضی است: HELPER_ENABLED=0 بگذار یا توکن را خالی کن
+HELPER_BOT_ENABLED = os.environ.get("HELPER_ENABLED", "1").strip() not in ("0", "false", "False", "no", "NO")
+HELPER_BOT_INSTANCE = None
+
 PREMIUM_CLIENT = None  # Client سشن اکانت پریمیوم (از سرور)
 
 def load_premium_session_string() -> str:
@@ -3844,7 +3848,7 @@ async def upload_custom_emoji_to_helper_bot(custom_emoji_id: int, user_id: int, 
     """دانلود کاستوم و آپلود با توکن هلپر تا file_id برای اینلاین استیکر معتبر باشد"""
     path = None
     try:
-        token = HELPER_BOT_TOKEN or BOT_TOKEN
+        token = (HELPER_BOT_TOKEN if (HELPER_BOT_ENABLED and HELPER_BOT_TOKEN) else BOT_TOKEN) or BOT_TOKEN
         if not token:
             return None
         dl_client = None
@@ -8941,7 +8945,7 @@ async def inline_panel_handler(client, query):
 
             ph = normal if normal else "⭐"
             utf16_len = len(ph.encode("utf-16-le")) // 2
-            _pe_token = HELPER_BOT_TOKEN or BOT_TOKEN
+            _pe_token = (HELPER_BOT_TOKEN if (HELPER_BOT_ENABLED and HELPER_BOT_TOKEN) else BOT_TOKEN) or BOT_TOKEN
             url = f"https://api.telegram.org/bot{_pe_token}/answerInlineQuery"
 
             # نتیجه ۱: custom_emoji با entities (روش اصلی)
@@ -12289,14 +12293,41 @@ async def helper_premium_message_handler(client, message):
 
 
 async def start_helper_bot():
-    """استارت جداگانه هلپر با /start + اینلاین"""
-    global HELPER_BOT_INSTANCE
+    """هلپر کاملاً جدا از منیجر — خطا/توکن منقضی باعث توقف بات اصلی نمی‌شود"""
+    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED
+    HELPER_BOT_INSTANCE = None
+    if not HELPER_BOT_ENABLED:
+        logging.warning("Helper disabled via HELPER_ENABLED=0")
+        return None
     token = (HELPER_BOT_TOKEN or "").strip()
     if not token:
-        logging.warning("HELPER_BOT_TOKEN خالی است — هلپر جدا استارت نشد (از منیجر استفاده می‌شود)")
+        logging.info("HELPER_BOT_TOKEN empty — helper skipped (manager only)")
         return None
-    if token == BOT_TOKEN:
-        logging.info("HELPER_BOT_TOKEN = BOT_TOKEN — هندلرهای هلپر روی منیجر هم کافی است")
+    if token == (BOT_TOKEN or "").strip():
+        logging.info("HELPER_BOT_TOKEN same as BOT_TOKEN — helper not started separately")
+        return None
+    # اعتبارسنجی توکن قبل از Client.start
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api.telegram.org/bot{token}/getMe",
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                data = await resp.json()
+        if not data.get("ok"):
+            logging.error(
+                "❌ HELPER_BOT_TOKEN invalid/expired: %s — helper disabled, manager continues",
+                data.get("description") or data,
+            )
+            HELPER_BOT_TOKEN = ""
+            HELPER_BOT_ENABLED = False
+            return None
+        uname = (data.get("result") or {}).get("username")
+        logging.info("Helper token OK @%s", uname)
+    except Exception as e:
+        logging.error("❌ Helper token check failed: %s — helper skipped", e)
+        HELPER_BOT_TOKEN = ""
+        HELPER_BOT_ENABLED = False
         return None
     try:
         from pyrogram.handlers import InlineQueryHandler, MessageHandler
@@ -12318,11 +12349,12 @@ async def start_helper_bot():
         HELPER_BOT_INSTANCE = helper_bot
         return helper_bot
     except Exception as e:
-        logging.error(f"❌ Helper bot failed: {e}")
+        logging.error("❌ Helper bot start failed (ignored): %s", e)
+        HELPER_BOT_TOKEN = ""
+        HELPER_BOT_ENABLED = False
+        HELPER_BOT_INSTANCE = None
         return None
 
-
-HELPER_BOT_INSTANCE = None
 
 
 async def main():
@@ -12393,19 +12425,19 @@ async def main():
         logging.error(f"❌ Manager bot failed: {e}")
         return
 
-    # سشن پریمیوم از سرور
+    # سشن پریمیوم از سرور (اختیاری — خطا مانع منیجر نمی‌شود)
     try:
         await ensure_premium_client()
     except Exception as e:
         logging.warning(f"premium client: {e}")
 
-    # هلپر جدا (توکن HELPER_BOT_TOKEN) — استارت + اینلاین + ثبت ایموجی
+    # هلپر کاملاً جدا — توکن منقضی فقط هلپر را می‌خواباند
     try:
         await start_helper_bot()
     except Exception as e:
-        logging.warning(f"helper bot start: {e}")
+        logging.warning(f"helper bot start ignored: {e}")
 
-    logging.info("Premium inline helper username: @%s", HELPER_INLINE_BOT)
+    logging.info("Manager running. Helper: %s", "ON" if HELPER_BOT_INSTANCE else "OFF")
     try:
         await ensure_premium_emoji_pack(manager_bot)
     except Exception as e:

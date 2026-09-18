@@ -2532,6 +2532,22 @@ CLOCK_STATUS = {}
 PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عکس پروفایل
 PROFILE_PHOTO_CLOCK_BASE = {}  # user_id -> path عکس اصلی بدون قاب
 PROFILE_PHOTO_CLOCK_LAST = {}  # user_id -> file_id آخرین عکس ساعت (فقط همان پاک شود)
+PROFILE_PHOTO_CLOCK_LAST_MINUTE = {}  # user_id -> "HH:MM" آخرین دقیقه رسم‌شده
+
+def profile_clock_base_path(user_id: int) -> str:
+    d = os.path.join(os.path.dirname(os.path.abspath(DATA_FILE)) if "DATA_FILE" in dir() else ".", "profile_bases")
+    try:
+        # DATA_FILE may be defined later — safe fallback
+        pass
+    except Exception:
+        pass
+    try:
+        base_dir = os.path.join(os.getcwd(), "profile_bases")
+        os.makedirs(base_dir, exist_ok=True)
+        return os.path.join(base_dir, f"{int(user_id)}.jpg")
+    except Exception:
+        return f"/tmp/pf_base_{int(user_id)}.jpg"
+
 ROTATING_NAMES = {}
 ROTATING_NAME_INTERVAL = {}
 ROTATING_NAME_STATUS = {}
@@ -3381,26 +3397,29 @@ async def rotate_profile_music_task(client: Client, user_id: int):
 
 
 async def build_profile_clock_image(client, user_id: int) -> str:
-    """قاب ساعت روی عکس اصلی — وقت تهران مثل ساعت اسم (HH:MM) با عقربه ساعت و دقیقه"""
+    """قاب ساعت روی عکس پایه ثابت — وقت تهران HH:MM (مثل ساعت اسم)"""
     from PIL import Image, ImageDraw, ImageFont
     import math
     size = 640
     path_out = f"/tmp/profile_clock_{user_id}.png"
 
     base = None
-    base_path = PROFILE_PHOTO_CLOCK_BASE.get(user_id)
+    base_path = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
     try:
         if base_path and os.path.exists(base_path):
             base = Image.open(base_path).convert("RGBA").resize((size, size), Image.LANCZOS)
+            PROFILE_PHOTO_CLOCK_BASE[user_id] = base_path
     except Exception:
         base = None
+    # فقط اگر پایه واقعاً نداریم — و ساعت هنوز روی پروفایل نکشیده
     if base is None:
         try:
             photos = []
             async for p in client.get_chat_photos("me", limit=1):
                 photos.append(p)
             if photos:
-                dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                dest = profile_clock_base_path(user_id)
+                dl = await client.download_media(photos[0], file_name=dest)
                 if dl and os.path.exists(dl):
                     PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
                     base = Image.open(dl).convert("RGBA").resize((size, size), Image.LANCZOS)
@@ -3426,14 +3445,10 @@ async def build_profile_clock_image(client, user_id: int) -> str:
     draw.ellipse([cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r], outline=(235, 235, 235, 255), width=5)
     draw.ellipse([cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r], outline=(150, 150, 150, 180), width=2)
 
-    # همان منبع وقت ساعت اسم
     tehran_time = datetime.now(TEHRAN_TIMEZONE)
     current_time_str = tehran_time.strftime("%H:%M")
     h12 = tehran_time.hour % 12
     m = tehran_time.minute
-    # زاویه استاندارد ساعت: ۰ بالا، ساعت‌گرد
-    # عقربه ساعت: ۳۰ درجه به ازای هر ساعت + ۰.۵ به ازای هر دقیقه
-    # عقربه دقیقه: ۶ درجه به ازای هر دقیقه
     hour_angle = (h12 * 30) + (m * 0.5)
     minute_angle = m * 6
 
@@ -3457,31 +3472,26 @@ async def build_profile_clock_image(client, user_id: int) -> str:
             width=width,
         )
 
-    # عقربه ساعت (کوتاه/ضخیم) + دقیقه (بلند) — مطابق HH:MM اسم
     hand(hour_angle, inner_r * 0.42, 7, (255, 255, 255, 255))
     hand(minute_angle, inner_r * 0.70, 4, (230, 230, 230, 255))
     draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=(255, 255, 255, 255))
 
-    # متن دیجیتال عین ساعت اسم
     try:
-        # تلاش برای فونت بزرگ‌تر
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
         except Exception:
             font = ImageFont.load_default()
-        # سایه
         draw.text((cx - 49, size - 52), current_time_str, fill=(0, 0, 0, 180), font=font)
         draw.text((cx - 50, size - 53), current_time_str, fill=(255, 255, 255, 255), font=font)
     except Exception:
         pass
 
     canvas.convert("RGB").save(path_out, "PNG")
-    logging.info(f"clock image built uid={user_id} time={current_time_str} h_ang={hour_angle:.1f} m_ang={minute_angle:.1f}")
     return path_out
 
 
 async def update_profile_photo_clock_task(client: Client, user_id: int):
-    """هر دقیقه عکس ساعت را ست می‌کند — عکس‌های قدیمی کاربر پاک نمی‌شوند"""
+    """هر دقیقه قاب ساعت را از روی عکس پایه ثابت می‌سازد — پایه را وسط کار عوض نمی‌کند"""
     await asyncio.sleep(4)
     while user_id in ACTIVE_BOTS:
         try:
@@ -3493,13 +3503,23 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 await asyncio.sleep(min(120, max(5, until - time.time())))
                 continue
 
-            if not PROFILE_PHOTO_CLOCK_BASE.get(user_id) or not os.path.exists(PROFILE_PHOTO_CLOCK_BASE.get(user_id) or ""):
+            tehran_time = datetime.now(TEHRAN_TIMEZONE)
+            minute_key = tehran_time.strftime("%H:%M")
+            if PROFILE_PHOTO_CLOCK_LAST_MINUTE.get(user_id) == minute_key:
+                wait = 60 - tehran_time.second + 0.3
+                await asyncio.sleep(max(5, wait))
+                continue
+
+            # پایه فقط یک‌بار — هرگز از عکس فعلیِ ساعت‌دار دوباره نگیر
+            bp = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
+            if not bp or not os.path.exists(bp):
                 try:
                     photos = []
                     async for p in client.get_chat_photos("me", limit=1):
                         photos.append(p)
                     if photos:
-                        dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                        dest = profile_clock_base_path(user_id)
+                        dl = await client.download_media(photos[0], file_name=dest)
                         if dl:
                             PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
                 except Exception as e:
@@ -3510,24 +3530,23 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 try:
                     prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
                     await client.set_profile_photo(photo=path)
-                    logging.info(
-                        f"profile photo clock set uid={user_id} tehran={datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')}"
-                    )
-                    # فقط همان عکس قبلیِ ساعت را پاک کن — نه بقیه پروفایل‌ها
-                    await asyncio.sleep(1.0)
+                    PROFILE_PHOTO_CLOCK_LAST_MINUTE[user_id] = minute_key
+                    logging.info(f"profile photo clock uid={user_id} time={minute_key}")
+                    await asyncio.sleep(0.8)
                     try:
                         photos = []
-                        async for p in client.get_chat_photos("me", limit=3):
+                        async for p in client.get_chat_photos("me", limit=2):
                             photos.append(p)
                         if photos:
                             PROFILE_PHOTO_CLOCK_LAST[user_id] = getattr(photos[0], "file_id", None)
+                        # فقط عکس قبلی ساعت — با تأخیر و بی‌صدا
                         if prev_id:
                             try:
                                 await client.delete_profile_photos(prev_id)
                             except Exception:
                                 pass
-                    except Exception as e:
-                        logging.warning(f"delete only last clock photo: {e}")
+                    except Exception:
+                        pass
                 except Exception as e:
                     err = str(e)
                     logging.warning(f"set_profile_photo clock: {e}")
@@ -3541,14 +3560,13 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 except Exception:
                     pass
 
-            # هر ۱ دقیقه — هم‌تراز با ساعت اسم (وقت تهران)
             wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.25
             await asyncio.sleep(max(5, wait))
         except asyncio.CancelledError:
             break
         except Exception as e:
             logging.warning(f"update_profile_photo_clock_task: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
 
 async def update_profile_clock(client: Client, user_id: int):
@@ -7596,7 +7614,7 @@ async def reply_based_controller(client, message):
             async for p in client.get_chat_photos("me", limit=1):
                 photos.append(p)
             if photos:
-                dl = await client.download_media(photos[0], file_name=f"/tmp/pf_base_{user_id}.jpg")
+                dl = await client.download_media(photos[0], file_name=profile_clock_base_path(user_id))
                 if dl:
                     PROFILE_PHOTO_CLOCK_BASE[user_id] = dl
         except Exception:
@@ -9084,7 +9102,7 @@ async def callback_panel_handler(client, callback):
                     async for p in cl.get_chat_photos("me", limit=1):
                         photos.append(p)
                     if photos:
-                        dl = await cl.download_media(photos[0], file_name=f"/tmp/pf_base_{target_user_id}.jpg")
+                        dl = await cl.download_media(photos[0], file_name=profile_clock_base_path(target_user_id))
                         if dl:
                             PROFILE_PHOTO_CLOCK_BASE[target_user_id] = dl
             except Exception as e:
@@ -10763,60 +10781,83 @@ async def mm_edit(callback, text, keyboard):
 
 
 @manager_bot.on_message(filters.command("start"))
+async def process_referral_from_start(message) -> None:
+    """ثبت زیرمجموعه از /start — قبل از عضویت اجباری تا payload از دست نرود"""
+    try:
+        if not message or not message.from_user:
+            return
+        user_id = int(message.from_user.id)
+        payload = None
+        args = getattr(message, "command", None) or []
+        if len(args) > 1:
+            payload = str(args[1]).strip()
+        else:
+            txt = (message.text or "").strip()
+            parts = txt.split(maxsplit=1)
+            if len(parts) >= 2:
+                payload = parts[1].strip().split()[0]
+        if not payload:
+            return
+        # فقط آیدی عددی
+        payload = payload.strip().lstrip("=")
+        if not payload.isdigit():
+            return
+        referrer_id = int(payload)
+        if referrer_id <= 0 or referrer_id == user_id:
+            return
+        init_user_db(user_id)
+        init_user_db(referrer_id)
+        db = get_user_db(user_id)
+        cur = db.cursor()
+        cur.execute("SELECT invited_by FROM users WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        already_invited = bool(row and row[0] and int(row[0]) != 0)
+        cur.execute("SELECT reward_claimed FROM referrals WHERE referred_id = ?", (user_id,))
+        ref_row = cur.fetchone()
+        already_rewarded = bool(ref_row and int(ref_row[0] or 0) == 1)
+        db.close()
+        if already_invited or already_rewarded:
+            logging.info("referral skip uid=%s invited=%s rewarded=%s", user_id, already_invited, already_rewarded)
+            return
+        db = get_user_db(user_id)
+        cur = db.cursor()
+        cur.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (referrer_id, user_id))
+        cur.execute(
+            "INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 1)",
+            (referrer_id, user_id),
+        )
+        cur.execute(
+            "UPDATE referrals SET reward_claimed = 1, referrer_id = ? WHERE referred_id = ?",
+            (referrer_id, user_id),
+        )
+        db.commit()
+        db.close()
+        add_balance(referrer_id, REFERRAL_REWARD)
+        uname = message.from_user.first_name or str(user_id)
+        logging.info("referral OK referrer=%s new=%s +%s", referrer_id, user_id, REFERRAL_REWARD)
+        try:
+            await manager_bot.send_message(
+                referrer_id,
+                f"🎉 **زیرمجموعه جدید | self MR**\n\n"
+                f"👤 {uname} با لینک شما وارد شد.\n"
+                f"💎 `{REFERRAL_REWARD}` الماس به حساب شما اضافه شد.\n"
+                f"✨ موجودی جدید: `{get_balance(referrer_id):,}` الماس",
+            )
+        except Exception as e:
+            logging.warning("referral notify: %s", e)
+    except Exception as e:
+        logging.warning("process_referral_from_start: %s", e)
+
+
 async def start_login(client, message):
     user_id = message.from_user.id
     init_user_db(user_id)
 
+    # اول رفرال — حتی اگر هنوز عضو کانال نباشد
+    await process_referral_from_start(message)
+
     if not await force_subscribe_check(client, message):
         return
-
-    # ====== سیستم زیرمجموعه (۷۵ الماس) ======
-    args = message.command
-    if len(args) > 1:
-        try:
-            referrer_id = int(args[1])
-            if referrer_id != user_id:
-                init_user_db(referrer_id)
-                db = get_user_db(user_id)
-                cursor = db.cursor()
-                cursor.execute('SELECT invited_by FROM users WHERE user_id = ?', (user_id,))
-                row = cursor.fetchone()
-                already_invited = bool(row and row[0] and int(row[0]) != 0)
-
-                cursor.execute('SELECT reward_claimed FROM referrals WHERE referred_id = ?', (user_id,))
-                ref_row = cursor.fetchone()
-                already_rewarded = bool(ref_row and ref_row[0])
-                db.close()
-
-                if not already_invited and not already_rewarded:
-                    db = get_user_db(user_id)
-                    cursor = db.cursor()
-                    cursor.execute('UPDATE users SET invited_by = ? WHERE user_id = ?', (referrer_id, user_id))
-                    cursor.execute(
-                        'INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 0)',
-                        (referrer_id, user_id)
-                    )
-                    cursor.execute(
-                        'UPDATE referrals SET reward_claimed = 1 WHERE referred_id = ? AND referrer_id = ?',
-                        (user_id, referrer_id)
-                    )
-                    db.commit()
-                    db.close()
-
-                    add_balance(referrer_id, REFERRAL_REWARD)
-                    uname = message.from_user.first_name or str(user_id)
-                    try:
-                        await manager_bot.send_message(
-                            referrer_id,
-                            f"🎉 **زیرمجموعه جدید | self MR**\n\n"
-                            f"👤 {uname} با لینک شما وارد شد.\n"
-                            f"💎 `{REFERRAL_REWARD}` الماس به حساب شما اضافه شد.\n"
-                            f"✨ موجودی جدید: `{get_balance(referrer_id):,}` الماس"
-                        )
-                    except Exception:
-                        pass
-        except Exception as e:
-            logging.warning(f"referral start: {e}")
 
     # کیبورد ادمین (اختیاری پایین)
     if message.from_user and message.from_user.id in GOD_ADMIN_IDS:

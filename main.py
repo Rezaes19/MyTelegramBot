@@ -8580,7 +8580,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     ACTIVE_BOTS[user_id] = (client, tasks)
     logging.info(f"✅ Bot started for user {user_id}")
 
-manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+manager_bot = Client("manager_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # =============================================
 # 🔥 پنل دو صفحه‌ای با پرچم انگلیس
@@ -12363,29 +12363,73 @@ async def main():
         logging.info("✅ Database initialized")
     except Exception as e:
         logging.error(f"❌ Database init failed: {e}")
-    
+
     try:
         backup_sessions()
-    except:
+    except Exception:
         pass
-    
+
     try:
         clear_inactive_sessions()
-    except:
+    except Exception:
         pass
-    
+
+    try:
+        load_manager_premium_emojis()
+    except Exception as e:
+        logging.warning(f"load manager emojis: {e}")
+
     asyncio.create_task(cleanup_old_files())
     asyncio.create_task(hourly_diamond_deduction_task())
     logging.info("💎 Hourly diamond deduction task started")
 
-    # ====== استارت سشن‌ها با delay بیشتر و مدیریت Flood ======
+    # ===== اول بات اصلی (منیجر) — بدون وابستگی به هلپر/سشن‌ها =====
+    manager_ok = False
+    for attempt in range(1, 4):
+        try:
+            if manager_bot.is_connected:
+                try:
+                    await manager_bot.stop()
+                except Exception:
+                    pass
+            await manager_bot.start()
+            try:
+                global MANAGER_BOT_USERNAME
+                _mme = await manager_bot.get_me()
+                MANAGER_BOT_USERNAME = _mme.username
+                logging.info("Manager bot username: %s", MANAGER_BOT_USERNAME)
+            except Exception as e:
+                logging.warning(f"get manager username: {e}")
+            logging.info("✅ Manager bot started")
+            manager_ok = True
+            break
+        except Exception as e:
+            logging.error(f"❌ Manager bot start attempt {attempt}: {e}")
+            await asyncio.sleep(2 * attempt)
+    if not manager_ok:
+        logging.error("❌ Manager bot could not start after retries — continuing sessions only")
+
+    # هلپر عمداً استارت نمی‌شود (جدا / توکن خراب)
+    logging.info("Helper bot: skipped (disabled in main)")
+
+    try:
+        await ensure_premium_client()
+    except Exception as e:
+        logging.warning(f"premium client: {e}")
+
+    try:
+        if manager_ok:
+            await ensure_premium_emoji_pack(manager_bot)
+    except Exception as e:
+        logging.warning(f"pack load on start: {e}")
+
+    # ===== بعد سشن‌های سلف =====
     try:
         sessions = get_all_sessions_from_db()
         if sessions:
             logging.info(f"🔄 Found {len(sessions)} sessions, starting bots...")
             for i, (phone, session_string, user_id, first_name, username) in enumerate(sessions):
                 try:
-                    # اگر الماس کافی نیست سلف را استارت نکن و سشن را پاک کن
                     bal = get_balance(user_id)
                     if bal < HOURLY_COST:
                         logging.warning(f"⏭ Skip start {user_id}: low balance ({bal})")
@@ -12393,15 +12437,17 @@ async def main():
                             delete_session_by_user_id(user_id)
                         except Exception:
                             pass
-                        set_self_start_time(user_id, 0)
+                        try:
+                            set_self_start_time(user_id, 0)
+                        except Exception:
+                            pass
                         continue
                     logging.info(f"🔄 Starting bot for {phone} (User: {user_id})")
-                    asyncio.create_task(start_bot_instance(session_string, phone, user_id, 'bold'))
-                    # هر ۵ تا ربات، ۱۰ ثانیه صبر کن
+                    asyncio.create_task(start_bot_instance(session_string, phone, user_id, "bold"))
                     if (i + 1) % 5 == 0:
-                        await asyncio.sleep(10)
+                        await asyncio.sleep(8)
                     else:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1.5)
                 except Exception as e:
                     logging.error(f"❌ Failed to start bot for {phone}: {e}")
         else:
@@ -12409,41 +12455,12 @@ async def main():
     except Exception as e:
         logging.error(f"❌ Error loading sessions: {e}")
 
-    # ====== استارت منیجر بوت با delay ======
-    await asyncio.sleep(5)
-    try:
-        await manager_bot.start()
-        try:
-            global MANAGER_BOT_USERNAME
-            _mme = await manager_bot.get_me()
-            MANAGER_BOT_USERNAME = _mme.username
-            logging.info(f"Manager bot username: {MANAGER_BOT_USERNAME}")
-        except Exception as e:
-            logging.warning(f"get manager username: {e}")
-        logging.info("✅ Manager bot started")
-    except Exception as e:
-        logging.error(f"❌ Manager bot failed: {e}")
-        return
-
-    # سشن پریمیوم از سرور (اختیاری — خطا مانع منیجر نمی‌شود)
-    try:
-        await ensure_premium_client()
-    except Exception as e:
-        logging.warning(f"premium client: {e}")
-
-    # هلپر کاملاً جدا — توکن منقضی فقط هلپر را می‌خواباند
-    try:
-        await start_helper_bot()
-    except Exception as e:
-        logging.warning(f"helper bot start ignored: {e}")
-
-    logging.info("Manager running. Helper: %s", "ON" if HELPER_BOT_INSTANCE else "OFF")
-    try:
-        await ensure_premium_emoji_pack(manager_bot)
-    except Exception as e:
-        logging.warning(f"pack load on start: {e}")
-
+    if manager_ok:
+        logging.info("✅ Manager is online — idle")
+    else:
+        logging.warning("⚠️ Manager offline — idle (self sessions may still run)")
     await idle()
+
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(main())

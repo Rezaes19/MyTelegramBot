@@ -10784,7 +10784,6 @@ async def mm_edit(callback, text, keyboard):
         logging.warning(f"mm_edit fallback: {e}")
 
 
-@manager_bot.on_message(filters.command("start"))
 async def process_referral_from_start(message) -> None:
     """ثبت زیرمجموعه از /start — قبل از عضویت اجباری تا payload از دست نرود"""
     try:
@@ -10853,6 +10852,7 @@ async def process_referral_from_start(message) -> None:
         logging.warning("process_referral_from_start: %s", e)
 
 
+@manager_bot.on_message(filters.command("start"))
 async def start_login(client, message):
     user_id = message.from_user.id
     init_user_db(user_id)

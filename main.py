@@ -510,6 +510,60 @@ GAME_TAX_PERCENT = 5
 
 # نبردهای فعال: (chat_id, message_id) -> info
 active_games = {}
+active_dooz = {}
+
+# نقشه رمز ایموجی (حروف فارسی/انگلیسی/عدد)
+_EMOJI_CIPHER = {
+    "ا": "🍎", "آ": "🍏", "ب": "🐝", "پ": "🅿️", "ت": "🌴", "ث": "🔺",
+    "ج": "🎸", "چ": "🍒", "ح": "🏠", "خ": "🦖", "د": "🚪", "ذ": "💎",
+    "ر": "🌹", "ز": "⚡", "ژ": "🧊", "س": "⭐", "ش": "🌙", "ص": "🛎️",
+    "ض": "🎯", "ط": "🐢", "ظ": "🔮", "ع": "👁️", "غ": "👻", "ف": "🔥",
+    "ق": "👑", "ک": "🔑", "گ": "🌸", "ل": "🍋", "م": "🍄", "ن": "🌃",
+    "و": "🌊", "ه": "🏠", "ی": "💛", "ء": "✨", "ئ": "✨", "ة": "🌿",
+    "a": "🅰️", "b": "🅱️", "c": "🌙", "d": "🐬", "e": "🦅", "f": "🐸",
+    "g": "🌟", "h": "🏠", "i": "🍦", "j": "🕹️", "k": "🔑", "l": "🍀",
+    "m": "💎", "n": "🌃", "o": "🟠", "p": "🍍", "q": "👑", "r": "🌈",
+    "s": "☀️", "t": "🌴", "u": "☂️", "v": "✌️", "w": "🌊", "x": "❌",
+    "y": "💛", "z": "⚡",
+    "0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣",
+    "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣",
+    " ": "⬜", ".": "⚫", ",": "🔹", "!": "❗", "?": "❓",
+}
+_EMOJI_CIPHER_REV = {v: k for k, v in _EMOJI_CIPHER.items()}
+
+
+def text_to_emoji_cipher(text: str) -> str:
+    out = []
+    for ch in (text or ""):
+        low = ch.lower()
+        if ch in _EMOJI_CIPHER:
+            out.append(_EMOJI_CIPHER[ch])
+        elif low in _EMOJI_CIPHER:
+            out.append(_EMOJI_CIPHER[low])
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def emoji_cipher_to_text(text: str) -> str:
+    # دیکد حریصانه بر اساس طول کلیدهای ایموجی
+    keys = sorted(_EMOJI_CIPHER_REV.keys(), key=len, reverse=True)
+    i = 0
+    out = []
+    s = text or ""
+    while i < len(s):
+        matched = False
+        for k in keys:
+            if s.startswith(k, i):
+                out.append(_EMOJI_CIPHER_REV[k])
+                i += len(k)
+                matched = True
+                break
+        if not matched:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
 
 
 async def get_user_name(user_id: int) -> str:
@@ -3366,19 +3420,18 @@ async def rotate_profile_music_task(client: Client, user_id: int):
                 await asyncio.sleep(30)
                 continue
             tracks = ROTATING_MUSIC.get(user_id) or []
-            if len(tracks) < 2:
-                # تلاش برای خواندن از پروفایل
-                try:
-                    fetched = await _fetch_profile_music_tracks(client)
-                    if fetched:
-                        ROTATING_MUSIC[user_id] = fetched
-                        tracks = fetched
-                        try:
-                            persist_all_user_settings(user_id)
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logging.warning(f"refresh profile music: {e}")
+            # همیشه از پروفایل رفرش کن تا لیست تازه باشد
+            try:
+                fetched = await _fetch_profile_music_tracks(client)
+                if fetched:
+                    ROTATING_MUSIC[user_id] = fetched
+                    tracks = fetched
+                    try:
+                        persist_all_user_settings(user_id)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logging.warning(f"refresh profile music: {e}")
             if len(tracks) < 1:
                 await asyncio.sleep(60)
                 continue
@@ -3456,16 +3509,16 @@ async def build_profile_clock_image(client, user_id: int) -> str:
     hour_angle = (h12 * 30) + (m * 0.5)
     minute_angle = m * 6
 
-    for i in range(60):
-        ang = math.radians(i * 6 - 90)
-        long = (i % 5 == 0)
-        r1 = outer_r - (18 if long else 10)
+    # فقط ۱۲ علامت ساعت (نه ۶۰ خط که شبیه عقربه اضافه دیده شود)
+    for i in range(12):
+        ang = math.radians(i * 30 - 90)
+        r1 = outer_r - 16
         r2 = outer_r - 3
         draw.line(
             [(cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)),
              (cx + r2 * math.cos(ang), cy + r2 * math.sin(ang))],
-            fill=(240, 240, 240, 255) if long else (130, 130, 130, 220),
-            width=3 if long else 1,
+            fill=(240, 240, 240, 255),
+            width=4,
         )
 
     def hand(angle_deg, length, width, color):
@@ -3476,9 +3529,10 @@ async def build_profile_clock_image(client, user_id: int) -> str:
             width=width,
         )
 
-    hand(hour_angle, inner_r * 0.42, 7, (255, 255, 255, 255))
-    hand(minute_angle, inner_r * 0.70, 4, (230, 230, 230, 255))
-    draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=(255, 255, 255, 255))
+    # فقط ۲ عقربه: ساعت + دقیقه
+    hand(hour_angle, inner_r * 0.40, 8, (255, 255, 255, 255))
+    hand(minute_angle, inner_r * 0.68, 5, (220, 220, 220, 255))
+    draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=(255, 255, 255, 255))
 
     try:
         try:
@@ -6800,6 +6854,67 @@ async def reply_based_controller(client, message):
             await message.reply_text("🎞 فیلتر گیف پیوی: خاموش ❌")
         return
 
+    # ========== حذف پیام‌های خود ==========
+    del_m = re.match(r"^\.?حذف\s+(\d+)$", (cmd or "").strip())
+    if del_m:
+        try:
+            count = max(1, min(100, int(del_m.group(1))))
+            msg_ids = [message.id]
+            async for m in client.get_chat_history(message.chat.id, limit=count + 8):
+                if m.id == message.id:
+                    continue
+                if m.from_user and getattr(m.from_user, "is_self", False):
+                    msg_ids.append(m.id)
+                if len(msg_ids) >= count + 1:
+                    break
+            try:
+                await client.delete_messages(message.chat.id, msg_ids[: count + 1])
+            except Exception:
+                for mid in msg_ids[: count + 1]:
+                    try:
+                        await client.delete_messages(message.chat.id, mid)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logging.warning(f"delete cmd: {e}")
+        return
+
+    # ========== رمز ایموجی ==========
+    if cmd in (".تبدیل متن به رمز ایموجی", "تبدیل متن به رمز ایموجی") or cmd.startswith(".تبدیل متن به رمز ایموجی"):
+        src = ""
+        if message.reply_to_message:
+            src = message.reply_to_message.text or message.reply_to_message.caption or ""
+        if not src and " " in cmd:
+            src = cmd.split(None, 1)[1] if cmd.startswith(".") else ""
+            # after full phrase
+            for p in (".تبدیل متن به رمز ایموجی", "تبدیل متن به رمز ایموجی"):
+                if cmd.startswith(p):
+                    src = cmd[len(p):].strip()
+                    break
+        if not src:
+            await message.edit_text("❌ ریپلای روی متن یا بنویس:\n`.تبدیل متن به رمز ایموجی سلام`")
+            return
+        encoded = text_to_emoji_cipher(src)
+        try:
+            await message.edit_text(f"🔐 رمز ایموجی:\n\n{encoded}")
+        except Exception:
+            await message.reply_text(f"🔐 رمز ایموجی:\n\n{encoded}")
+        return
+
+    if cmd in (".تبدیل ایموجی به متن رمز", "تبدیل ایموجی به متن رمز", ".تبدیل رمز ایموجی به متن") or cmd.startswith(".تبدیل ایموجی به متن"):
+        src = ""
+        if message.reply_to_message:
+            src = message.reply_to_message.text or message.reply_to_message.caption or ""
+        if not src:
+            await message.edit_text("❌ روی پیام رمزدار ریپلای کن:\n`.تبدیل ایموجی به متن رمز`")
+            return
+        decoded = emoji_cipher_to_text(src)
+        try:
+            await message.edit_text(f"🔓 متن:\n\n{decoded}")
+        except Exception:
+            await message.reply_text(f"🔓 متن:\n\n{decoded}")
+        return
+
     if cmd in (".منشی روشن", "منشی روشن"):
         SECRETARY_MODE_STATUS[user_id] = True
         try:
@@ -7046,7 +7161,8 @@ async def reply_based_controller(client, message):
                     await message.edit_text(extra or "❌ خطا در دریافت قیمت")
                 else:
                     time_str = datetime.now(TEHRAN_TIMEZONE).strftime('%H:%M')
-                    upd = f"\n📅 بروزرسانی tgju: {extra}" if extra else ""
+                    now_t = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M:%S")
+                    upd = f"\n📅 بروزرسانی زنده: {now_t}"
                     await message.edit_text(
                         f"💱 قیمت {name} الان:\n\n"
                         f"💰 {price}\n"
@@ -8625,7 +8741,11 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("⏰ ساعت اسم", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
                 _styled_btn("🕰 ساعت پروفایل", f"toggle_photo_clock_{user_id}", PROFILE_PHOTO_CLOCK.get(user_id, False)),
                 _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
+                _styled_btn("🗑 حذف پیام", f"panel_page_49_{user_id}", style="primary"),
+                _styled_btn("🔐 رمز ایموجی", f"panel_page_50_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
@@ -9451,7 +9571,158 @@ async def callback_panel_handler(client, callback):
         return
 
     # =============================================
+
+async def _dooz_render(client, message, st: dict):
+    board = st.get("board") or [" "] * 9
+    org = st.get("organizer_id")
+    joi = st.get("joiner_id")
+    amount = st.get("amount") or 0
+    turn = st.get("turn")
+    rows = []
+    for r in range(3):
+        row = []
+        for col in range(3):
+            i = r * 3 + col
+            label = board[i] if board[i] != " " else "⬜"
+            row.append(InlineKeyboardButton(label, callback_data=f"dooz_cell_{i}_{org}_{joi}"))
+        rows.append(row)
+    turn_name = "❌" if turn == org else "⭕"
+    text = (
+        f"⭕❌ <b>دوز | self MR</b>\n\n"
+        f"💰 مبلغ: <code>{amount:,}</code>\n"
+        f"🎯 نوبت: {turn_name}\n"
+    )
+    try:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.warning(f"dooz_render: {e}")
+
+
     # کالبک‌های نبرد الماس
+
+    # ===== دوز =====
+    if isinstance(data, str) and data.startswith("dooz_cancel_"):
+        try:
+            parts = data.split("_")
+            amount = int(parts[2])
+            organizer_id = int(parts[3])
+            if callback.from_user.id != organizer_id and callback.from_user.id not in GOD_ADMIN_IDS:
+                await callback.answer("فقط برگزارکننده!", show_alert=True)
+                return
+            add_balance(organizer_id, amount)
+            key = (callback.message.chat.id, callback.message.id)
+            active_dooz.pop(key, None)
+            try:
+                await callback.message.edit_text(f"❌ دوز لغو شد. `{amount:,}` الماس برگشت.")
+            except Exception:
+                pass
+            await callback.answer("لغو شد")
+        except Exception as e:
+            logging.warning(f"dooz_cancel: {e}")
+        return
+
+    if isinstance(data, str) and data.startswith("dooz_join_"):
+        try:
+            parts = data.split("_")
+            amount = int(parts[2])
+            organizer_id = int(parts[3])
+            joiner = callback.from_user.id
+            if joiner == organizer_id:
+                await callback.answer("نمی‌توانید با خودتان بازی کنید!", show_alert=True)
+                return
+            if get_balance(joiner) < amount:
+                await callback.answer("موجودی کافی نیست!", show_alert=True)
+                return
+            if not deduct_balance(joiner, amount):
+                await callback.answer("خطا در کسر الماس!", show_alert=True)
+                return
+            key = (callback.message.chat.id, callback.message.id)
+            st = active_dooz.get(key) or {
+                "organizer_id": organizer_id,
+                "amount": amount,
+                "board": [" "] * 9,
+                "finished": False,
+            }
+            if st.get("joiner_id"):
+                add_balance(joiner, amount)
+                await callback.answer("این بازی پر است!", show_alert=True)
+                return
+            st["joiner_id"] = joiner
+            st["turn"] = organizer_id  # X شروع
+            st["board"] = [" "] * 9
+            st["finished"] = False
+            active_dooz[key] = st
+            await _dooz_render(client, callback.message, st)
+            await callback.answer("شروع!")
+        except Exception as e:
+            logging.warning(f"dooz_join: {e}")
+        return
+
+    if isinstance(data, str) and data.startswith("dooz_cell_"):
+        try:
+            # dooz_cell_{idx}_{organizer}_{joiner}
+            parts = data.split("_")
+            idx = int(parts[2])
+            organizer_id = int(parts[3])
+            joiner_id = int(parts[4])
+            uid = callback.from_user.id
+            key = (callback.message.chat.id, callback.message.id)
+            st = active_dooz.get(key)
+            if not st or st.get("finished"):
+                await callback.answer("بازی تمام شده", show_alert=True)
+                return
+            if uid not in (organizer_id, joiner_id):
+                await callback.answer("شما بازیکن نیستید!", show_alert=True)
+                return
+            if st.get("turn") != uid:
+                await callback.answer("نوبت شما نیست!", show_alert=True)
+                return
+            board = st["board"]
+            if idx < 0 or idx > 8 or board[idx] != " ":
+                await callback.answer("این خانه پر است!", show_alert=True)
+                return
+            mark = "❌" if uid == organizer_id else "⭕"
+            board[idx] = mark
+            # win?
+            wins = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
+            winner = None
+            for a,b,d in wins:
+                if board[a] == board[b] == board[d] != " ":
+                    winner = uid
+                    break
+            if winner:
+                st["finished"] = True
+                amount = int(st["amount"])
+                prize = amount * 2
+                tax = int(prize * GAME_TAX_PERCENT / 100)
+                prize -= tax
+                add_balance(winner, prize)
+                wname = await get_user_name(winner)
+                active_dooz.pop(key, None)
+                await callback.message.edit_text(
+                    f"🏆 <b>برنده دوز:</b> {wname}\n💎 جایزه: <code>{prize:,}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+                await callback.answer("برد!")
+                return
+            if all(x != " " for x in board):
+                st["finished"] = True
+                amount = int(st["amount"])
+                # تساوی — برگشت
+                add_balance(organizer_id, amount)
+                add_balance(joiner_id, amount)
+                active_dooz.pop(key, None)
+                await callback.message.edit_text("🤝 تساوی! الماس‌ها برگشت داده شد.")
+                await callback.answer("تساوی")
+                return
+            st["turn"] = joiner_id if uid == organizer_id else organizer_id
+            active_dooz[key] = st
+            await _dooz_render(client, callback.message, st)
+            await callback.answer("OK")
+        except Exception as e:
+            logging.warning(f"dooz_cell: {e}")
+        return
+
     # =============================================
     
     # ====== پیوستن به نبرد ======
@@ -9840,8 +10111,10 @@ async def callback_panel_handler(client, callback):
             elif any(k in settings_update for k in ("auto_seen", "pv_lock", "anti_login", "global_enemy", "clock", "typing", "playing", "action")):
                 if any(k in settings_update for k in ("typing", "playing", "action")):
                     stay_page = 4
-                elif "clock" in settings_update or "font" in settings_update:
+                elif "font" in settings_update:
                     stay_page = 5
+                elif "clock" in settings_update:
+                    stay_page = 1
                 else:
                     stay_page = 3
             st_bits = []
@@ -10242,6 +10515,19 @@ async def callback_panel_handler(client, callback):
                     "دوست روشن\n"
                     "دوست خاموش\n"
                     "لیست دوستان"
+                ),
+                49: (
+                    "🗑 حذف پیام | self MR\n\n"
+                    "دستورات:\n"
+                    ".حذف 20\n"
+                    "حذف 20\n\n"
+                    "پیام‌های خودتان + دستور حذف می‌شوند."
+                ),
+                50: (
+                    "🔐 رمز ایموجی | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای + .تبدیل متن به رمز ایموجی\n"
+                    "ریپلای + .تبدیل ایموجی به متن رمز"
                 ),
                 46: (
                     "👍 ریاکشن خودکار | self MR\n\n"
@@ -11922,18 +12208,34 @@ async def group_handler(client, message):
         await message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if text.startswith("حذف "):
+    # حذف پیام‌های خود: حذف 20  یا  .حذف 20
+    del_m = re.match(r"^\.?حذف\s+(\d+)$", text.strip())
+    if del_m:
         try:
-            count = int(text.split()[1])
-            msg_ids = []
-            async for m in client.get_chat_history(message.chat.id, limit=count + 1):
-                if m.from_user and m.from_user.is_self:
+            count = max(1, min(100, int(del_m.group(1))))
+            msg_ids = [message.id]
+            async for m in client.get_chat_history(message.chat.id, limit=count + 5):
+                if m.id == message.id:
+                    continue
+                if m.from_user and getattr(m.from_user, "is_self", False):
                     msg_ids.append(m.id)
-            if msg_ids:
-                await client.delete_messages(message.chat.id, msg_ids)
-            await message.delete()
+                if len(msg_ids) >= count + 1:
+                    break
+            # خود دستور هم داخل لیست است
+            try:
+                await client.delete_messages(message.chat.id, msg_ids[: count + 1])
+            except Exception as e1:
+                # تکی پاک کن
+                for mid in msg_ids[: count + 1]:
+                    try:
+                        await client.delete_messages(message.chat.id, mid)
+                    except Exception:
+                        pass
         except Exception as e:
-            await message.reply_text(f"❌ خطا: {str(e)}")
+            try:
+                await message.edit_text(f"❌ خطا در حذف: {e}")
+            except Exception:
+                pass
         return
 
     # ====== نبرد الماس ======
@@ -11991,6 +12293,48 @@ async def group_handler(client, message):
             'chat_id': message.chat.id,
             'message_id': sent_message.id
         }
+        return
+
+
+    # ====== دوز (تیك تاك تو) ======
+    dooz_match = re.match(r'دوز\s+(\d+)$', text.strip())
+    if dooz_match:
+        organizer_id = message.from_user.id
+        amount = int(dooz_match.group(1))
+        if amount < MIN_GAME_AMOUNT:
+            await message.reply_text(f'❌ حداقل مبلغ دوز {MIN_GAME_AMOUNT} الماس است.')
+            return
+        if get_balance(organizer_id) < amount:
+            await message.reply_text(f'❌ موجودی کافی نیست (`{get_balance(organizer_id):,}`).')
+            return
+        if not deduct_balance(organizer_id, amount):
+            await message.reply_text("❌ خطا در کسر الماس.")
+            return
+        first_name = (message.from_user.first_name or "کاربر").replace("<", "").replace(">", "")
+        game_text = (
+            f"⭕❌ <b>دوز | self MR</b>\n\n"
+            f"👤 برگزارکننده: <a href=\"tg://user?id={organizer_id}\">{first_name}</a>\n"
+            f"💰 مبلغ: <code>{amount:,}</code> الماس\n"
+            f"🏆 جایزه: <code>{amount * 2:,}</code> الماس\n\n"
+            f"برای پیوستن روی دکمه بزنید."
+        )
+        buttons = [[
+            InlineKeyboardButton("✅ شرکت در دوز", callback_data=f"dooz_join_{amount}_{organizer_id}"),
+            InlineKeyboardButton("❌ لغو", callback_data=f"dooz_cancel_{amount}_{organizer_id}"),
+        ]]
+        try:
+            sent = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+            active_dooz[(message.chat.id, sent.id)] = {
+                "organizer_id": organizer_id,
+                "amount": amount,
+                "board": [" "] * 9,
+                "turn": None,
+                "joiner_id": None,
+                "finished": False,
+            }
+        except Exception as e:
+            add_balance(organizer_id, amount)
+            await message.reply_text(f"❌ خطا: {e}")
         return
 
 async def finalize(message, user_c, phone):

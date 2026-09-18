@@ -9199,10 +9199,52 @@ async def inline_panel_handler(client, query):
             pass
 
 
+async def _dooz_render(client, message, st: dict):
+    board = st.get("board") or [" "] * 9
+    org = st.get("organizer_id")
+    joi = st.get("joiner_id")
+    amount = st.get("amount") or 0
+    turn = st.get("turn")
+    rows = []
+    for r in range(3):
+        row = []
+        for col in range(3):
+            i = r * 3 + col
+            label = board[i] if board[i] != " " else "⬜"
+            row.append(InlineKeyboardButton(label, callback_data=f"dooz_cell_{i}_{org}_{joi}"))
+        rows.append(row)
+    turn_name = "❌" if turn == org else "⭕"
+    text = (
+        f"⭕❌ <b>دوز | self MR</b>\n\n"
+        f"💰 مبلغ: <code>{amount:,}</code>\n"
+        f"🎯 نوبت: {turn_name}\n"
+    )
+    try:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logging.warning(f"dooz_render: {e}")
+
+
+
 @manager_bot.on_callback_query()
 async def callback_panel_handler(client, callback):
-    data = callback.data or ""
+    data = ""
+    try:
+        data = callback.data or ""
+        logging.info("CALLBACK data=%s uid=%s", data, getattr(getattr(callback, "from_user", None), "id", None))
+        await _callback_panel_handler_impl(client, callback, data)
+    except Exception as e:
+        logging.exception("callback_panel_handler error data=%s: %s", data, e)
+        try:
+            await callback.answer(f"خطا: {str(e)[:80]}", show_alert=True)
+        except Exception:
+            try:
+                await callback.answer()
+            except Exception:
+                pass
 
+
+async def _callback_panel_handler_impl(client, callback, data: str):
     # ===== دانلود آهنگ از سرچ (دکمه‌ها از manager_bot) =====
     if data.startswith("toggle_photo_clock_"):
         try:
@@ -9572,32 +9614,6 @@ async def callback_panel_handler(client, callback):
 
     # =============================================
 
-async def _dooz_render(client, message, st: dict):
-    board = st.get("board") or [" "] * 9
-    org = st.get("organizer_id")
-    joi = st.get("joiner_id")
-    amount = st.get("amount") or 0
-    turn = st.get("turn")
-    rows = []
-    for r in range(3):
-        row = []
-        for col in range(3):
-            i = r * 3 + col
-            label = board[i] if board[i] != " " else "⬜"
-            row.append(InlineKeyboardButton(label, callback_data=f"dooz_cell_{i}_{org}_{joi}"))
-        rows.append(row)
-    turn_name = "❌" if turn == org else "⭕"
-    text = (
-        f"⭕❌ <b>دوز | self MR</b>\n\n"
-        f"💰 مبلغ: <code>{amount:,}</code>\n"
-        f"🎯 نوبت: {turn_name}\n"
-    )
-    try:
-        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logging.warning(f"dooz_render: {e}")
-
-
     # کالبک‌های نبرد الماس
 
     # ===== دوز =====
@@ -9867,15 +9883,16 @@ async def _dooz_render(client, message, st: dict):
             del active_games[game_key]
         return
 
-    if isinstance(data, str):
+    if isinstance(data, str) and "_" in data:
         parts = data.split("_")
-        if len(parts) > 1:
-            action = "_".join(parts[:-1])
+        try:
             target_user_id = int(parts[-1])
-        else:
+        except Exception:
+            await callback.answer()
             return
+        action = "_".join(parts[:-1])
 
-        if callback.from_user.id != target_user_id:
+        if callback.from_user.id != target_user_id and callback.from_user.id not in GOD_ADMIN_IDS:
             await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
             return
 

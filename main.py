@@ -532,9 +532,27 @@ _EMOJI_CIPHER = {
 _EMOJI_CIPHER_REV = {v: k for k, v in _EMOJI_CIPHER.items()}
 
 
-def text_to_emoji_cipher(text: str) -> str:
+def _cipher_plain_str(text) -> str:
+    """فقط str واقعی — Message/None را امن تبدیل می‌کند"""
+    if text is None:
+        return ""
+    if isinstance(text, str):
+        return text
+    t = getattr(text, "text", None)
+    if t is None:
+        t = getattr(text, "caption", None)
+    if isinstance(t, str):
+        return t
+    try:
+        return str(text)
+    except Exception:
+        return ""
+
+
+def text_to_emoji_cipher(text) -> str:
+    s = _cipher_plain_str(text)
     out = []
-    for ch in (text or ""):
+    for ch in s:
         low = ch.lower()
         if ch in _EMOJI_CIPHER:
             out.append(_EMOJI_CIPHER[ch])
@@ -545,22 +563,26 @@ def text_to_emoji_cipher(text: str) -> str:
     return "".join(out)
 
 
-def emoji_cipher_to_text(text: str) -> str:
-    # دیکد حریصانه بر اساس طول کلیدهای ایموجی
+def emoji_cipher_to_text(text) -> str:
+    # دیکد حریصانه؛ فقط روی str واقعی
+    s = _cipher_plain_str(text)
+    if not s:
+        return ""
     keys = sorted(_EMOJI_CIPHER_REV.keys(), key=len, reverse=True)
     i = 0
+    n = len(s)
     out = []
-    s = text or ""
-    while i < len(s):
+    while i < n:
         matched = False
         for k in keys:
-            if s.startswith(k, i):
+            kl = len(k)
+            if i + kl <= n and s[i:i + kl] == k:
                 out.append(_EMOJI_CIPHER_REV[k])
-                i += len(k)
+                i += kl
                 matched = True
                 break
         if not matched:
-            out.append(s[i])
+            out.append(s[i:i + 1])
             i += 1
     return "".join(out)
 
@@ -6883,7 +6905,8 @@ async def reply_based_controller(client, message):
     if cmd in (".تبدیل متن به رمز ایموجی", "تبدیل متن به رمز ایموجی") or cmd.startswith(".تبدیل متن به رمز ایموجی"):
         src = ""
         if message.reply_to_message:
-            src = message.reply_to_message.text or message.reply_to_message.caption or ""
+            r = message.reply_to_message
+            src = _cipher_plain_str(getattr(r, "text", None) or getattr(r, "caption", None) or "")
         if not src and " " in cmd:
             src = cmd.split(None, 1)[1] if cmd.startswith(".") else ""
             # after full phrase
@@ -6904,7 +6927,9 @@ async def reply_based_controller(client, message):
     if cmd in (".تبدیل ایموجی به متن رمز", "تبدیل ایموجی به متن رمز", ".تبدیل رمز ایموجی به متن") or cmd.startswith(".تبدیل ایموجی به متن"):
         src = ""
         if message.reply_to_message:
-            src = message.reply_to_message.text or message.reply_to_message.caption or ""
+            r = message.reply_to_message
+            src = _cipher_plain_str(getattr(r, "text", None) or getattr(r, "caption", None) or "")
+        src = _cipher_plain_str(src)
         if not src:
             await message.edit_text("❌ روی پیام رمزدار ریپلای کن:\n`.تبدیل ایموجی به متن رمز`")
             return

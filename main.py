@@ -2725,6 +2725,8 @@ GLOBAL_ENEMY_STATUS = {}
 ORIGINAL_PROFILE_DATA = {}
 PV_MSG_CACHE = {}
 PROFILE_FLOOD_UNTIL = {}
+PROFILE_NAME_FLOOD_UNTIL = {}
+PROFILE_PHOTO_FLOOD_UNTIL = {}
 
 
 def load_all_states():
@@ -2963,8 +2965,8 @@ def stylize_time(time_str: str, style: str) -> str:
 
 async def perform_clock_update_now(client, user_id):
     try:
-        # احترام به FLOOD_WAIT
-        until = PROFILE_FLOOD_UNTIL.get(user_id, 0)
+        # فقط FLOOD اسم — مستقل از ساعت عکس پروفایل
+        until = max(PROFILE_NAME_FLOOD_UNTIL.get(user_id, 0), 0)
         if time.time() < until:
             return
         if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
@@ -2988,7 +2990,8 @@ async def perform_clock_update_now(client, user_id):
         if "FLOOD_WAIT" in err:
             m = re.search(r"(\d+)", err)
             sec = int(m.group(1)) if m else 300
-            PROFILE_FLOOD_UNTIL[user_id] = time.time() + sec + 5
+            PROFILE_NAME_FLOOD_UNTIL[user_id] = time.time() + sec + 5
+            PROFILE_FLOOD_UNTIL[user_id] = PROFILE_NAME_FLOOD_UNTIL[user_id]
 
 
 async def rotate_profile_name_task(client: Client, user_id: int):
@@ -3004,9 +3007,9 @@ async def rotate_profile_name_task(client: Client, user_id: int):
             if len(names) < 1:
                 await asyncio.sleep(3)
                 continue
-            until = PROFILE_FLOOD_UNTIL.get(user_id, 0)
+            until = PROFILE_NAME_FLOOD_UNTIL.get(user_id, 0)
             if time.time() < until:
-                await asyncio.sleep(min(30, until - time.time() + 1))
+                await asyncio.sleep(min(30, max(1, until - time.time() + 1)))
                 continue
             interval = max(3, int(ROTATING_NAME_INTERVAL.get(user_id) or 10))
             idx = ROTATING_NAME_INDEX.get(user_id, 0) % len(names)
@@ -3024,7 +3027,7 @@ async def rotate_profile_name_task(client: Client, user_id: int):
                 if "FLOOD_WAIT" in str(e):
                     m = re.search(r"(\d+)", str(e))
                     sec = int(m.group(1)) if m else 300
-                    PROFILE_FLOOD_UNTIL[user_id] = time.time() + sec + 5
+                    PROFILE_NAME_FLOOD_UNTIL[user_id] = time.time() + sec + 5
             ROTATING_NAME_INDEX[user_id] = (idx + 1) % len(names)
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
@@ -3485,9 +3488,9 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
             if not PROFILE_PHOTO_CLOCK.get(user_id, False):
                 await asyncio.sleep(5)
                 continue
-            until = PROFILE_FLOOD_UNTIL.get(user_id, 0)
+            until = PROFILE_PHOTO_FLOOD_UNTIL.get(user_id, 0)
             if time.time() < until:
-                await asyncio.sleep(min(60, max(3, until - time.time())))
+                await asyncio.sleep(min(120, max(5, until - time.time())))
                 continue
 
             if not PROFILE_PHOTO_CLOCK_BASE.get(user_id) or not os.path.exists(PROFILE_PHOTO_CLOCK_BASE.get(user_id) or ""):
@@ -3530,31 +3533,44 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                     logging.warning(f"set_profile_photo clock: {e}")
                     if "FLOOD_WAIT" in err:
                         m = re.search(r"(\d+)", err)
-                        sec = int(m.group(1)) if m else 300
-                        PROFILE_FLOOD_UNTIL[user_id] = time.time() + sec + 5
+                        sec = int(m.group(1)) if m else 600
+                        PROFILE_PHOTO_FLOOD_UNTIL[user_id] = time.time() + sec + 10
                 try:
                     if path and os.path.exists(path):
                         os.remove(path)
                 except Exception:
                     pass
 
+            # هر ۱ دقیقه — هم‌تراز با ساعت اسم (وقت تهران)
             wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.25
-            await asyncio.sleep(max(3, wait))
+            await asyncio.sleep(max(5, wait))
         except asyncio.CancelledError:
             break
         except Exception as e:
             logging.warning(f"update_profile_photo_clock_task: {e}")
-            await asyncio.sleep(20)
+            await asyncio.sleep(60)
 
 
 async def update_profile_clock(client: Client, user_id: int):
+    """ساعت اسم — هر دقیقه وقت تهران؛ مستقل از ساعت عکس پروفایل"""
+    await asyncio.sleep(2)
+    # یک‌بار فوری بعد از استارت
+    try:
+        if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
+            await perform_clock_update_now(client, user_id)
+    except Exception as e:
+        logging.warning(f"initial name clock: {e}")
     while user_id in ACTIVE_BOTS:
         try:
             if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
                 await perform_clock_update_now(client, user_id)
-            await asyncio.sleep(60 - datetime.now(TEHRAN_TIMEZONE).second + 0.1)
-        except Exception:
-            await asyncio.sleep(60)
+            wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.15
+            await asyncio.sleep(max(5, wait))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.warning(f"update_profile_clock loop {user_id}: {e}")
+            await asyncio.sleep(20)
 
 
 
@@ -10808,7 +10824,6 @@ async def start_login(client, message):
             [
                 [KeyboardButton("📊 وضعیت ربات"), KeyboardButton("📢 پیام همگانی")],
                 [KeyboardButton("💎 پنل الماس"), KeyboardButton("🛠 پنل ادمین")],
-                [KeyboardButton("📋 لیست ایموجی پریمیوم"), KeyboardButton("🧪 تست ایموجی پریمیوم")],
                 [KeyboardButton("📢 ثبت کانال پست"), KeyboardButton("📨 ارسال پست به کانال")],
                 [KeyboardButton("📥 دانلود دیتابیس"), KeyboardButton("📤 آپلود دیتابیس")],
             ],

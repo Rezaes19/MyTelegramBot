@@ -10182,60 +10182,123 @@ async def _dooz_cancel_timer(key):
 
 
 async def _dooz_finish_timeout(client, message, key, st):
-    """نوبت تمام شد — بازیکن فعلی می‌بازد"""
+    """نوبت تمام شد — فقط بازیکن نوبت‌دار می‌بازد؛ جایزه فقط به حریف"""
     try:
-        if not st or st.get("finished"):
+        if not st:
             return
+        # جلوگیری از اجرای دوباره (قفل)
+        if st.get("finished") or st.get("settling"):
+            return
+        st["settling"] = True
+        st["finished"] = True
+
         turn = st.get("turn")
         org = st.get("organizer_id")
         joi = st.get("joiner_id")
-        if not turn or not joi:
+        if not turn or not joi or turn not in (org, joi):
+            st["settling"] = False
+            st["finished"] = False
             return
-        loser = turn
-        winner = joi if turn == org else org
+
+        loser = int(turn)
+        winner = int(joi if turn == org else org)
         amount = int(st.get("amount") or 0)
+        # هر دو قبلاً amount گذاشته‌اند؛ فقط به برنده جایزه بده (کسر دوباره نکن)
         prize = amount * 2
         tax = int(prize * GAME_TAX_PERCENT / 100)
         prize -= tax
-        st["finished"] = True
-        active_dooz.pop(key, None)
+
         await _dooz_cancel_timer(key)
-        add_balance(winner, prize)
-        wname = await get_user_name(winner)
-        lname = await get_user_name(loser)
+        active_dooz.pop(key, None)
+
+        try:
+            add_balance(winner, prize)
+        except Exception as e:
+            logging.warning("dooz timeout add_balance: %s", e)
+
+        try:
+            wname = await get_user_name(winner)
+        except Exception:
+            wname = str(winner)
+        try:
+            lname = await get_user_name(loser)
+        except Exception:
+            lname = str(loser)
         wbal = get_balance(winner)
         lbal = get_balance(loser)
         nl = chr(10)
         result_text = (
-            "⏱ <b>زمان تمام شد — ۳۰ ثانیه</b>" + nl + nl
-            + f"❌ کاربر <b>{lname}</b> در ۳۰ ثانیه بازی نکرد و <b>بازنده</b> شد." + nl
-            + f"🏆 برنده: <b>{wname}</b>" + nl + nl
-            + f"💎 جایزه به برنده واریز شد."
+            "⏱ <b>زمان تمام شد</b>" + nl + nl
+            + f"❌ <b>{lname}</b> در ۳۰ ثانیه نوبتش را بازی نکرد و <b>بازنده</b> شد." + nl
+            + f"🏆 <b>{wname}</b> برنده شد و جایزه را گرفت." + nl + nl
+            + f"💎 جایزه واریزی: <code>{prize:,}</code>" + nl
+            + f"💎 موجودی برنده: <code>{wbal:,}</code>" + nl
+            + f"💎 موجودی بازنده: <code>{lbal:,}</code>"
         )
-        result_buttons = InlineKeyboardMarkup([
+        kb = [
             [
-                InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {prize:,}", callback_data="noop"),
+                {"text": "💎 جایزه برنده", "callback_data": "noop", "style": "success"},
+                {"text": f"💎 {prize:,}", "callback_data": "noop", "style": "success"},
             ],
             [
-                InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {wbal:,}", callback_data="noop"),
+                {"text": "🏆 موجودی برنده", "callback_data": "noop", "style": "primary"},
+                {"text": f"💎 {wbal:,}", "callback_data": "noop", "style": "primary"},
             ],
             [
-                InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
-                InlineKeyboardButton(f"💎 {lbal:,}", callback_data="noop"),
+                {"text": "❌ موجودی بازنده", "callback_data": "noop", "style": "danger"},
+                {"text": f"💎 {lbal:,}", "callback_data": "noop", "style": "danger"},
             ],
-        ])
+        ]
+
+        chat_id = key[0] if isinstance(key, tuple) else getattr(getattr(message, "chat", None), "id", None)
+        msg_id = key[1] if isinstance(key, tuple) else getattr(message, "id", None)
+        if st.get("chat_id"):
+            chat_id = st.get("chat_id")
+        if st.get("message_id"):
+            msg_id = st.get("message_id")
+
+        edited = False
         try:
-            await message.edit_text(result_text, reply_markup=result_buttons, parse_mode=ParseMode.HTML)
-        except Exception:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+            payload = {
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "text": result_text,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps({"inline_keyboard": kb}, ensure_ascii=False),
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=payload) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        edited = True
+                    else:
+                        logging.warning("dooz timeout edit: %s", data)
+        except Exception as e:
+            logging.warning("dooz timeout botapi edit: %s", e)
+
+        if not edited and message is not None:
             try:
-                await client.send_message(
-                    message.chat.id,
-                    f"⏱ تایم‌اوت دوز\n🏆 {wname}\n❌ {lname}\n💎 {prize:,}",
+                await message.edit_text(
+                    result_text,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(x["text"], callback_data="noop") for x in row]
+                        for row in kb
+                    ]),
+                    parse_mode=ParseMode.HTML,
                 )
+                edited = True
+            except Exception as e:
+                logging.warning("dooz timeout pyro edit: %s", e)
+
+        if not edited:
+            try:
+                await client.send_message(chat_id, result_text, parse_mode=ParseMode.HTML)
             except Exception:
-                pass
+                try:
+                    await manager_bot.send_message(chat_id, result_text, parse_mode=ParseMode.HTML)
+                except Exception as e:
+                    logging.warning("dooz timeout send: %s", e)
     except Exception as e:
         logging.warning(f"dooz timeout finish: {e}")
 
@@ -10879,6 +10942,9 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                 st["joiner_name"] = (callback.from_user.first_name or str(joiner))
             st["turn_token"] = time.time()
             st["turn_deadline"] = time.time() + DOOZ_TURN_SEC
+            st["chat_id"] = callback.message.chat.id
+            st["message_id"] = callback.message.id
+            st["settling"] = False
             active_dooz[key] = st
             await _dooz_render(client, callback.message, st)
             await _dooz_start_timer(client, callback.message, key)
@@ -10984,6 +11050,9 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             st["turn"] = joiner_id if uid == organizer_id else organizer_id
             st["turn_token"] = time.time()
             st["turn_deadline"] = time.time() + DOOZ_TURN_SEC
+            st["chat_id"] = callback.message.chat.id
+            st["message_id"] = callback.message.id
+            st["settling"] = False
             active_dooz[key] = st
             await _dooz_render(client, callback.message, st)
             await _dooz_start_timer(client, callback.message, key)

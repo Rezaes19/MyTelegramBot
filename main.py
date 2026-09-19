@@ -2612,6 +2612,7 @@ CLOCK_STATUS = {}
 PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عکس پروفایل
 PROFILE_PHOTO_CLOCK_BASE = {}  # user_id -> path عکس اصلی بدون قاب
 PROFILE_PHOTO_CLOCK_LAST = {}  # user_id -> file_id آخرین عکس ساعت (فقط همان پاک شود)
+PROFILE_PHOTO_CLOCK_IDS = {}  # user_id -> set(file_id) فقط عکس‌هایی که خودمان به‌عنوان ساعت گذاشتیم
 PROFILE_PHOTO_CLOCK_LAST_MINUTE = {}  # user_id -> "HH:MM" آخرین دقیقه رسم‌شده
 PROFILE_PHOTO_CLOCK_COLOR = {}  # user_id -> color key
 PROFILE_PHOTO_CLOCK_STYLE = {}  # user_id -> neon|classic
@@ -2837,7 +2838,7 @@ PROFILE_FLOOD_UNTIL = {}
 PROFILE_NAME_FLOOD_UNTIL = {}
 PROFILE_PHOTO_FLOOD_UNTIL = {}
 PROFILE_PHOTO_LAST_UPLOAD = {}  # user_id -> unix time آخرین آپلود موفق
-PROFILE_PHOTO_MIN_GAP = 300  # حداقل ۵ دقیقه بین دو آپلود عکس پروفایل
+PROFILE_PHOTO_MIN_GAP = 50  # حدود یک دقیقه بین آپلودها
 
 
 def can_upload_profile_photo(user_id: int) -> tuple:
@@ -3690,142 +3691,92 @@ async def build_profile_clock_image(client, user_id: int) -> str:
 
 
 async def replace_clock_profile_photo(client: Client, user_id: int, path: str) -> bool:
-    """عکس ساعت را جایگزین می‌کند: جدید می‌گذارد و عکس قبلیِ ساعت را پاک می‌کند تا انباشته نشود"""
+    """عکس ساعت جدید می‌گذارد و فقط عکس قبلیِ ساعت (که خودمان ساختیم) را پاک می‌کند — بقیه پروفایل‌ها دست نمی‌خورند"""
     if not path or not os.path.exists(path):
         return False
     prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
-    # عکس‌های فعلی قبل از آپلود
-    before_ids = []
-    try:
-        async for p in client.get_chat_photos("me", limit=8):
-            fid = getattr(p, "file_id", None)
-            if fid:
-                before_ids.append(fid)
-    except Exception:
-        pass
+    ids = PROFILE_PHOTO_CLOCK_IDS.setdefault(user_id, set())
 
     await client.set_profile_photo(photo=path)
     mark_profile_photo_uploaded(user_id)
-    await asyncio.sleep(1.2)
-
-    after = []
-    try:
-        async for p in client.get_chat_photos("me", limit=10):
-            after.append(p)
-    except Exception:
-        after = []
+    await asyncio.sleep(1.0)
 
     new_id = None
-    if after:
-        new_id = getattr(after[0], "file_id", None)
+    try:
+        async for p in client.get_chat_photos("me", limit=1):
+            new_id = getattr(p, "file_id", None)
+            break
+    except Exception:
+        pass
+
+    if new_id:
         PROFILE_PHOTO_CLOCK_LAST[user_id] = new_id
+        ids.add(new_id)
 
-    # لیست برای پاک کردن: عکس قبلی ساعت + هر چیزی که تازه اضافه شده غیر از جدیدترین
-    to_delete = []
+    # فقط عکس قبلی ساعت را پاک کن — نه گالری کاربر
     if prev_id and prev_id != new_id:
-        to_delete.append(prev_id)
-    # اگر عکس دوم همان prev یا جزو before بوده و clock روشن است، پاک کن (انباشت نکن)
-    if after and len(after) > 1:
-        for p in after[1:]:
-            fid = getattr(p, "file_id", None)
-            if not fid or fid == new_id:
-                continue
-            # فقط عکس‌هایی که ما به‌عنوان ساعت گذاشته بودیم یا دقیقا prev
-            if fid == prev_id or fid in (PROFILE_PHOTO_CLOCK_LAST.get(user_id + 0) or [],):
-                to_delete.append(fid)
-            # اگر prev نداشتیم ولی فقط یک عکس اضافه شده، عکس دوم را پاک کن
-            elif prev_id is None and fid in before_ids:
-                # عکس قدیمی کاربر را پاک نکن — فقط اگر before فقط یک عکس داشت و الان ۲ تا شده
-                pass
-        # حالت ساده و مطمئن: اگر prev_id داریم همان را پاک کن؛
-        # اگر prev نبود و تعداد عکس بعد > تعداد قبل، عکس‌های اضافه (غیر از اول) که در before نیستند را پاک نکن
-        # فقط prev_id
-
-    # پاک‌سازی قوی‌تر: همه file_idهای after[1:] که برابر prev_id هستند
-    # + اگر after[1] وجود دارد و prev_id ست بوده، after[1] را هم امتحان کن
-    if after and len(after) >= 2 and prev_id:
-        fid1 = getattr(after[1], "file_id", None)
-        if fid1 and fid1 not in to_delete:
-            to_delete.append(fid1)
-
-    # یکتا
-    seen = set()
-    uniq = []
-    for fid in to_delete:
-        if fid and fid not in seen and fid != new_id:
-            seen.add(fid)
-            uniq.append(fid)
-
-    for fid in uniq:
         try:
-            await client.delete_profile_photos(fid)
-            await asyncio.sleep(0.35)
+            await client.delete_profile_photos(prev_id)
+            ids.discard(prev_id)
+            await asyncio.sleep(0.3)
         except Exception as e:
-            logging.warning("delete old clock photo: %s", e)
+            logging.warning("delete prev clock only: %s", e)
             try:
-                # بعضی نسخه‌ها لیست می‌خواهند
-                await client.delete_profile_photos([fid])
+                await client.delete_profile_photos([prev_id])
+                ids.discard(prev_id)
             except Exception:
                 pass
 
-    logging.info(
-        "replace_clock_photo uid=%s new=%s deleted=%s",
-        user_id,
-        (new_id or "")[:20],
-        len(uniq),
-    )
+    logging.info("replace_clock_photo uid=%s new=%s prev_deleted=%s", user_id, (new_id or "")[:16], bool(prev_id))
     return True
 
 
 async def restore_profile_photo_from_base(client: Client, user_id: int):
-    """خاموش کردن ساعت: عکس اصلی برگردد و عکس‌های ساعت پاک شوند"""
+    """خاموش: عکس اصلی برگردد؛ فقط عکس‌های ساعت (که خودمان گذاشتیم) پاک شوند"""
     try:
         bp = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
         if not (bp and os.path.exists(bp)):
+            logging.warning("restore: no base photo uid=%s", user_id)
             return False
+
+        ids = set(PROFILE_PHOTO_CLOCK_IDS.get(user_id) or set())
         prev = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
-        # عکس‌های فعلی (احتمالاً ساعت)
-        old_ids = []
-        try:
-            async for p in client.get_chat_photos("me", limit=5):
-                fid = getattr(p, "file_id", None)
-                if fid:
-                    old_ids.append(fid)
-        except Exception:
-            pass
+        if prev:
+            ids.add(prev)
+
         await client.set_profile_photo(photo=bp)
         mark_profile_photo_uploaded(user_id)
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(1.0)
+
         new_id = None
         try:
             async for p in client.get_chat_photos("me", limit=1):
                 new_id = getattr(p, "file_id", None)
-                PROFILE_PHOTO_CLOCK_LAST[user_id] = new_id
                 break
         except Exception:
             pass
-        # پاک کردن عکس ساعت قبلی + عکس‌های قدیمی لیست (غیر از جدید)
-        for fid in old_ids:
-            if fid and fid != new_id:
-                try:
-                    await client.delete_profile_photos(fid)
-                    await asyncio.sleep(0.3)
-                except Exception:
-                    try:
-                        await client.delete_profile_photos([fid])
-                    except Exception:
-                        pass
-        if prev and prev != new_id:
+
+        # فقط file_idهایی که به‌عنوان ساعت ثبت شده بودند
+        for fid in list(ids):
+            if not fid or fid == new_id:
+                continue
             try:
-                await client.delete_profile_photos(prev)
+                await client.delete_profile_photos(fid)
+                await asyncio.sleep(0.3)
             except Exception:
-                pass
+                try:
+                    await client.delete_profile_photos([fid])
+                except Exception as e:
+                    logging.warning("restore delete clock id: %s", e)
+
         PROFILE_PHOTO_CLOCK_LAST.pop(user_id, None)
-        logging.info("profile clock restored base uid=%s", user_id)
+        PROFILE_PHOTO_CLOCK_IDS[user_id] = set()
+        logging.info("profile clock restored base uid=%s deleted_clock_ids=%s", user_id, len(ids))
         return True
     except Exception as e:
         logging.warning(f"restore profile base: {e}")
     return False
+
 
 async def update_profile_photo_clock_task(client: Client, user_id: int):
     """هر دقیقه قاب ساعت را از روی عکس پایه ثابت می‌سازد — پایه را وسط کار عوض نمی‌کند"""
@@ -3841,7 +3792,7 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 continue
 
             tehran_time = datetime.now(TEHRAN_TIMEZONE)
-            minute_key = tehran_time.strftime("%H:") + f"{(tehran_time.minute // 5) * 5:02d}"
+            minute_key = tehran_time.strftime("%H:%M")
             if PROFILE_PHOTO_CLOCK_LAST_MINUTE.get(user_id) == minute_key:
                 wait = 60 - tehran_time.second + 0.3
                 await asyncio.sleep(max(5, wait))
@@ -3887,14 +3838,10 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 except Exception:
                     pass
 
-            # هر ۵ دقیقه یک‌بار تا تلگرام FLOOD ندهد (آپلود پروفایل خیلی محدود است)
+            # هر ۱ دقیقه (وقت تهران)
             now = datetime.now(TEHRAN_TIMEZONE)
-            # تا ابتدای ۵ دقیقه بعدی
-            add_min = 5 - (now.minute % 5)
-            wait = add_min * 60 - now.second + 0.5
-            if wait < 30:
-                wait += 300
-            await asyncio.sleep(max(30, wait))
+            wait = 60 - now.second + 0.3
+            await asyncio.sleep(max(5, wait))
         except asyncio.CancelledError:
             break
         except Exception as e:

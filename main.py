@@ -2836,6 +2836,50 @@ PV_MSG_CACHE = {}
 PROFILE_FLOOD_UNTIL = {}
 PROFILE_NAME_FLOOD_UNTIL = {}
 PROFILE_PHOTO_FLOOD_UNTIL = {}
+PROFILE_PHOTO_LAST_UPLOAD = {}  # user_id -> unix time آخرین آپلود موفق
+PROFILE_PHOTO_MIN_GAP = 300  # حداقل ۵ دقیقه بین دو آپلود عکس پروفایل
+
+
+def can_upload_profile_photo(user_id: int) -> tuple:
+    """(ok, wait_sec) — آیا الان می‌شود عکس پروفایل گذاشت؟"""
+    left = profile_photo_flood_remaining(user_id)
+    if left > 0:
+        return False, left
+    last = PROFILE_PHOTO_LAST_UPLOAD.get(user_id, 0)
+    gap = int(time.time() - last)
+    need = PROFILE_PHOTO_MIN_GAP - gap
+    if need > 0:
+        return False, need
+    return True, 0
+
+
+def mark_profile_photo_uploaded(user_id: int):
+    PROFILE_PHOTO_LAST_UPLOAD[user_id] = time.time()
+
+
+def profile_photo_flood_remaining(user_id: int) -> int:
+
+    """ثانیه باقی‌مانده محدودیت آپلود عکس پروفایل (۰ = آزاد)"""
+    left = int(PROFILE_PHOTO_FLOOD_UNTIL.get(user_id, 0) - time.time())
+    return max(0, left)
+
+def format_flood_wait_fa(sec: int) -> str:
+    if sec <= 0:
+        return "آزاد"
+    h, r = divmod(sec, 3600)
+    m, s = divmod(r, 60)
+    if h:
+        return f"{h} ساعت و {m} دقیقه"
+    if m:
+        return f"{m} دقیقه و {s} ثانیه"
+    return f"{s} ثانیه"
+
+def note_profile_photo_flood(user_id: int, err: str) -> int:
+    m = re.search(r"(\d+)", str(err) or "")
+    sec = int(m.group(1)) if m else 600
+    PROFILE_PHOTO_FLOOD_UNTIL[user_id] = time.time() + sec + 15
+    return sec
+
 
 
 def load_all_states():
@@ -3644,28 +3688,141 @@ async def build_profile_clock_image(client, user_id: int) -> str:
 
 
 
-async def restore_profile_photo_from_base(client: Client, user_id: int):
-    """خاموش کردن ساعت: عکس اصلی برگردد"""
+
+async def replace_clock_profile_photo(client: Client, user_id: int, path: str) -> bool:
+    """عکس ساعت را جایگزین می‌کند: جدید می‌گذارد و عکس قبلیِ ساعت را پاک می‌کند تا انباشته نشود"""
+    if not path or not os.path.exists(path):
+        return False
+    prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
+    # عکس‌های فعلی قبل از آپلود
+    before_ids = []
     try:
-        bp = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
-        if bp and os.path.exists(bp):
-            prev = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
-            await client.set_profile_photo(photo=bp)
-            await asyncio.sleep(0.8)
-            if prev:
-                try:
-                    await client.delete_profile_photos(prev)
-                except Exception:
-                    pass
-            # به‌روز file_id فعلی
+        async for p in client.get_chat_photos("me", limit=8):
+            fid = getattr(p, "file_id", None)
+            if fid:
+                before_ids.append(fid)
+    except Exception:
+        pass
+
+    await client.set_profile_photo(photo=path)
+    mark_profile_photo_uploaded(user_id)
+    await asyncio.sleep(1.2)
+
+    after = []
+    try:
+        async for p in client.get_chat_photos("me", limit=10):
+            after.append(p)
+    except Exception:
+        after = []
+
+    new_id = None
+    if after:
+        new_id = getattr(after[0], "file_id", None)
+        PROFILE_PHOTO_CLOCK_LAST[user_id] = new_id
+
+    # لیست برای پاک کردن: عکس قبلی ساعت + هر چیزی که تازه اضافه شده غیر از جدیدترین
+    to_delete = []
+    if prev_id and prev_id != new_id:
+        to_delete.append(prev_id)
+    # اگر عکس دوم همان prev یا جزو before بوده و clock روشن است، پاک کن (انباشت نکن)
+    if after and len(after) > 1:
+        for p in after[1:]:
+            fid = getattr(p, "file_id", None)
+            if not fid or fid == new_id:
+                continue
+            # فقط عکس‌هایی که ما به‌عنوان ساعت گذاشته بودیم یا دقیقا prev
+            if fid == prev_id or fid in (PROFILE_PHOTO_CLOCK_LAST.get(user_id + 0) or [],):
+                to_delete.append(fid)
+            # اگر prev نداشتیم ولی فقط یک عکس اضافه شده، عکس دوم را پاک کن
+            elif prev_id is None and fid in before_ids:
+                # عکس قدیمی کاربر را پاک نکن — فقط اگر before فقط یک عکس داشت و الان ۲ تا شده
+                pass
+        # حالت ساده و مطمئن: اگر prev_id داریم همان را پاک کن؛
+        # اگر prev نبود و تعداد عکس بعد > تعداد قبل، عکس‌های اضافه (غیر از اول) که در before نیستند را پاک نکن
+        # فقط prev_id
+
+    # پاک‌سازی قوی‌تر: همه file_idهای after[1:] که برابر prev_id هستند
+    # + اگر after[1] وجود دارد و prev_id ست بوده، after[1] را هم امتحان کن
+    if after and len(after) >= 2 and prev_id:
+        fid1 = getattr(after[1], "file_id", None)
+        if fid1 and fid1 not in to_delete:
+            to_delete.append(fid1)
+
+    # یکتا
+    seen = set()
+    uniq = []
+    for fid in to_delete:
+        if fid and fid not in seen and fid != new_id:
+            seen.add(fid)
+            uniq.append(fid)
+
+    for fid in uniq:
+        try:
+            await client.delete_profile_photos(fid)
+            await asyncio.sleep(0.35)
+        except Exception as e:
+            logging.warning("delete old clock photo: %s", e)
             try:
-                async for p in client.get_chat_photos("me", limit=1):
-                    PROFILE_PHOTO_CLOCK_LAST[user_id] = getattr(p, "file_id", None)
-                    break
+                # بعضی نسخه‌ها لیست می‌خواهند
+                await client.delete_profile_photos([fid])
             except Exception:
                 pass
-            logging.info("profile clock restored base uid=%s", user_id)
-            return True
+
+    logging.info(
+        "replace_clock_photo uid=%s new=%s deleted=%s",
+        user_id,
+        (new_id or "")[:20],
+        len(uniq),
+    )
+    return True
+
+
+async def restore_profile_photo_from_base(client: Client, user_id: int):
+    """خاموش کردن ساعت: عکس اصلی برگردد و عکس‌های ساعت پاک شوند"""
+    try:
+        bp = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
+        if not (bp and os.path.exists(bp)):
+            return False
+        prev = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
+        # عکس‌های فعلی (احتمالاً ساعت)
+        old_ids = []
+        try:
+            async for p in client.get_chat_photos("me", limit=5):
+                fid = getattr(p, "file_id", None)
+                if fid:
+                    old_ids.append(fid)
+        except Exception:
+            pass
+        await client.set_profile_photo(photo=bp)
+        mark_profile_photo_uploaded(user_id)
+        await asyncio.sleep(1.2)
+        new_id = None
+        try:
+            async for p in client.get_chat_photos("me", limit=1):
+                new_id = getattr(p, "file_id", None)
+                PROFILE_PHOTO_CLOCK_LAST[user_id] = new_id
+                break
+        except Exception:
+            pass
+        # پاک کردن عکس ساعت قبلی + عکس‌های قدیمی لیست (غیر از جدید)
+        for fid in old_ids:
+            if fid and fid != new_id:
+                try:
+                    await client.delete_profile_photos(fid)
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    try:
+                        await client.delete_profile_photos([fid])
+                    except Exception:
+                        pass
+        if prev and prev != new_id:
+            try:
+                await client.delete_profile_photos(prev)
+            except Exception:
+                pass
+        PROFILE_PHOTO_CLOCK_LAST.pop(user_id, None)
+        logging.info("profile clock restored base uid=%s", user_id)
+        return True
     except Exception as e:
         logging.warning(f"restore profile base: {e}")
     return False
@@ -3684,7 +3841,7 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 continue
 
             tehran_time = datetime.now(TEHRAN_TIMEZONE)
-            minute_key = tehran_time.strftime("%H:%M")
+            minute_key = tehran_time.strftime("%H:") + f"{(tehran_time.minute // 5) * 5:02d}"
             if PROFILE_PHOTO_CLOCK_LAST_MINUTE.get(user_id) == minute_key:
                 wait = 60 - tehran_time.second + 0.3
                 await asyncio.sleep(max(5, wait))
@@ -3705,28 +3862,18 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 except Exception as e:
                     logging.warning(f"save base profile photo: {e}")
 
+            ok_up, left = can_upload_profile_photo(user_id)
+            if not ok_up:
+                logging.info("profile clock skip uid=%s wait=%s", user_id, left)
+                await asyncio.sleep(min(300, max(30, left)))
+                continue
+
             path = await build_profile_clock_image(client, user_id)
             if path and os.path.exists(path):
                 try:
-                    prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
-                    await client.set_profile_photo(photo=path)
+                    await replace_clock_profile_photo(client, user_id, path)
                     PROFILE_PHOTO_CLOCK_LAST_MINUTE[user_id] = minute_key
                     logging.info(f"profile photo clock uid={user_id} time={minute_key}")
-                    await asyncio.sleep(0.8)
-                    try:
-                        photos = []
-                        async for p in client.get_chat_photos("me", limit=2):
-                            photos.append(p)
-                        if photos:
-                            PROFILE_PHOTO_CLOCK_LAST[user_id] = getattr(photos[0], "file_id", None)
-                        # فقط عکس قبلی ساعت — با تأخیر و بی‌صدا
-                        if prev_id:
-                            try:
-                                await client.delete_profile_photos(prev_id)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
                 except Exception as e:
                     err = str(e)
                     logging.warning(f"set_profile_photo clock: {e}")
@@ -3740,8 +3887,14 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
                 except Exception:
                     pass
 
-            wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.25
-            await asyncio.sleep(max(5, wait))
+            # هر ۵ دقیقه یک‌بار تا تلگرام FLOOD ندهد (آپلود پروفایل خیلی محدود است)
+            now = datetime.now(TEHRAN_TIMEZONE)
+            # تا ابتدای ۵ دقیقه بعدی
+            add_min = 5 - (now.minute % 5)
+            wait = add_min * 60 - now.second + 0.5
+            if wait < 30:
+                wait += 300
+            await asyncio.sleep(max(30, wait))
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -9411,6 +9564,7 @@ async def _callback_panel_handler_impl(client, callback, data: str):
         new_state = not PROFILE_PHOTO_CLOCK.get(target_user_id, False)
         PROFILE_PHOTO_CLOCK[target_user_id] = new_state
         cl = ACTIVE_BOTS[target_user_id][0] if target_user_id in ACTIVE_BOTS else None
+        flood_msg = ""
         if new_state:
             PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(target_user_id, None)
             try:
@@ -9422,28 +9576,52 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                         dl = await cl.download_media(photos[0], file_name=profile_clock_base_path(target_user_id))
                         if dl:
                             PROFILE_PHOTO_CLOCK_BASE[target_user_id] = dl
-                    # آپدیت فوری
-                    path = await build_profile_clock_image(cl, target_user_id)
-                    if path and os.path.exists(path):
-                        await cl.set_profile_photo(photo=path)
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
+                    ok_up, left = can_upload_profile_photo(target_user_id)
+                    if not ok_up:
+                        flood_msg = f" — بعد از {format_flood_wait_fa(left)} اعمال می‌شود"
+                    else:
+                        path = await build_profile_clock_image(cl, target_user_id)
+                        if path and os.path.exists(path):
+                            try:
+                                await replace_clock_profile_photo(cl, target_user_id, path)
+                            except Exception as e:
+                                if "FLOOD_WAIT" in str(e):
+                                    sec = note_profile_photo_flood(target_user_id, str(e))
+                                    flood_msg = f" — محدودیت تلگرام: {format_flood_wait_fa(sec)}"
+                                    logging.warning("pclock toggle flood: %s", e)
+                                else:
+                                    logging.warning("pclock toggle set: %s", e)
+                            try:
+                                os.remove(path)
+                            except Exception:
+                                pass
             except Exception as e:
                 logging.warning(f"capture/apply on toggle: {e}")
+                if "FLOOD_WAIT" in str(e):
+                    sec = note_profile_photo_flood(target_user_id, str(e))
+                    flood_msg = f" — محدودیت: {format_flood_wait_fa(sec)}"
         else:
             PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(target_user_id, None)
             if cl:
-                try:
-                    await restore_profile_photo_from_base(cl, target_user_id)
-                except Exception as e:
-                    logging.warning(f"restore on toggle off: {e}")
+                left = profile_photo_flood_remaining(target_user_id)
+                if left > 0:
+                    flood_msg = f" — فعلاً نمی‌توان عکس را برگرداند؛ {format_flood_wait_fa(left)} صبر کن"
+                else:
+                    try:
+                        await restore_profile_photo_from_base(cl, target_user_id)
+                    except Exception as e:
+                        logging.warning(f"restore on toggle off: {e}")
+                        if "FLOOD_WAIT" in str(e):
+                            sec = note_profile_photo_flood(target_user_id, str(e))
+                            flood_msg = f" — محدودیت: {format_flood_wait_fa(sec)}"
         try:
             persist_all_user_settings(target_user_id)
         except Exception:
             pass
-        await callback.answer("ساعت پروفایل: " + ("روشن ✅" if new_state else "خاموش ❌ — عکس برگشت"))
+        await callback.answer(
+            ("ساعت پروفایل: روشن ✅" if new_state else "ساعت پروفایل: خاموش ❌") + flood_msg,
+            show_alert=bool(flood_msg),
+        )
         try:
             await edit_panel_colored(callback, target_user_id, 51)
         except Exception:
@@ -9474,26 +9652,50 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             persist_all_user_settings(target_user_id)
         except Exception:
             pass
-        if PROFILE_PHOTO_CLOCK.get(target_user_id) and target_user_id in ACTIVE_BOTS:
+        # فقط رنگ ذخیره شود؛ آپلود فقط اگر FLOOD نباشد
+        ok_up, left = can_upload_profile_photo(target_user_id)
+        if not ok_up:
+            await callback.answer(
+                f"رنگ «{color_key}» ذخیره شد. بعد از {format_flood_wait_fa(left)} روی پروفایل می‌آید.",
+                show_alert=True,
+            )
+        elif PROFILE_PHOTO_CLOCK.get(target_user_id) and target_user_id in ACTIVE_BOTS:
             try:
                 cl = ACTIVE_BOTS[target_user_id][0]
                 path = await build_profile_clock_image(cl, target_user_id)
                 if path and os.path.exists(path):
-                    prev = PROFILE_PHOTO_CLOCK_LAST.get(target_user_id)
-                    await cl.set_profile_photo(photo=path)
-                    PROFILE_PHOTO_CLOCK_LAST_MINUTE[target_user_id] = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
+                    try:
+                        await replace_clock_profile_photo(cl, target_user_id, path)
+                        PROFILE_PHOTO_CLOCK_LAST_MINUTE[target_user_id] = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
+                        await callback.answer(f"رنگ: {color_key} ✅")
+                    except Exception as e:
+                        if "FLOOD_WAIT" in str(e):
+                            sec = note_profile_photo_flood(target_user_id, str(e))
+                            logging.warning("pclock color apply: %s", e)
+                            await callback.answer(
+                                f"رنگ ذخیره شد.\nمحدودیت تلگرام: {format_flood_wait_fa(sec)}\nبعداً خودکار اعمال می‌شود.",
+                                show_alert=True,
+                            )
+                        else:
+                            logging.warning("pclock color apply: %s", e)
+                            await callback.answer(f"رنگ ذخیره شد ({color_key})")
                     try:
                         os.remove(path)
                     except Exception:
                         pass
+                else:
+                    await callback.answer(f"رنگ: {color_key}")
             except Exception as e:
                 logging.warning(f"pclock color apply: {e}")
-        await callback.answer(f"رنگ: {color_key}")
+                await callback.answer(f"رنگ ذخیره شد: {color_key}")
+        else:
+            await callback.answer(f"رنگ: {color_key} (بعد از روشن شدن اعمال می‌شود)")
         try:
             await edit_panel_colored(callback, target_user_id, 51)
         except Exception:
             pass
         return
+
 
     if data.startswith("song_dl_"):
         await song_download_callback(client, callback)

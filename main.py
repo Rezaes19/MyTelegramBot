@@ -2628,6 +2628,202 @@ PHOTO_CLOCK_COLORS = {
     "pink":   (255, 100, 180),
 }
 
+
+# ========== تاریخ (جلالی / قمری / میلادی) + بیو ==========
+BIO_MILADI_DATE = {}  # user_id -> bool
+BIO_MILADI_ORIGINAL = {}  # user_id -> متن بیو بدون خط تاریخ
+BIO_MILADI_LAST_DAY = {}  # user_id -> "YYYY-MM-DD"
+BIO_MILADI_MARKER = "📅"
+
+_PERSIAN_WEEKDAYS = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یکشنبه"]
+# datetime.weekday(): Mon=0 ... Sun=6 → map to Persian list above
+_PERSIAN_WEEKDAYS_DT = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یکشنبه"]
+_GREG_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_GREG_MONTHS = ["January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"]
+_JALALI_MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+_ARABIC_WEEKDAYS = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+_HIJRI_MONTHS = ["محرم", "صفر", "ربيع الأول", "ربيع الثاني", "جمادى الأولى", "جمادى الآخرة",
+                 "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة"]
+
+
+def _gregorian_to_jalali(gy, gm, gd):
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (365 * gy) + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 - 80 + gd + g_d_m[gm - 1]
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + ((days - 186) % 30)
+    return jy, jm, jd
+
+
+def _gregorian_to_hijri(gy, gm, gd):
+    # الگوریتم تقریبی کوویتی (برای نمایش روزمره کافی است)
+    try:
+        from datetime import date as _date
+        jd = _date(gy, gm, gd).toordinal() + 1721425
+        # Islamic calendar approximation
+        l = jd - 1948440 + 10632
+        n = (l - 1) // 10631
+        l = l - 10631 * n + 354
+        j = ((10985 - l) // 5316) * ((50 * l) // 17719) + (l // 5670) * ((43 * l) // 15238)
+        l = l - ((30 - j) // 15) * ((17719 * j) // 50) - (j // 16) * ((15238 * j) // 43) + 29
+        hm = (24 * l) // 709
+        hd = l - (709 * hm) // 24
+        hy = 30 * n + j - 30
+        if hm < 1:
+            hm = 1
+        if hm > 12:
+            hm = 12
+        if hd < 1:
+            hd = 1
+        if hd > 30:
+            hd = 30
+        return int(hy), int(hm), int(hd)
+    except Exception:
+        # fallback ثابت نسبی
+        return 1447, 1, 1
+
+
+def format_full_date_block(now=None) -> str:
+    """بلوک کامل تاریخ مثل نمونه کاربر"""
+    if now is None:
+        now = datetime.now(TEHRAN_TIMEZONE)
+    gy, gm, gd = now.year, now.month, now.day
+    jy, jm, jd = _gregorian_to_jalali(gy, gm, gd)
+    hy, hm, hd = _gregorian_to_hijri(gy, gm, gd)
+    wd = now.weekday()  # Mon=0
+    # روز سال میلادی
+    start = datetime(gy, 1, 1, tzinfo=TEHRAN_TIMEZONE)
+    day_of_year = (now.date() - start.date()).days + 1
+    # سال کبیسه؟
+    import calendar
+    days_in_year = 366 if calendar.isleap(gy) else 365
+    remaining = days_in_year - day_of_year
+    pct_done = (day_of_year / days_in_year) * 100
+    pct_left = (remaining / days_in_year) * 100
+    hhmm = now.strftime("%H:%M")
+    return (
+        f" ساعت و تاریخ :\n"
+        f" ساعت : \n"
+        f"‏┘─ {hhmm}\n"
+        f" تاریخ امروز : \n"
+        f"┘─ {_PERSIAN_WEEKDAYS_DT[wd]} - {jd} {_JALALI_MONTHS[jm-1]} {jy}\n"
+        f" تاریخ قمری : \n"
+        f"┘─ {_ARABIC_WEEKDAYS[wd]} - {hd} {_HIJRI_MONTHS[hm-1]} {hy}\n"
+        f" تاریخ میلادی : \n"
+        f"‏┘─ {_GREG_WEEKDAYS[wd]} - {gy} {gd} {_GREG_MONTHS[gm-1]}\n"
+        f" روز های سپری شده : \n"
+        f"┘─ {day_of_year} روز ( {pct_done:.2f} درصد )\n"
+        f" روز های باقی مانده : \n"
+        f"┘─ {remaining} روز ( {pct_left:.2f} درصد )"
+    )
+
+
+def miladi_bio_line(now=None) -> str:
+    if now is None:
+        now = datetime.now(TEHRAN_TIMEZONE)
+    return f"{BIO_MILADI_MARKER} {now.strftime('%Y/%m/%d')} | { _GREG_WEEKDAYS[now.weekday()] }"
+
+
+def merge_bio_with_miladi(base_bio: str, now=None) -> str:
+    """بیو اصلی را نگه می‌دارد و خط تاریخ میلادی را به‌روز می‌کند"""
+    base = (base_bio or "").strip()
+    # حذف خطوط قبلی تاریخ ما
+    lines = [ln for ln in base.splitlines() if BIO_MILADI_MARKER not in ln and not ln.strip().startswith("📅")]
+    base_clean = "\n".join(lines).strip()
+    line = miladi_bio_line(now)
+    if base_clean:
+        # محدودیت ۷۰ کاراکتر تلگرام برای about
+        combined = base_clean + "\n" + line
+        if len(combined) > 70:
+            # کوتاه کردن بیو اصلی
+            max_base = 70 - len(line) - 1
+            if max_base < 0:
+                return line[:70]
+            base_clean = base_clean[:max_base].rstrip()
+            combined = base_clean + "\n" + line
+        return combined[:70]
+    return line[:70]
+
+
+async def apply_bio_miladi_date(client: Client, user_id: int, force: bool = False):
+    """تاریخ میلادی را در بیو می‌گذارد / روزانه آپدیت می‌کند"""
+    if not BIO_MILADI_DATE.get(user_id):
+        return
+    now = datetime.now(TEHRAN_TIMEZONE)
+    day_key = now.strftime("%Y-%m-%d")
+    if not force and BIO_MILADI_LAST_DAY.get(user_id) == day_key:
+        return
+    try:
+        me = await client.get_me()
+        current = ""
+        try:
+            full = await client.get_chat("me")
+            current = getattr(full, "bio", None) or ""
+        except Exception:
+            current = ""
+        # اولین بار بیو اصلی را ذخیره کن
+        if user_id not in BIO_MILADI_ORIGINAL:
+            lines = [ln for ln in (current or "").splitlines() if BIO_MILADI_MARKER not in ln]
+            BIO_MILADI_ORIGINAL[user_id] = "\n".join(lines).strip()
+        base = BIO_MILADI_ORIGINAL.get(user_id, "")
+        new_bio = merge_bio_with_miladi(base, now)
+        await client.update_profile(bio=new_bio)
+        BIO_MILADI_LAST_DAY[user_id] = day_key
+        logging.info("bio miladi updated uid=%s day=%s", user_id, day_key)
+    except Exception as e:
+        logging.warning("bio miladi update: %s", e)
+
+
+async def clear_bio_miladi_date(client: Client, user_id: int):
+    """خاموش: خط تاریخ را بردار و بیو اصلی را برگردان"""
+    try:
+        base = BIO_MILADI_ORIGINAL.get(user_id)
+        if base is None:
+            me_chat = await client.get_chat("me")
+            current = getattr(me_chat, "bio", None) or ""
+            lines = [ln for ln in current.splitlines() if BIO_MILADI_MARKER not in ln]
+            base = "\n".join(lines).strip()
+        await client.update_profile(bio=base or "")
+        BIO_MILADI_ORIGINAL.pop(user_id, None)
+        BIO_MILADI_LAST_DAY.pop(user_id, None)
+    except Exception as e:
+        logging.warning("clear bio miladi: %s", e)
+
+
+async def bio_miladi_daily_task(client: Client, user_id: int):
+    await asyncio.sleep(8)
+    while user_id in ACTIVE_BOTS:
+        try:
+            if BIO_MILADI_DATE.get(user_id):
+                await apply_bio_miladi_date(client, user_id, force=False)
+            # هر ۱۰ دقیقه چک — فقط روز که عوض شد آپدیت می‌کند
+            await asyncio.sleep(600)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.warning("bio_miladi_daily_task: %s", e)
+            await asyncio.sleep(120)
+
+
 def profile_clock_base_path(user_id: int) -> str:
     d = os.path.join(os.path.dirname(os.path.abspath(DATA_FILE)) if "DATA_FILE" in dir() else ".", "profile_bases")
     try:
@@ -2896,6 +3092,9 @@ def load_all_states():
         PROFILE_PHOTO_CLOCK[user_id] = bool(settings.get("photo_clock", False))
         PROFILE_PHOTO_CLOCK_COLOR[user_id] = settings.get("photo_clock_color") or "cyan"
         PROFILE_PHOTO_CLOCK_STYLE[user_id] = settings.get("photo_clock_style") or "neon"
+        BIO_MILADI_DATE[user_id] = bool(settings.get("bio_miladi", False))
+        if settings.get("bio_miladi_original") is not None:
+            BIO_MILADI_ORIGINAL[user_id] = settings.get("bio_miladi_original") or ""
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
@@ -3069,6 +3268,8 @@ def persist_all_user_settings(user_id: int):
             "photo_clock": bool(PROFILE_PHOTO_CLOCK.get(user_id, False)),
             "photo_clock_color": PROFILE_PHOTO_CLOCK_COLOR.get(user_id) or "cyan",
             "photo_clock_style": PROFILE_PHOTO_CLOCK_STYLE.get(user_id) or "neon",
+            "bio_miladi": bool(BIO_MILADI_DATE.get(user_id, False)),
+            "bio_miladi_original": BIO_MILADI_ORIGINAL.get(user_id, ""),
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
@@ -3691,19 +3892,21 @@ async def build_profile_clock_image(client, user_id: int) -> str:
 
 
 async def replace_clock_profile_photo(client: Client, user_id: int, path: str) -> bool:
-    """عکس ساعت جدید می‌گذارد و فقط عکس قبلیِ ساعت (که خودمان ساختیم) را پاک می‌کند — بقیه پروفایل‌ها دست نمی‌خورند"""
+    """عکس ساعت جدید؛ بعد فقط file_idهای ساعتِ قبلی پاک می‌شوند (گالری کاربر دست نخورده)"""
     if not path or not os.path.exists(path):
         return False
-    prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
     ids = PROFILE_PHOTO_CLOCK_IDS.setdefault(user_id, set())
+    prev_id = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
 
     await client.set_profile_photo(photo=path)
     mark_profile_photo_uploaded(user_id)
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(1.2)
 
     new_id = None
+    new_photo = None
     try:
         async for p in client.get_chat_photos("me", limit=1):
+            new_photo = p
             new_id = getattr(p, "file_id", None)
             break
     except Exception:
@@ -3713,21 +3916,31 @@ async def replace_clock_profile_photo(client: Client, user_id: int, path: str) -
         PROFILE_PHOTO_CLOCK_LAST[user_id] = new_id
         ids.add(new_id)
 
-    # فقط عکس قبلی ساعت را پاک کن — نه گالری کاربر
-    if prev_id and prev_id != new_id:
+    # پاک کردن همه عکس‌های ساعت قبلی (نه عکس جدید)
+    for fid in list(ids):
+        if not fid or fid == new_id:
+            continue
+        try:
+            await client.delete_profile_photos(fid)
+            ids.discard(fid)
+            await asyncio.sleep(0.4)
+        except Exception:
+            try:
+                await client.delete_profile_photos([fid])
+                ids.discard(fid)
+            except Exception as e:
+                logging.warning("delete clock photo fail: %s", e)
+
+    # اگر prev هنوز در لیست پروفایل است و حذف نشده
+    if prev_id and prev_id != new_id and prev_id in ids:
         try:
             await client.delete_profile_photos(prev_id)
             ids.discard(prev_id)
-            await asyncio.sleep(0.3)
-        except Exception as e:
-            logging.warning("delete prev clock only: %s", e)
-            try:
-                await client.delete_profile_photos([prev_id])
-                ids.discard(prev_id)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
-    logging.info("replace_clock_photo uid=%s new=%s prev_deleted=%s", user_id, (new_id or "")[:16], bool(prev_id))
+    PROFILE_PHOTO_CLOCK_IDS[user_id] = {new_id} if new_id else set()
+    logging.info("replace_clock_photo uid=%s new=%s", user_id, (new_id or "")[:16])
     return True
 
 
@@ -7952,6 +8165,43 @@ async def reply_based_controller(client, message):
 
     # ========== تبدیل ایموجی عادی به پریمیوم (سبک VTR) ==========
     
+    if cmd in (".تاریخ میلادی بیو روشن", "تاریخ میلادی بیو روشن", ".بیو تاریخ روشن"):
+        BIO_MILADI_DATE[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await apply_bio_miladi_date(client, user_id, force=True)
+        except Exception as e:
+            logging.warning("bio on: %s", e)
+        await message.edit_text("✅ تاریخ میلادی در بیو روشن شد (هر روز خودکار به‌روز می‌شود).")
+        return
+
+    if cmd in (".تاریخ میلادی بیو خاموش", "تاریخ میلادی بیو خاموش", ".بیو تاریخ خاموش"):
+        BIO_MILADI_DATE[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await clear_bio_miladi_date(client, user_id)
+        except Exception as e:
+            logging.warning("bio off: %s", e)
+        await message.edit_text("❌ تاریخ میلادی از بیو برداشته شد.")
+        return
+
+    if cmd in (".تاریخ", "تاریخ") or cmd.startswith(".تاریخ"):
+        try:
+            block = format_full_date_block()
+            await message.edit_text(block)
+        except Exception:
+            try:
+                await message.reply_text(format_full_date_block())
+            except Exception as e:
+                logging.warning("date cmd: %s", e)
+        return
+
     if cmd in (".ساعت پروفایل روشن", "ساعت پروفایل روشن"):
         PROFILE_PHOTO_CLOCK[user_id] = True
         try:
@@ -8916,6 +9166,7 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
     tasks = [
         asyncio.create_task(update_profile_clock(client, user_id)),
         asyncio.create_task(update_profile_photo_clock_task(client, user_id)),
+        asyncio.create_task(bio_miladi_daily_task(client, user_id)),
         asyncio.create_task(rotate_profile_name_task(client, user_id)),
         asyncio.create_task(rotate_profile_music_task(client, user_id)),
         asyncio.create_task(sender_loop_task(client, user_id)),
@@ -8970,6 +9221,7 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("⏰ ساعت اسم", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
                 _styled_btn("🕰 ساعت در پروفایل", f"panel_page_51_{user_id}", style="primary"),
+                _styled_btn("📅 تاریخ میلادی بیو", f"panel_page_52_{user_id}", style="primary"),
                 _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
             ],
             [
@@ -9154,6 +9406,15 @@ def build_panel_keyboard(user_id, page=1):
 
 
 
+
+    if page == 52:
+        on = BIO_MILADI_DATE.get(user_id, False)
+        return [
+            [_styled_btn(f"وضعیت: ({'on ✓' if on else 'off ✗'})", f"toggle_bio_miladi_{user_id}", on)],
+            [_styled_btn("📋 راهنما .تاریخ", f"help_full_date_{user_id}", style="primary")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     if page == 51:
         on = PROFILE_PHOTO_CLOCK.get(user_id, False)
         col = PROFILE_PHOTO_CLOCK_COLOR.get(user_id) or "cyan"
@@ -9208,7 +9469,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 52: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -10966,6 +11227,7 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     19: "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید.",
                     35: "🐱 میو | self MR",
                     51: "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود.",
+                    52: "📅 تاریخ میلادی بیو | self MR\nروشن/خاموش — تاریخ روز در بیو\nدستور: .تاریخ",
                 }
                 panel_text = page_titles.get(page, f"⚡️ self MR\n📄 صفحه {page}")
                 try:

@@ -10137,6 +10137,41 @@ async def inline_panel_handler(client, query):
 
 
 
+
+async def _dooz_edit_colored(message, text: str, keyboard_rows: list):
+    """ویرایش پیام دوز با دکمه‌های رنگی (style مثل پنل)"""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+        payload = {
+            "chat_id": message.chat.id,
+            "message_id": message.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps({"inline_keyboard": keyboard_rows}, ensure_ascii=False),
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=payload) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    return True
+                logging.warning("dooz colored edit: %s", data)
+    except Exception as e:
+        logging.warning("dooz colored edit err: %s", e)
+    # fallback بدون رنگ
+    try:
+        rows = []
+        for row in keyboard_rows:
+            rows.append([
+                InlineKeyboardButton(b.get("text", "?"), callback_data=b.get("callback_data", "noop"))
+                for b in row
+            ])
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+        return True
+    except Exception as e:
+        logging.warning(f"dooz edit fallback: {e}")
+        return False
+
+
 async def _dooz_cancel_timer(key):
     t = DOOZ_TIMERS.pop(key, None)
     if t and not t.done():
@@ -10172,9 +10207,10 @@ async def _dooz_finish_timeout(client, message, key, st):
         lbal = get_balance(loser)
         nl = chr(10)
         result_text = (
-            "⏱ <b>زمان تمام شد!</b>" + nl + nl
-            + f"🏆 برنده: {wname}" + nl
-            + f"❌ بازنده (تایم‌اوت): {lname}"
+            "⏱ <b>زمان تمام شد — ۳۰ ثانیه</b>" + nl + nl
+            + f"❌ کاربر <b>{lname}</b> در ۳۰ ثانیه بازی نکرد و <b>بازنده</b> شد." + nl
+            + f"🏆 برنده: <b>{wname}</b>" + nl + nl
+            + f"💎 جایزه به برنده واریز شد."
         )
         result_buttons = InlineKeyboardMarkup([
             [
@@ -10242,8 +10278,7 @@ async def _dooz_render(client, message, st: dict):
         joi_name = st.get("joiner_name") or (await get_user_name(joi) if joi else "در انتظار حریف...")
     except Exception:
         joi_name = str(joi) if joi else "در انتظار حریف..."
-    # دکمه‌های رنگی صفحه: خالی‌ها یک‌درمیان
-    empty_icons = ["🟩", "🟦", "🟨"]
+    # خانه‌ها دکمه آبی (primary) مثل پنل — نه مربع رنگی
     rows = []
     for r in range(3):
         row = []
@@ -10252,8 +10287,12 @@ async def _dooz_render(client, message, st: dict):
             if board[i] != " ":
                 label = board[i]
             else:
-                label = empty_icons[i % 3]
-            row.append(InlineKeyboardButton(label, callback_data=f"dooz_cell_{i}_{org}_{joi}"))
+                label = "·"
+            row.append({
+                "text": label,
+                "callback_data": f"dooz_cell_{i}_{org}_{joi}",
+                "style": "primary",
+            })
         rows.append(row)
     left = None
     try:
@@ -10279,7 +10318,7 @@ async def _dooz_render(client, message, st: dict):
         + turn_line
     )
     try:
-        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+        await _dooz_edit_colored(message, text, rows)
     except Exception as e:
         logging.warning(f"dooz_render: {e}")
 
@@ -13579,13 +13618,55 @@ async def group_handler(client, message):
             f"📌 برای پیوستن روی دکمه زیر کلیک کنید."
         )
         buttons = [[
-            InlineKeyboardButton("🟢 شرکت در دوز", callback_data=f"dooz_join_{amount}_{organizer_id}"),
-            InlineKeyboardButton("🔴 لغو", callback_data=f"dooz_cancel_{amount}_{organizer_id}"),
+            {"text": "شرکت در دوز", "callback_data": f"dooz_join_{amount}_{organizer_id}", "style": "success"},
+            {"text": "لغو", "callback_data": f"dooz_cancel_{amount}_{organizer_id}", "style": "danger"},
         ]]
         try:
-            sent = await message.reply_text(game_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+            # دکمه‌های سبز/قرمز واقعی مثل پنل
+            join_kb = [
+                [
+                    {"text": "شرکت در دوز", "callback_data": f"dooz_join_{amount}_{organizer_id}", "style": "success"},
+                    {"text": "لغو", "callback_data": f"dooz_cancel_{amount}_{organizer_id}", "style": "danger"},
+                ]
+            ]
+            sent = None
+            try:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": message.chat.id,
+                    "text": game_text,
+                    "parse_mode": "HTML",
+                    "reply_to_message_id": message.id,
+                    "reply_markup": json.dumps({"inline_keyboard": join_kb}, ensure_ascii=False),
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, data=payload) as resp:
+                        data = await resp.json()
+                        if data.get("ok"):
+                            mid = data["result"]["message_id"]
+                            class _Msg:
+                                pass
+                            sent = _Msg()
+                            sent.id = mid
+                            sent.chat = message.chat
+                        else:
+                            logging.warning("dooz send colored: %s", data)
+            except Exception as e:
+                logging.warning("dooz send colored err: %s", e)
+            if sent is None:
+                sent = await message.reply_text(
+                    game_text,
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("شرکت در دوز", callback_data=f"dooz_join_{amount}_{organizer_id}"),
+                            InlineKeyboardButton("لغو", callback_data=f"dooz_cancel_{amount}_{organizer_id}"),
+                        ]
+                    ]),
+                    parse_mode=ParseMode.HTML,
+                )
             active_dooz[(message.chat.id, sent.id)] = {
                 "organizer_id": organizer_id,
+                "organizer_name": f'<a href="tg://user?id={organizer_id}">{first_name}</a>',
                 "amount": amount,
                 "board": [" "] * 9,
                 "turn": None,

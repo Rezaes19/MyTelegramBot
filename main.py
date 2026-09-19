@@ -513,6 +513,7 @@ active_games = {}
 active_dooz = {}
 DOOZ_TIMERS = {}  # (chat_id, msg_id) -> asyncio.Task
 DOOZ_TURN_SEC = 30
+DOOZ_LAST_RESULT = {}  # key -> {text,prize,wbal,lbal}
 
 
 # نقشه رمز ایموجی (حروف فارسی/انگلیسی/عدد)
@@ -10328,11 +10329,31 @@ async def _dooz_finish_timeout(client, message, key, st):
             chat_id = chat_id or getattr(getattr(message, "chat", None), "id", None)
             msg_id = msg_id or getattr(message, "id", None)
 
+        try:
+            DOOZ_LAST_RESULT[key] = {
+                "text": text,
+                "prize": prize,
+                "wbal": wbal,
+                "lbal": lbal,
+                "chat_id": chat_id,
+                "message_id": msg_id,
+            }
+        except Exception:
+            pass
         ok = await _dooz_force_show_result(chat_id, msg_id, text, prize, wbal, lbal)
         logging.info(
             "dooz TIMEOUT result winner=%s loser=%s prize=%s show=%s chat=%s mid=%s",
             winner, loser, prize, ok, chat_id, msg_id,
         )
+        # اگر ویرایش نشد، ۲ ثانیه بعد دوباره تلاش کن
+        if not ok:
+            async def _retry():
+                await asyncio.sleep(2)
+                await _dooz_force_show_result(chat_id, msg_id, text, prize, wbal, lbal)
+            try:
+                asyncio.create_task(_retry())
+            except Exception:
+                pass
     except Exception as e:
         logging.exception("dooz finish timeout: %s", e)
 
@@ -11034,7 +11055,22 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             key = (callback.message.chat.id, callback.message.id)
             st = active_dooz.get(key)
             if not st or st.get("finished"):
-                await callback.answer("بازی تمام شده", show_alert=True)
+                last = DOOZ_LAST_RESULT.get(key)
+                if last:
+                    try:
+                        await _dooz_force_show_result(
+                            last.get("chat_id") or callback.message.chat.id,
+                            last.get("message_id") or callback.message.id,
+                            last.get("text") or "بازی تمام شده",
+                            last.get("prize") or 0,
+                            last.get("wbal") or 0,
+                            last.get("lbal") or 0,
+                        )
+                        await callback.answer("نتیجه نمایش داده شد")
+                    except Exception:
+                        await callback.answer("بازی تمام شده", show_alert=True)
+                else:
+                    await callback.answer("بازی تمام شده", show_alert=True)
                 return
             if uid not in (organizer_id, joiner_id):
                 await callback.answer("شما بازیکن نیستید!", show_alert=True)
@@ -11074,6 +11110,17 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     + f"🏆 کاربر برنده: {wname}" + nl
                     + f"❌ کاربر بازنده: {lname}"
                 )
+                try:
+                    DOOZ_LAST_RESULT[key] = {
+                        "text": result_text.replace("<b>", "").replace("</b>", ""),
+                        "prize": prize,
+                        "wbal": wbal,
+                        "lbal": lbal,
+                        "chat_id": callback.message.chat.id,
+                        "message_id": callback.message.id,
+                    }
+                except Exception:
+                    pass
                 await _dooz_apply_result_edit(
                     callback.message.chat.id,
                     callback.message.id,
@@ -11824,11 +11871,20 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "روی هر کدام بزنید تا دانلود شود."
                 ),
                 34: (
-                    "📣 سندر فور | self MR\n\n"
+                    "📣 self MR | سندر\n\n"
+                    "ارسال خودکار بنر داخل همین گروه با سقف ساعتی.\n\n"
                     "دستورات:\n"
-                    ".تنظیم سندر فور\n\n"
-                    "پیام ریپلای‌شده به همه گپ/چنل/پیوی ارسال می‌شود."
+                    "• .تنظیم بنر سندر ← ریپلای روی بنر (کپی)\n"
+                    "• .تنظیم بنر فور ← ریپلای روی بنر (فوروارد)\n"
+                    "• .سندر روشن 100 ← سهمیه ۵۰ تا ۲۰۰ در ساعت\n"
+                    "• .سندر خاموش\n"
+                    "• .سندر تاخیر 60 ← فاصله ارسال (ثانیه)\n"
+                    "• .بنر فور / .بنر کپی\n"
+                    "• .سندر وضعیت\n"
+                    "• .سندر حذف ← پاک کردن این گروه\n\n"
+                    "⚠️ فقط در گروه‌هایی که عضو هستی."
                 ),
+
                 35: (
                     "🐱 میو | self MR\n\n"
                     "از دکمه میو خودکار استفاده کنید."

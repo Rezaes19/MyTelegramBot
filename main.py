@@ -7127,6 +7127,298 @@ async def reply_based_controller(client, message):
             await message.edit_text(f"❌ خطا در سرچ: {e}")
         return
 
+
+# ========== AI: ساخت عکس / تحلیل عکس / خلاصه چت ==========
+async def ai_generate_image_file(prompt: str) -> str:
+    """تولید تصویر از متن — pollinations (بدون کلید)"""
+    import urllib.parse
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("پرامپت خالی")
+    q = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
+    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 10000}.jpg"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"status={resp.status}")
+            data = await resp.read()
+            if len(data) < 1000:
+                raise RuntimeError("تصویر نامعتبر")
+            with open(path, "wb") as f:
+                f.write(data)
+    return path
+
+
+async def _temp_host_image(path: str) -> str:
+    """آپلود موقت برای تحلیل"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(path, "rb") as f:
+                data = f.read()
+            form = aiohttp.FormData()
+            form.add_field("fileToUpload", data, filename="photo.jpg", content_type="image/jpeg")
+            form.add_field("reqtype", "fileupload")
+            async with session.post("https://catbox.moe/user/api.php", data=form, timeout=60) as resp:
+                txt = (await resp.text()).strip()
+                if txt.startswith("http"):
+                    return txt
+    except Exception as e:
+        logging.warning("catbox: %s", e)
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(path, "rb") as f:
+                form = aiohttp.FormData()
+                form.add_field("file", f, filename="photo.jpg", content_type="image/jpeg")
+                async with session.post("https://0x0.st", data=form, timeout=60) as resp:
+                    txt = (await resp.text()).strip()
+                    if txt.startswith("http"):
+                        return txt
+    except Exception as e:
+        logging.warning("0x0: %s", e)
+    return ""
+
+
+async def ai_analyze_image_file(path: str) -> str:
+    """تحلیل/توصیف عکس با مدل متنی (pollinations / DeepSeek)"""
+    img_url = await _temp_host_image(path)
+    # 1) pollinations openai-compatible vision-ish via URL in prompt
+    try:
+        async with aiohttp.ClientSession() as session:
+            if img_url:
+                body = {
+                    "model": "openai",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "این تصویر را به فارسی کامل و مرتب توصیف و تحلیل کن. موضوع، اشیاء، حس، رنگ‌ها و جزئیات مهم را بگو."},
+                                {"type": "image_url", "image_url": {"url": img_url}},
+                            ],
+                        }
+                    ],
+                }
+                async with session.post(
+                    "https://text.pollinations.ai/openai",
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=90),
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        try:
+                            t = js["choices"][0]["message"]["content"]
+                            if t and len(t.strip()) > 10:
+                                return t.strip()
+                        except Exception:
+                            pass
+                    raw = await resp.text()
+                    if raw and len(raw) > 20 and not raw.strip().startswith("{"):
+                        return raw.strip()[:3500]
+    except Exception as e:
+        logging.warning("pollinations vision: %s", e)
+
+    # 2) DeepSeek فقط متنی — با اشاره به لینک
+    if DEEPSEEK_API_KEY and img_url:
+        try:
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "این یک لینک تصویر است. اگر می‌توانی بر اساس نام/متن مرتبط تحلیل کن، "
+                            "وگرنه یک چارچوب تحلیل عکس حرفه‌ای به فارسی بده.\n"
+                            f"URL: {img_url}"
+                        ),
+                    }
+                ],
+                "temperature": 0.5,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60,
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        t = js["choices"][0]["message"]["content"]
+                        if t:
+                            return t.strip()
+        except Exception as e:
+            logging.warning("deepseek analyze: %s", e)
+
+    return "❌ تحلیل تصویر الان در دسترس نیست. کمی بعد دوباره تلاش کن."
+
+
+async def ai_summarize_texts(texts: list) -> str:
+    """خلاصه مکالمه با DeepSeek یا pollinations"""
+    joined = "\n".join(texts)[:8000]
+    if not joined.strip():
+        return "❌ متنی برای خلاصه نیست."
+    system = "خلاصهٔ کوتاه، مرتب و فارسی از مکالمه زیر بده. نکات اصلی و تصمیم‌ها را لیست کن."
+    if DEEPSEEK_API_KEY:
+        try:
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": joined},
+                ],
+                "temperature": 0.3,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60,
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        t = js["choices"][0]["message"]["content"]
+                        if t:
+                            return t.strip()
+        except Exception as e:
+            logging.warning("deepseek summary: %s", e)
+    try:
+        async with aiohttp.ClientSession() as session:
+            prompt = system + "\n\n" + joined
+            url = "https://text.pollinations.ai/" + __import__("urllib.parse").parse.quote(prompt[:3000])
+            async with session.get(url, timeout=60) as resp:
+                if resp.status == 200:
+                    t = await resp.text()
+                    if t and len(t) > 15:
+                        return t.strip()[:3500]
+    except Exception as e:
+        logging.warning("pollinations summary: %s", e)
+    return "❌ خلاصه‌سازی الان ممکن نشد."
+
+
+
+    # ========== ساخت عکس AI ==========
+    if cmd.startswith(".عکس ") or cmd.startswith("عکس "):
+        prompt = ""
+        for p in (".عکس ", "عکس "):
+            if cmd.startswith(p) or text.startswith(p):
+                prompt = (text[len(p):] if text.startswith(p) else cmd[len(p):]).strip()
+                break
+        if not prompt:
+            await message.edit_text("❌ مثال:\n`.عکس گربه فضانورد`")
+            return
+        try:
+            await message.edit_text("🎨 در حال ساخت تصویر...")
+        except Exception:
+            pass
+        try:
+            path = await ai_generate_image_file(prompt)
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            await client.send_photo(
+                message.chat.id,
+                path,
+                caption=f"🎨 self MR | AI\n<code>{prompt[:200]}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        except Exception as e:
+            logging.warning("ai image: %s", e)
+            try:
+                await message.edit_text(f"❌ ساخت تصویر ناموفق:\n{e}")
+            except Exception:
+                await message.reply_text(f"❌ ساخت تصویر ناموفق:\n{e}")
+        return
+
+    # ========== تحلیل عکس ==========
+    if cmd in (".تحلیل", "تحلیل") or cmd.startswith(".تحلیل"):
+        r = message.reply_to_message
+        if not r or not (r.photo or (r.document and (r.document.mime_type or "").startswith("image"))):
+            await message.edit_text("❌ روی یک **عکس** ریپلای کن و بگو:\n`.تحلیل`")
+            return
+        try:
+            await message.edit_text("🔍 در حال تحلیل عکس...")
+        except Exception:
+            pass
+        path = None
+        try:
+            path = await client.download_media(r, file_name=f"/tmp/analyze_{user_id}.jpg")
+            result = await ai_analyze_image_file(path)
+            try:
+                await message.edit_text(f"🖼 <b>تحلیل عکس</b>\n\n{result}", parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply_text(f"🖼 تحلیل عکس\n\n{result}")
+        except Exception as e:
+            logging.warning("analyze: %s", e)
+            try:
+                await message.edit_text(f"❌ خطا در تحلیل:\n{e}")
+            except Exception:
+                pass
+        finally:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+        return
+
+    # ========== خلاصه چت ==========
+    if cmd in (".خلاصه", "خلاصه") or cmd.startswith(".خلاصه"):
+        try:
+            await message.edit_text("📝 در حال خلاصه کردن...")
+        except Exception:
+            pass
+        texts = []
+        try:
+            # اگر ریپلای دارد از همان پیام به بالا چند پیام
+            limit = 40
+            async for m in client.get_chat_history(message.chat.id, limit=limit):
+                if m.id == message.id:
+                    continue
+                t = m.text or m.caption
+                if t:
+                    who = "من"
+                    try:
+                        if m.from_user and not m.outgoing:
+                            who = m.from_user.first_name or "کاربر"
+                        elif m.outgoing:
+                            who = "من"
+                    except Exception:
+                        pass
+                    texts.append(f"{who}: {t[:500]}")
+                if len(texts) >= 30:
+                    break
+            texts.reverse()
+            if message.reply_to_message and (message.reply_to_message.text or message.reply_to_message.caption):
+                rt = message.reply_to_message.text or message.reply_to_message.caption
+                texts.append(f"(ریپلای) {rt[:500]}")
+            summary = await ai_summarize_texts(texts)
+            try:
+                await message.edit_text(f"📋 <b>خلاصه چت</b>\n\n{summary}", parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply_text(f"📋 خلاصه چت\n\n{summary}")
+        except Exception as e:
+            logging.warning("summary: %s", e)
+            try:
+                await message.edit_text(f"❌ خطا:\n{e}")
+            except Exception:
+                pass
+        return
+
+
     # ========== هوش متن گسترده ==========
     if cmd.startswith(".هوش متن گسترده") or cmd.startswith("هوش متن گسترده"):
         seed = ""
@@ -9221,25 +9513,22 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("⏰ ساعت اسم", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
                 _styled_btn("🕰 ساعت در پروفایل", f"panel_page_51_{user_id}", style="primary"),
-                _styled_btn("📅 تاریخ میلادی بیو", f"panel_page_52_{user_id}", style="primary"),
                 _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
                 _styled_btn("🗑 حذف پیام", f"panel_page_49_{user_id}", style="primary"),
                 _styled_btn("🔐 رمز ایموجی", f"panel_page_50_{user_id}", style="primary"),
+                _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
-            ],
-            [
                 _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
                 _styled_btn("🎤 متن→ویس", f"panel_page_7_{user_id}", style="primary"),
-                _styled_btn("🧩 استیکر", f"panel_page_8_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🧩 استیکر", f"panel_page_8_{user_id}", style="primary"),
                 _styled_btn("🔐 عضویت اجباری", f"panel_page_9_{user_id}", style="primary"),
                 _styled_btn("🎥 ویدیو گرد", f"panel_page_10_{user_id}", style="primary"),
                 _styled_btn("💾 ذخیره", f"panel_page_13_{user_id}", style="primary"),
@@ -9248,18 +9537,16 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("✏️ اسم", f"panel_page_14_{user_id}", style="primary"),
                 _styled_btn("📝 بیو", f"panel_page_15_{user_id}", style="primary"),
                 _styled_btn("🔖 یوزرنیم", f"panel_page_16_{user_id}", style="primary"),
+                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
                 _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
                 _styled_btn("🎵 آهنگ چرخشی", f"panel_page_25_{user_id}", style="primary"),
-            ],
-            [
                 _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
                 _styled_btn("🎵 متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
-                _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
                 _styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
                 _styled_btn("🐱 میو", f"panel_page_35_{user_id}", style="primary"),
                 _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
@@ -9268,39 +9555,41 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🌤 آب‌وهوا", f"panel_page_27_{user_id}", style="primary"),
                 _styled_btn("🎤 ویس→متن", f"panel_page_28_{user_id}", style="primary"),
                 _styled_btn("📄 عکس↔PDF", f"panel_page_29_{user_id}", style="primary"),
+                _styled_btn("👑 تگ اعضا", f"panel_page_30_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("👑 تگ اعضا", f"panel_page_30_{user_id}", style="primary"),
                 _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary"),
                 _styled_btn("✨ کیفیت عکس", f"panel_page_32_{user_id}", style="primary"),
-            ],
-            [
                 _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
                 _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
-                _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
                 _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
                 _styled_btn("📱 QR", f"panel_page_39_{user_id}", style="primary"),
-            ],
-            [
                 _styled_btn("⭐ ایموجی پریمیوم", f"panel_page_40_{user_id}", style="primary"),
-                _styled_btn("📩 منشی آفلاین", f"panel_page_41_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("📩 منشی آفلاین", f"panel_page_41_{user_id}", style="primary"),
                 _styled_btn("🚫 فیلتر استیکر پیوی", f"panel_page_42_{user_id}", style="primary"),
                 _styled_btn("🎞 فیلتر گیف پیوی", f"panel_page_43_{user_id}", style="primary"),
+                _styled_btn("⚔️ دشمن", f"panel_page_44_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("⚔️ دشمن", f"panel_page_44_{user_id}", style="primary"),
                 _styled_btn("💗 دوست", f"panel_page_45_{user_id}", style="primary"),
                 _styled_btn("👍 ریاکشن", f"panel_page_46_{user_id}", style="primary"),
-            ],
-            [
                 _styled_btn("🔁 تکرار", f"panel_page_47_{user_id}", style="primary"),
                 _styled_btn("🔇 سکوت/بلاک", f"panel_page_48_{user_id}", style="primary"),
             ],
-            [ _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger") ],
+            [
+                _styled_btn("📅 تاریخ / .تاریخ", f"panel_page_52_{user_id}", style="primary"),
+                _styled_btn("🎨 ساخت عکس AI", f"panel_page_53_{user_id}", style="primary"),
+                _styled_btn("🔍 تحلیل عکس", f"panel_page_54_{user_id}", style="primary"),
+                _styled_btn("📋 خلاصه چت", f"panel_page_55_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
+            ],
         ]
 
     if page == 2:
@@ -9375,6 +9664,8 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary"),
                 _styled_btn("🔎 سرچ عکس", f"panel_page_23_{user_id}", style="primary"),
+                _styled_btn("🎨 ساخت عکس AI", f"panel_page_53_{user_id}", style="primary"),
+                _styled_btn("🔍 تحلیل عکس", f"panel_page_54_{user_id}", style="primary"),
             ],
             back_btn(1),
         ]
@@ -9406,6 +9697,20 @@ def build_panel_keyboard(user_id, page=1):
 
 
 
+
+
+    if page == 53:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+        ]
+    if page == 54:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+        ]
+    if page == 55:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+        ]
 
     if page == 52:
         on = BIO_MILADI_DATE.get(user_id, False)
@@ -9469,7 +9774,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 52: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 52: 1, 53: 19, 54: 19, 55: 19, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]

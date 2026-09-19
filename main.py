@@ -7033,6 +7033,163 @@ async def reply_based_controller(client, message):
         return
 
 
+    # ========== ساخت عکس AI / تحلیل / خلاصه (اولویت بالا) ==========
+    text_full = (message.text or message.caption or "").strip()
+    cmd_full = text_full
+
+    # --- ساخت عکس ---
+    if cmd_full.startswith(".عکس") or cmd_full.startswith("عکس"):
+        prompt = cmd_full
+        for p in (".عکس", "عکس"):
+            if prompt.startswith(p):
+                prompt = prompt[len(p):].strip()
+                if prompt.startswith("+"):
+                    prompt = prompt[1:].strip()
+                break
+        if not prompt:
+            try:
+                await message.edit_text("❌ مثال:\n`.عکس گربه فضانورد`")
+            except Exception:
+                await message.reply_text("❌ مثال: .عکس گربه فضانورد")
+            return
+        try:
+            await message.edit_text(f"🎨 در حال ساخت تصویر...\n`{prompt[:80]}`")
+        except Exception:
+            pass
+        try:
+            path = await ai_generate_image_file(prompt)
+            chat_id = message.chat.id
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            await client.send_photo(
+                chat_id,
+                path,
+                caption=f"🎨 self MR | AI\n{prompt[:200]}",
+            )
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        except Exception as e:
+            logging.exception("ai image")
+            try:
+                await message.edit_text(f"❌ ساخت تصویر ناموفق:\n{e}")
+            except Exception:
+                try:
+                    await client.send_message(message.chat.id, f"❌ ساخت تصویر ناموفق:\n{e}")
+                except Exception:
+                    pass
+        return
+
+    # --- تحلیل عکس ---
+    if cmd_full in (".تحلیل", "تحلیل") or cmd_full.startswith(".تحلیل") or cmd_full.startswith("تحلیل "):
+        r = message.reply_to_message
+        # گاهی مدیا در reply ناقص است — دوباره از سرور بگیر
+        if message.reply_to_message_id:
+            try:
+                full = await client.get_messages(message.chat.id, message.reply_to_message_id)
+                if full:
+                    r = full
+            except Exception as e:
+                logging.warning("get_messages reply: %s", e)
+        has_img = False
+        if r:
+            if getattr(r, "photo", None):
+                has_img = True
+            elif getattr(r, "document", None) and (r.document.mime_type or "").startswith("image"):
+                has_img = True
+            elif getattr(r, "sticker", None) and not getattr(r.sticker, "is_animated", False) and not getattr(r.sticker, "is_video", False):
+                has_img = True
+        if not has_img:
+            try:
+                await message.edit_text("❌ روی یک عکس ریپلای کن و بعد بفرست:\n`.تحلیل`")
+            except Exception:
+                await message.reply_text("❌ روی یک عکس ریپلای کن و بعد بفرست: .تحلیل")
+            return
+        try:
+            await message.edit_text("🔍 در حال تحلیل عکس...")
+        except Exception:
+            pass
+        path = None
+        try:
+            dest = f"/tmp/analyze_{user_id}_{int(time.time())}.jpg"
+            if r.photo:
+                # بزرگ‌ترین سایز
+                path = await client.download_media(r.photo, file_name=dest)
+            else:
+                path = await client.download_media(r, file_name=dest)
+            if not path or not os.path.exists(str(path)):
+                raise RuntimeError("دانلود عکس از تلگرام ناموفق بود")
+            result = await ai_analyze_image_file(str(path))
+            try:
+                await message.edit_text(f"🖼 تحلیل عکس\n\n{result}")
+            except Exception:
+                await message.reply_text(f"🖼 تحلیل عکس\n\n{result}")
+        except Exception as e:
+            logging.exception("analyze")
+            try:
+                await message.edit_text(f"❌ خطا در تحلیل:\n{e}")
+            except Exception:
+                try:
+                    await client.send_message(message.chat.id, f"❌ خطا در تحلیل:\n{e}")
+                except Exception:
+                    pass
+        finally:
+            try:
+                if path and os.path.exists(str(path)):
+                    os.remove(path)
+            except Exception:
+                pass
+        return
+
+    # --- خلاصه چت ---
+    if cmd_full in (".خلاصه", "خلاصه") or cmd_full.startswith(".خلاصه"):
+        try:
+            await message.edit_text("📝 در حال خلاصه کردن...")
+        except Exception:
+            pass
+        texts = []
+        try:
+            async for m in client.get_chat_history(message.chat.id, limit=50):
+                if m.id == message.id:
+                    continue
+                t = m.text or m.caption
+                if not t:
+                    continue
+                t = t.strip()
+                if t in (".خلاصه", "خلاصه", ".تحلیل", "تحلیل") or t.startswith(".عکس"):
+                    continue
+                who = "من" if getattr(m, "outgoing", False) else "طرف"
+                try:
+                    if m.from_user and not m.outgoing:
+                        who = (m.from_user.first_name or "کاربر")[:30]
+                except Exception:
+                    pass
+                texts.append(f"{who}: {t[:400]}")
+                if len(texts) >= 35:
+                    break
+            texts.reverse()
+            if not texts and message.reply_to_message:
+                rt = message.reply_to_message.text or message.reply_to_message.caption
+                if rt:
+                    texts.append(rt[:800])
+            summary = await ai_summarize_texts(texts)
+            try:
+                await message.edit_text(f"📋 خلاصه چت\n\n{summary}")
+            except Exception:
+                await message.reply_text(f"📋 خلاصه چت\n\n{summary}")
+        except Exception as e:
+            logging.exception("summary")
+            try:
+                await message.edit_text(f"❌ خطا:\n{e}")
+            except Exception:
+                pass
+        return
+
+
+
 
     # ========== اسکرین ==========
     if cmd in (".اسکرین", "اسکرین"):
@@ -7125,138 +7282,6 @@ async def reply_based_controller(client, message):
         except Exception as e:
             logging.error(f"search cmd: {e}")
             await message.edit_text(f"❌ خطا در سرچ: {e}")
-        return
-
-
-    # ========== ساخت عکس AI ==========
-    text = (message.text or message.caption or "").strip()
-    if text.startswith(".عکس") or text.startswith("عکس"):
-        prompt = text
-        for p in (".عکس", "عکس"):
-            if prompt.startswith(p):
-                prompt = prompt[len(p):].strip()
-                if prompt.startswith("+"):
-                    prompt = prompt[1:].strip()
-                break
-        if not prompt:
-            try:
-                await message.edit_text("❌ مثال:\n`.عکس گربه فضانورد`")
-            except Exception:
-                await message.reply_text("❌ مثال: .عکس گربه فضانورد")
-            return
-        try:
-            await message.edit_text("🎨 در حال ساخت تصویر...")
-        except Exception:
-            pass
-        try:
-            path = await ai_generate_image_file(prompt)
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            await client.send_photo(
-                message.chat.id,
-                path,
-                caption=f"🎨 self MR | AI\n<code>{prompt[:200]}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-        except Exception as e:
-            logging.warning("ai image: %s", e)
-            try:
-                await message.edit_text(f"❌ ساخت تصویر ناموفق:\n{e}")
-            except Exception:
-                await message.reply_text(f"❌ ساخت تصویر ناموفق:\n{e}")
-        return
-
-    # ========== تحلیل عکس ==========
-    if cmd in (".تحلیل", "تحلیل") or cmd.startswith(".تحلیل"):
-        r = message.reply_to_message
-        has_img = bool(r and (r.photo or (r.document and (r.document.mime_type or "").startswith("image")) or (r.sticker and not getattr(r.sticker, "is_animated", False))))
-        if not has_img:
-            try:
-                await message.edit_text("❌ روی یک عکس ریپلای کن و بگو: .تحلیل")
-            except Exception:
-                await message.reply_text("❌ روی یک عکس ریپلای کن و بگو: .تحلیل")
-            return
-        try:
-            await message.edit_text("🔍 در حال تحلیل عکس...")
-        except Exception:
-            pass
-        path = None
-        try:
-            dest = f"/tmp/analyze_{user_id}_{int(time.time())}.jpg"
-            if r.photo:
-                path = await client.download_media(r.photo, file_name=dest)
-            else:
-                path = await client.download_media(r, file_name=dest)
-            if not path or not os.path.exists(path):
-                raise RuntimeError("دانلود عکس ناموفق")
-            result = await ai_analyze_image_file(path)
-            try:
-                await message.edit_text(f"🖼 <b>تحلیل عکس</b>\n\n{result}", parse_mode=ParseMode.HTML)
-            except Exception:
-                await message.reply_text(f"🖼 تحلیل عکس\n\n{result}")
-        except Exception as e:
-            logging.warning("analyze: %s", e)
-            try:
-                await message.edit_text(f"❌ خطا در تحلیل:\n{e}")
-            except Exception:
-                pass
-        finally:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-        return
-
-    # ========== خلاصه چت ==========
-    if cmd in (".خلاصه", "خلاصه") or cmd.startswith(".خلاصه"):
-        try:
-            await message.edit_text("📝 در حال خلاصه کردن...")
-        except Exception:
-            pass
-        texts = []
-        try:
-            limit = 50
-            async for m in client.get_chat_history(message.chat.id, limit=limit):
-                if m.id == message.id:
-                    continue
-                t = m.text or m.caption
-                if not t:
-                    continue
-                t = t.strip()
-                if t.startswith(".") and len(t) < 20:
-                    continue
-                who = "من" if getattr(m, "outgoing", False) else "طرف"
-                try:
-                    if m.from_user and not m.outgoing:
-                        who = (m.from_user.first_name or "کاربر").replace("\n", " ")
-                except Exception:
-                    pass
-                texts.append(f"{who}: {t[:400]}")
-                if len(texts) >= 35:
-                    break
-            texts.reverse()
-            if not texts and message.reply_to_message:
-                rt = message.reply_to_message.text or message.reply_to_message.caption
-                if rt:
-                    texts.append(rt[:800])
-            summary = await ai_summarize_texts(texts)
-            try:
-                await message.edit_text(f"📋 <b>خلاصه چت</b>\n\n{summary}", parse_mode=ParseMode.HTML)
-            except Exception:
-                await message.reply_text(f"📋 خلاصه چت\n\n{summary}")
-        except Exception as e:
-            logging.warning("summary: %s", e)
-            try:
-                await message.edit_text(f"❌ خطا:\n{e}")
-            except Exception:
-                pass
         return
 
 
@@ -9249,50 +9274,51 @@ async def _prompt_to_english(prompt: str) -> str:
 
 
 async def ai_generate_image_file(prompt: str) -> str:
-    """تولید تصویر از متن — چند منبع + ترجمه پرامپت"""
+    """تولید تصویر — ترجمه + چند endpoint"""
     import urllib.parse
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("پرامپت خالی")
     en = await _prompt_to_english(prompt)
-    # پرامپت قوی‌تر برای کیفیت
-    full = f"{en}, high quality, detailed, sharp focus"
-    seed = int(time.time()) % 999999
-    encoded = urllib.parse.quote(full)
-    urls = [
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true&model=flux&seed={seed}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=768&nologo=true&seed={seed}",
-        f"https://gen.pollinations.ai/image/{encoded}?model=flux&width=1024&height=1024&nologo=true",
+    full = f"{en}, photorealistic, highly detailed, 4k"
+    seed = int(time.time()) % 1000000
+    candidates = [
+        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full)}?width=1024&height=1024&nologo=true&model=flux&seed={seed}",
+        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(en)}?width=1024&height=1024&nologo=true&seed={seed}",
+        f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full)}?width=768&height=768&nologo=true",
     ]
-    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 100000}.jpg"
+    path = f"/tmp/ai_img_{int(time.time())}_{seed}.jpg"
     last_err = None
-    timeout = aiohttp.ClientTimeout(total=150)
-    headers = {"User-Agent": "Mozilla/5.0 (selfMR-bot)"}
+    timeout = aiohttp.ClientTimeout(total=180)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "image/*,*/*",
+    }
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        for url in urls:
+        for url in candidates:
             try:
                 async with session.get(url, allow_redirects=True) as resp:
-                    if resp.status != 200:
-                        last_err = f"status={resp.status}"
-                        logging.warning("ai img fail %s %s", resp.status, url[:80])
-                        continue
                     data = await resp.read()
                     ctype = (resp.headers.get("Content-Type") or "").lower()
-                    if len(data) < 2000:
-                        last_err = "too small"
+                    logging.info("ai_img status=%s ctype=%s len=%s", resp.status, ctype, len(data))
+                    if resp.status != 200:
+                        last_err = f"HTTP {resp.status}"
                         continue
-                    if "json" in ctype or "text" in ctype:
-                        last_err = data[:120]
+                    if len(data) < 3000:
+                        last_err = f"small body {len(data)}"
+                        continue
+                    is_jpg = len(data) >= 2 and data[0] == 0xFF and data[1] == 0xD8
+                    is_png = len(data) >= 4 and data[0] == 0x89 and data[1:4] == b"PNG"
+                    if (not is_jpg) and (not is_png) and ("image" not in ctype):
+                        last_err = f"not image ctype={ctype}"
                         continue
                     with open(path, "wb") as f:
                         f.write(data)
-                    logging.info("ai img ok prompt=%r en=%r bytes=%s", prompt[:40], en[:40], len(data))
                     return path
             except Exception as e:
                 last_err = str(e)
-                logging.warning("ai img error: %s", e)
-                continue
-    raise RuntimeError(f"ساخت تصویر ناموفق: {last_err}")
+                logging.warning("ai_img try fail: %s", e)
+    raise RuntimeError(last_err or "unknown")
 
 
 async def _temp_host_image(path: str) -> str:

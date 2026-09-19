@@ -9703,11 +9703,7 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("📅 تاریخ", f"panel_page_52_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("🎨 ساخت عکس AI", f"panel_page_53_{user_id}", style="primary"),
-                _styled_btn("🔍 تحلیل عکس", f"panel_page_54_{user_id}", style="primary"),
                 _styled_btn("📋 خلاصه چت", f"panel_page_55_{user_id}", style="primary"),
-            ],
-            [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -9784,8 +9780,7 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("📝 متن گسترده", f"panel_page_20_{user_id}", style="primary"),
                 _styled_btn("🔎 سرچ عکس", f"panel_page_23_{user_id}", style="primary"),
-                _styled_btn("🎨 ساخت عکس AI", f"panel_page_53_{user_id}", style="primary"),
-                _styled_btn("🔍 تحلیل عکس", f"panel_page_54_{user_id}", style="primary"),
+                _styled_btn("📋 خلاصه چت", f"panel_page_55_{user_id}", style="primary"),
             ],
             back_btn(1),
         ]
@@ -10142,27 +10137,43 @@ async def _dooz_render(client, message, st: dict):
     board = st.get("board") or [" "] * 9
     org = st.get("organizer_id")
     joi = st.get("joiner_id")
-    amount = st.get("amount") or 0
+    amount = int(st.get("amount") or 0)
     turn = st.get("turn")
+    try:
+        org_name = st.get("organizer_name") or await get_user_name(org)
+    except Exception:
+        org_name = str(org)
+    try:
+        joi_name = st.get("joiner_name") or (await get_user_name(joi) if joi else "در انتظار حریف...")
+    except Exception:
+        joi_name = str(joi) if joi else "در انتظار حریف..."
     rows = []
     for r in range(3):
         row = []
         for col in range(3):
             i = r * 3 + col
-            label = board[i] if board[i] != " " else "⬜"
+            label = board[i] if board[i] != " " else "▫️"
             row.append(InlineKeyboardButton(label, callback_data=f"dooz_cell_{i}_{org}_{joi}"))
         rows.append(row)
-    turn_name = "❌" if turn == org else "⭕"
+    if turn == org:
+        turn_line = f"🎯 نوبت: ❌ {org_name}"
+    elif joi and turn == joi:
+        turn_line = f"🎯 نوبت: ⭕ {joi_name}"
+    else:
+        turn_line = "🎯 در انتظار شروع..."
+    nl = chr(10)
     text = (
-        f"⭕❌ <b>دوز | self MR</b>\n\n"
-        f"💰 مبلغ: <code>{amount:,}</code>\n"
-        f"🎯 نوبت: {turn_name}\n"
+        "⭕❌ <b>دوز | self MR</b>" + nl + nl
+        + f"👤 بازیکن ❌ : {org_name}" + nl
+        + f"👤 بازیکن ⭕ : {joi_name}" + nl
+        + f"💰 مبلغ هر نفر: <code>{amount:,}</code> الماس" + nl
+        + f"🏆 جایزه کل: <code>{amount * 2:,}</code> الماس" + nl + nl
+        + turn_line
     )
     try:
         await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
     except Exception as e:
         logging.warning(f"dooz_render: {e}")
-
 
 
 @manager_bot.on_callback_query()
@@ -10710,16 +10721,24 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             st["turn"] = organizer_id  # X شروع
             st["board"] = [" "] * 9
             st["finished"] = False
+            try:
+                st["organizer_name"] = await get_user_name(organizer_id)
+            except Exception:
+                st["organizer_name"] = str(organizer_id)
+            try:
+                st["joiner_name"] = await get_user_name(joiner)
+            except Exception:
+                st["joiner_name"] = (callback.from_user.first_name or str(joiner))
             active_dooz[key] = st
             await _dooz_render(client, callback.message, st)
-            await callback.answer("شروع!")
+            await callback.answer("شروع دوز!")
         except Exception as e:
             logging.warning(f"dooz_join: {e}")
         return
 
+
     if isinstance(data, str) and data.startswith("dooz_cell_"):
         try:
-            # dooz_cell_{idx}_{organizer}_{joiner}
             parts = data.split("_")
             idx = int(parts[2])
             organizer_id = int(parts[3])
@@ -10742,7 +10761,6 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                 return
             mark = "❌" if uid == organizer_id else "⭕"
             board[idx] = mark
-            # win?
             wins = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
             winner = None
             for a,b,d in wins:
@@ -10755,23 +10773,59 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                 prize = amount * 2
                 tax = int(prize * GAME_TAX_PERCENT / 100)
                 prize -= tax
+                loser = joiner_id if winner == organizer_id else organizer_id
                 add_balance(winner, prize)
                 wname = await get_user_name(winner)
+                lname = await get_user_name(loser)
+                wbal = get_balance(winner)
+                lbal = get_balance(loser)
                 active_dooz.pop(key, None)
-                await callback.message.edit_text(
-                    f"🏆 <b>برنده دوز:</b> {wname}\n💎 جایزه: <code>{prize:,}</code>",
-                    parse_mode=ParseMode.HTML,
+                nl = chr(10)
+                result_text = (
+                    "🎯 <b>نتیجه دوز مشخص شد</b>" + nl + nl
+                    + f"🏆 کاربر برنده: {wname}" + nl
+                    + f"❌ کاربر بازنده: {lname}"
                 )
-                await callback.answer("برد!")
+                result_buttons = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
+                        InlineKeyboardButton(f"💎 {prize:,}", callback_data="noop"),
+                    ],
+                    [
+                        InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
+                        InlineKeyboardButton(f"💎 {wbal:,}", callback_data="noop"),
+                    ],
+                    [
+                        InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
+                        InlineKeyboardButton(f"💎 {lbal:,}", callback_data="noop"),
+                    ],
+                ])
+                try:
+                    await callback.message.edit_text(
+                        result_text, reply_markup=result_buttons, parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    await callback.message.edit_text(
+                        f"🏆 برنده: {wname} | ❌ بازنده: {lname} | 💎 {prize:,}"
+                    )
+                await callback.answer("✅ دوز تمام شد!")
                 return
             if all(x != " " for x in board):
                 st["finished"] = True
                 amount = int(st["amount"])
-                # تساوی — برگشت
                 add_balance(organizer_id, amount)
                 add_balance(joiner_id, amount)
                 active_dooz.pop(key, None)
-                await callback.message.edit_text("🤝 تساوی! الماس‌ها برگشت داده شد.")
+                oname = st.get("organizer_name") or await get_user_name(organizer_id)
+                jname = st.get("joiner_name") or await get_user_name(joiner_id)
+                nl = chr(10)
+                await callback.message.edit_text(
+                    "🤝 <b>تساوی در دوز</b>" + nl + nl
+                    + f"👤 {oname}" + nl
+                    + f"👤 {jname}" + nl + nl
+                    + "💎 الماس هر دو نفر برگشت داده شد.",
+                    parse_mode=ParseMode.HTML,
+                )
                 await callback.answer("تساوی")
                 return
             st["turn"] = joiner_id if uid == organizer_id else organizer_id
@@ -10782,9 +10836,6 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             logging.warning(f"dooz_cell: {e}")
         return
 
-    # =============================================
-    
-    # ====== پیوستن به نبرد ======
     if data.startswith("game_join_"):
         parts = data.split("_")
         try:
@@ -13405,13 +13456,13 @@ async def group_handler(client, message):
         first_name = (message.from_user.first_name or "کاربر").replace("<", "").replace(">", "")
         game_text = (
             f"⭕❌ <b>دوز | self MR</b>\n\n"
-            f"👤 برگزارکننده: <a href=\"tg://user?id={organizer_id}\">{first_name}</a>\n"
-            f"💰 مبلغ: <code>{amount:,}</code> الماس\n"
-            f"🏆 جایزه: <code>{amount * 2:,}</code> الماس\n\n"
-            f"برای پیوستن روی دکمه بزنید."
+            f"👤 برگزار کننده: <a href=\"tg://user?id={organizer_id}\">{first_name}</a>\n"
+            f"💰 مبلغ هر نفر: <code>{amount:,}</code> الماس\n"
+            f"🏆 جایزه کل: <code>{amount * 2:,}</code> الماس\n\n"
+            f"📌 برای پیوستن روی دکمه زیر کلیک کنید."
         )
         buttons = [[
-            InlineKeyboardButton("✅ شرکت در دوز", callback_data=f"dooz_join_{amount}_{organizer_id}"),
+            InlineKeyboardButton("⭕❌ شرکت در دوز", callback_data=f"dooz_join_{amount}_{organizer_id}"),
             InlineKeyboardButton("❌ لغو", callback_data=f"dooz_cancel_{amount}_{organizer_id}"),
         ]]
         try:

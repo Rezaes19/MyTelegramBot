@@ -9519,16 +9519,18 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("✏️ حالت متن", f"panel_page_2_{user_id}", style="primary"),
                 _styled_btn("🗑 حذف پیام", f"panel_page_49_{user_id}", style="primary"),
                 _styled_btn("🔐 رمز ایموجی", f"panel_page_50_{user_id}", style="primary"),
-                _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
-                _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
-                _styled_btn("🎤 متن→ویس", f"panel_page_7_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
+                _styled_btn("🎤 متن→ویس", f"panel_page_7_{user_id}", style="primary"),
                 _styled_btn("🧩 استیکر", f"panel_page_8_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🔐 عضویت اجباری", f"panel_page_9_{user_id}", style="primary"),
                 _styled_btn("🎥 ویدیو گرد", f"panel_page_10_{user_id}", style="primary"),
                 _styled_btn("💾 ذخیره", f"panel_page_13_{user_id}", style="primary"),
@@ -9537,16 +9539,18 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("✏️ اسم", f"panel_page_14_{user_id}", style="primary"),
                 _styled_btn("📝 بیو", f"panel_page_15_{user_id}", style="primary"),
                 _styled_btn("🔖 یوزرنیم", f"panel_page_16_{user_id}", style="primary"),
-                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🎞 انیمیشن", f"panel_page_17_{user_id}", style="primary"),
                 _styled_btn("🔄 اسم چرخشی", f"panel_page_18_{user_id}", style="primary"),
                 _styled_btn("🎵 آهنگ چرخشی", f"panel_page_25_{user_id}", style="primary"),
-                _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
-                _styled_btn("🎵 متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🧠 هوش مصنوعی", f"panel_page_19_{user_id}", style="primary"),
+                _styled_btn("🎵 متن آهنگ", f"panel_page_21_{user_id}", style="primary"),
                 _styled_btn("🎰 تقلب", f"panel_page_24_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("📣 سندر", f"panel_page_34_{user_id}", style="primary"),
                 _styled_btn("🐱 میو", f"panel_page_35_{user_id}", style="primary"),
                 _styled_btn("🕐 ساعت کشورها", f"panel_page_26_{user_id}", style="primary"),
@@ -9555,16 +9559,18 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🌤 آب‌وهوا", f"panel_page_27_{user_id}", style="primary"),
                 _styled_btn("🎤 ویس→متن", f"panel_page_28_{user_id}", style="primary"),
                 _styled_btn("📄 عکس↔PDF", f"panel_page_29_{user_id}", style="primary"),
-                _styled_btn("👑 تگ اعضا", f"panel_page_30_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("👑 تگ اعضا", f"panel_page_30_{user_id}", style="primary"),
                 _styled_btn("💬 کامنت اول", f"panel_page_31_{user_id}", style="primary"),
                 _styled_btn("✨ کیفیت عکس", f"panel_page_32_{user_id}", style="primary"),
-                _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
-                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🔎 سرچ آهنگ", f"panel_page_33_{user_id}", style="primary"),
+                _styled_btn("📸 اسکرین", f"panel_page_22_{user_id}", style="primary"),
                 _styled_btn("🌐 ترجمه", f"panel_page_38_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("👁 فضول پروفایل", f"panel_page_37_{user_id}", style="primary"),
                 _styled_btn("📱 QR", f"panel_page_39_{user_id}", style="primary"),
                 _styled_btn("⭐ ایموجی پریمیوم", f"panel_page_40_{user_id}", style="primary"),
@@ -9573,16 +9579,18 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("📩 منشی آفلاین", f"panel_page_41_{user_id}", style="primary"),
                 _styled_btn("🚫 فیلتر استیکر پیوی", f"panel_page_42_{user_id}", style="primary"),
                 _styled_btn("🎞 فیلتر گیف پیوی", f"panel_page_43_{user_id}", style="primary"),
-                _styled_btn("⚔️ دشمن", f"panel_page_44_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("⚔️ دشمن", f"panel_page_44_{user_id}", style="primary"),
                 _styled_btn("💗 دوست", f"panel_page_45_{user_id}", style="primary"),
                 _styled_btn("👍 ریاکشن", f"panel_page_46_{user_id}", style="primary"),
-                _styled_btn("🔁 تکرار", f"panel_page_47_{user_id}", style="primary"),
-                _styled_btn("🔇 سکوت/بلاک", f"panel_page_48_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("📅 تاریخ / .تاریخ", f"panel_page_52_{user_id}", style="primary"),
+                _styled_btn("🔁 تکرار", f"panel_page_47_{user_id}", style="primary"),
+                _styled_btn("🔇 سکوت/بلاک", f"panel_page_48_{user_id}", style="primary"),
+                _styled_btn("📅 تاریخ", f"panel_page_52_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("🎨 ساخت عکس AI", f"panel_page_53_{user_id}", style="primary"),
                 _styled_btn("🔍 تحلیل عکس", f"panel_page_54_{user_id}", style="primary"),
                 _styled_btn("📋 خلاصه چت", f"panel_page_55_{user_id}", style="primary"),
@@ -9701,15 +9709,15 @@ def build_panel_keyboard(user_id, page=1):
 
     if page == 53:
         return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
     if page == 54:
         return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
     if page == 55:
         return [
-            [_styled_btn("⬅️ بازگشت", f"panel_page_19_{user_id}", style="danger")],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
 
     if page == 52:
@@ -9774,7 +9782,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 52: 1, 53: 19, 54: 19, 55: 19, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 52: 1, 53: 1, 54: 1, 55: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -11490,7 +11498,37 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "سکوت خاموش\n"
                     "بلاک روشن\n"
                     "بلاک خاموش"
+                ),
+                52: (
+                    "📅 تاریخ | self MR\n\n"
+                    "دستورات:\n"
+                    ".تاریخ\n"
+                    ".تاریخ میلادی بیو روشن\n"
+                    ".تاریخ میلادی بیو خاموش\n\n"
+                    "نمایش ساعت و تاریخ کامل + بیو"
+                ),
+                53: (
+                    "🎨 ساخت عکس AI | self MR\n\n"
+                    "دستورات:\n"
+                    ".عکس + توضیح تصویر\n\n"
+                    "مثال:\n"
+                    ".عکس گربه فضانورد\n\n"
+                    "تولید تصویر از متن با هوش مصنوعی"
+                ),
+                54: (
+                    "🔍 تحلیل عکس | self MR\n\n"
+                    "دستورات:\n"
+                    "ریپلای روی عکس + .تحلیل\n\n"
+                    "عکس را توصیف و تحلیل می‌کند"
+                ),
+                55: (
+                    "📋 خلاصه چت | self MR\n\n"
+                    "دستورات:\n"
+                    ".خلاصه\n"
+                    "ریپلای + .خلاصه\n\n"
+                    "مکالمه اخیر را خلاصه می‌کند"
                 )
+
             }
             try:
                 if page in HELP_TEXTS:

@@ -7175,8 +7175,12 @@ async def reply_based_controller(client, message):
     # ========== تحلیل عکس ==========
     if cmd in (".تحلیل", "تحلیل") or cmd.startswith(".تحلیل"):
         r = message.reply_to_message
-        if not r or not (r.photo or (r.document and (r.document.mime_type or "").startswith("image"))):
-            await message.edit_text("❌ روی یک **عکس** ریپلای کن و بگو:\n`.تحلیل`")
+        has_img = bool(r and (r.photo or (r.document and (r.document.mime_type or "").startswith("image")) or (r.sticker and not getattr(r.sticker, "is_animated", False))))
+        if not has_img:
+            try:
+                await message.edit_text("❌ روی یک عکس ریپلای کن و بگو: .تحلیل")
+            except Exception:
+                await message.reply_text("❌ روی یک عکس ریپلای کن و بگو: .تحلیل")
             return
         try:
             await message.edit_text("🔍 در حال تحلیل عکس...")
@@ -7184,7 +7188,13 @@ async def reply_based_controller(client, message):
             pass
         path = None
         try:
-            path = await client.download_media(r, file_name=f"/tmp/analyze_{user_id}.jpg")
+            dest = f"/tmp/analyze_{user_id}_{int(time.time())}.jpg"
+            if r.photo:
+                path = await client.download_media(r.photo, file_name=dest)
+            else:
+                path = await client.download_media(r, file_name=dest)
+            if not path or not os.path.exists(path):
+                raise RuntimeError("دانلود عکس ناموفق")
             result = await ai_analyze_image_file(path)
             try:
                 await message.edit_text(f"🖼 <b>تحلیل عکس</b>\n\n{result}", parse_mode=ParseMode.HTML)
@@ -7212,28 +7222,30 @@ async def reply_based_controller(client, message):
             pass
         texts = []
         try:
-            # اگر ریپلای دارد از همان پیام به بالا چند پیام
-            limit = 40
+            limit = 50
             async for m in client.get_chat_history(message.chat.id, limit=limit):
                 if m.id == message.id:
                     continue
                 t = m.text or m.caption
-                if t:
-                    who = "من"
-                    try:
-                        if m.from_user and not m.outgoing:
-                            who = m.from_user.first_name or "کاربر"
-                        elif m.outgoing:
-                            who = "من"
-                    except Exception:
-                        pass
-                    texts.append(f"{who}: {t[:500]}")
-                if len(texts) >= 30:
+                if not t:
+                    continue
+                t = t.strip()
+                if t.startswith(".") and len(t) < 20:
+                    continue
+                who = "من" if getattr(m, "outgoing", False) else "طرف"
+                try:
+                    if m.from_user and not m.outgoing:
+                        who = (m.from_user.first_name or "کاربر").replace("\n", " ")
+                except Exception:
+                    pass
+                texts.append(f"{who}: {t[:400]}")
+                if len(texts) >= 35:
                     break
             texts.reverse()
-            if message.reply_to_message and (message.reply_to_message.text or message.reply_to_message.caption):
+            if not texts and message.reply_to_message:
                 rt = message.reply_to_message.text or message.reply_to_message.caption
-                texts.append(f"(ریپلای) {rt[:500]}")
+                if rt:
+                    texts.append(rt[:800])
             summary = await ai_summarize_texts(texts)
             try:
                 await message.edit_text(f"📋 <b>خلاصه چت</b>\n\n{summary}", parse_mode=ParseMode.HTML)
@@ -9212,49 +9224,100 @@ async def reply_based_controller(client, message):
         await message.edit_text("❌ واکنش حذف شد.")
         return
 
+
 # ========== AI: ساخت عکس / تحلیل عکس / خلاصه چت ==========
+async def _prompt_to_english(prompt: str) -> str:
+    """پرامپت فارسی را برای مدل تصویر به انگلیسی نزدیک می‌کند"""
+    p = (prompt or "").strip()
+    if not p:
+        return p
+    # اگر تقریباً فقط انگلیسی/اعداد است همان را برگردان
+    try:
+        ascii_ratio = sum(1 for ch in p if ord(ch) < 128) / max(1, len(p))
+        if ascii_ratio > 0.85:
+            return p
+    except Exception:
+        pass
+    try:
+        from deep_translator import GoogleTranslator
+        en = GoogleTranslator(source="auto", target="en").translate(p)
+        if en and len(en.strip()) > 1:
+            return en.strip()
+    except Exception as e:
+        logging.warning("prompt translate: %s", e)
+    return p
+
+
 async def ai_generate_image_file(prompt: str) -> str:
-    """تولید تصویر از متن — pollinations (بدون کلید)"""
+    """تولید تصویر از متن — چند منبع + ترجمه پرامپت"""
     import urllib.parse
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("پرامپت خالی")
-    q = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
-    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 10000}.jpg"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"status={resp.status}")
-            data = await resp.read()
-            if len(data) < 1000:
-                raise RuntimeError("تصویر نامعتبر")
-            with open(path, "wb") as f:
-                f.write(data)
-    return path
+    en = await _prompt_to_english(prompt)
+    # پرامپت قوی‌تر برای کیفیت
+    full = f"{en}, high quality, detailed, sharp focus"
+    seed = int(time.time()) % 999999
+    encoded = urllib.parse.quote(full)
+    urls = [
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true&model=flux&seed={seed}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=768&nologo=true&seed={seed}",
+        f"https://gen.pollinations.ai/image/{encoded}?model=flux&width=1024&height=1024&nologo=true",
+    ]
+    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 100000}.jpg"
+    last_err = None
+    timeout = aiohttp.ClientTimeout(total=150)
+    headers = {"User-Agent": "Mozilla/5.0 (selfMR-bot)"}
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        for url in urls:
+            try:
+                async with session.get(url, allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        last_err = f"status={resp.status}"
+                        logging.warning("ai img fail %s %s", resp.status, url[:80])
+                        continue
+                    data = await resp.read()
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    if len(data) < 2000:
+                        last_err = "too small"
+                        continue
+                    if "json" in ctype or "text" in ctype:
+                        last_err = data[:120]
+                        continue
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    logging.info("ai img ok prompt=%r en=%r bytes=%s", prompt[:40], en[:40], len(data))
+                    return path
+            except Exception as e:
+                last_err = str(e)
+                logging.warning("ai img error: %s", e)
+                continue
+    raise RuntimeError(f"ساخت تصویر ناموفق: {last_err}")
 
 
 async def _temp_host_image(path: str) -> str:
-    """آپلود موقت برای تحلیل"""
+    """آپلود موقت تصویر برای تحلیل"""
+    if not path or not os.path.exists(path):
+        return ""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
             with open(path, "rb") as f:
                 data = f.read()
             form = aiohttp.FormData()
-            form.add_field("fileToUpload", data, filename="photo.jpg", content_type="image/jpeg")
             form.add_field("reqtype", "fileupload")
-            async with session.post("https://catbox.moe/user/api.php", data=form, timeout=60) as resp:
+            form.add_field("fileToUpload", data, filename="photo.jpg", content_type="image/jpeg")
+            async with session.post("https://catbox.moe/user/api.php", data=form) as resp:
                 txt = (await resp.text()).strip()
                 if txt.startswith("http"):
                     return txt
     except Exception as e:
         logging.warning("catbox: %s", e)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
             with open(path, "rb") as f:
                 form = aiohttp.FormData()
                 form.add_field("file", f, filename="photo.jpg", content_type="image/jpeg")
-                async with session.post("https://0x0.st", data=form, timeout=60) as resp:
+                async with session.post("https://0x0.st", data=form) as resp:
                     txt = (await resp.text()).strip()
                     if txt.startswith("http"):
                         return txt
@@ -9264,44 +9327,56 @@ async def _temp_host_image(path: str) -> str:
 
 
 async def ai_analyze_image_file(path: str) -> str:
-    """تحلیل/توصیف عکس با مدل متنی (pollinations / DeepSeek)"""
+    """تحلیل تصویر"""
+    if not path or not os.path.exists(path):
+        return "❌ فایل تصویر دانلود نشد."
     img_url = await _temp_host_image(path)
-    # 1) pollinations openai-compatible vision-ish via URL in prompt
+    # 1) pollinations openai endpoint
     try:
-        async with aiohttp.ClientSession() as session:
-            if img_url:
-                body = {
-                    "model": "openai",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "این تصویر را به فارسی کامل و مرتب توصیف و تحلیل کن. موضوع، اشیاء، حس، رنگ‌ها و جزئیات مهم را بگو."},
-                                {"type": "image_url", "image_url": {"url": img_url}},
-                            ],
-                        }
-                    ],
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as session:
+            content = [
+                {
+                    "type": "text",
+                    "text": (
+                        "Describe and analyze this image in fluent Persian (Farsi). "
+                        "Say what it is, main objects, colors, mood, and details. Be accurate."
+                    ),
                 }
-                async with session.post(
-                    "https://text.pollinations.ai/openai",
-                    json=body,
-                    timeout=aiohttp.ClientTimeout(total=90),
-                ) as resp:
-                    if resp.status == 200:
+            ]
+            if img_url:
+                content.append({"type": "image_url", "image_url": {"url": img_url}})
+            body = {"model": "openai", "messages": [{"role": "user", "content": content}]}
+            async with session.post("https://text.pollinations.ai/openai", json=body) as resp:
+                if resp.status == 200:
+                    try:
                         js = await resp.json()
-                        try:
-                            t = js["choices"][0]["message"]["content"]
-                            if t and len(t.strip()) > 10:
-                                return t.strip()
-                        except Exception:
-                            pass
-                    raw = await resp.text()
-                    if raw and len(raw) > 20 and not raw.strip().startswith("{"):
-                        return raw.strip()[:3500]
+                        t = js["choices"][0]["message"]["content"]
+                        if t and len(str(t).strip()) > 15:
+                            return str(t).strip()[:3500]
+                    except Exception:
+                        raw = await resp.text()
+                        if raw and len(raw) > 20 and not raw.strip().startswith("{"):
+                            return raw.strip()[:3500]
     except Exception as e:
         logging.warning("pollinations vision: %s", e)
 
-    # 2) DeepSeek فقط متنی — با اشاره به لینک
+    # 2) text.pollinations با لینک
+    if img_url:
+        try:
+            import urllib.parse
+            q = urllib.parse.quote(
+                "این تصویر را به فارسی دقیق توصیف کن (موضوع، اجسام، رنگ، حس): " + img_url
+            )
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.get("https://text.pollinations.ai/" + q) as resp:
+                    if resp.status == 200:
+                        t = await resp.text()
+                        if t and len(t.strip()) > 20:
+                            return t.strip()[:3500]
+        except Exception as e:
+            logging.warning("pollinations text img: %s", e)
+
+    # 3) DeepSeek متنی
     if DEEPSEEK_API_KEY and img_url:
         try:
             headers = {
@@ -9314,38 +9389,41 @@ async def ai_analyze_image_file(path: str) -> str:
                     {
                         "role": "user",
                         "content": (
-                            "این یک لینک تصویر است. اگر می‌توانی بر اساس نام/متن مرتبط تحلیل کن، "
-                            "وگرنه یک چارچوب تحلیل عکس حرفه‌ای به فارسی بده.\n"
-                            f"URL: {img_url}"
+                            "لینک یک تصویر است. اگر از روی نام فایل/آدرس چیزی مشخص است بگو؛ "
+                            "و یک تحلیل کوتاه فارسی از تصویرهای معمولی مشابه بنویس.\n"
+                            f"{img_url}"
                         ),
                     }
                 ],
-                "temperature": 0.5,
+                "temperature": 0.4,
             }
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
                 async with session.post(
                     "https://api.deepseek.com/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=60,
                 ) as resp:
                     if resp.status == 200:
                         js = await resp.json()
                         t = js["choices"][0]["message"]["content"]
                         if t:
-                            return t.strip()
+                            return t.strip()[:3500]
         except Exception as e:
             logging.warning("deepseek analyze: %s", e)
 
-    return "❌ تحلیل تصویر الان در دسترس نیست. کمی بعد دوباره تلاش کن."
+    return "❌ تحلیل تصویر انجام نشد. اینترنت سرور یا سرویس AI را چک کن."
 
 
 async def ai_summarize_texts(texts: list) -> str:
-    """خلاصه مکالمه با DeepSeek یا pollinations"""
-    joined = "\n".join(texts)[:8000]
-    if not joined.strip():
-        return "❌ متنی برای خلاصه نیست."
-    system = "خلاصهٔ کوتاه، مرتب و فارسی از مکالمه زیر بده. نکات اصلی و تصمیم‌ها را لیست کن."
+    """خلاصه مکالمه"""
+    cleaned = [t.strip() for t in (texts or []) if t and str(t).strip()]
+    if not cleaned:
+        return "❌ متنی برای خلاصه کردن پیدا نشد. در همین چت چند پیام باشد و دوباره `.خلاصه` بزن."
+    joined = "\n".join(cleaned)[:8000]
+    system = (
+        "تو یک خلاصه‌کننده فارسی هستی. مکالمه زیر را کوتاه، مرتب و با بولت‌پوینت خلاصه کن. "
+        "نکات مهم و نتیجه‌گیری را بنویس."
+    )
     if DEEPSEEK_API_KEY:
         try:
             headers = {
@@ -9360,38 +9438,40 @@ async def ai_summarize_texts(texts: list) -> str:
                 ],
                 "temperature": 0.3,
             }
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
                 async with session.post(
                     "https://api.deepseek.com/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=60,
                 ) as resp:
                     if resp.status == 200:
                         js = await resp.json()
                         t = js["choices"][0]["message"]["content"]
-                        if t:
-                            return t.strip()
+                        if t and len(t.strip()) > 10:
+                            return t.strip()[:3500]
+                    else:
+                        logging.warning("deepseek summary status=%s", resp.status)
         except Exception as e:
             logging.warning("deepseek summary: %s", e)
+    # pollinations text
     try:
-        async with aiohttp.ClientSession() as session:
-            prompt = system + "\n\n" + joined
-            url = "https://text.pollinations.ai/" + __import__("urllib.parse").parse.quote(prompt[:3000])
-            async with session.get(url, timeout=60) as resp:
+        import urllib.parse
+        prompt = system + "\n\n" + joined[:2500]
+        url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.get(url) as resp:
                 if resp.status == 200:
                     t = await resp.text()
-                    if t and len(t) > 15:
+                    if t and len(t.strip()) > 15:
                         return t.strip()[:3500]
     except Exception as e:
         logging.warning("pollinations summary: %s", e)
-    return "❌ خلاصه‌سازی الان ممکن نشد."
+    # fallback خیلی ساده
+    lines = cleaned[:8]
+    return "📋 خلاصه سریع (سرویس AI در دسترس نبود):\n\n• " + "\n• ".join(x[:120] for x in lines)
 
 
 
-# =============================================
-# start_bot_instance با مدیریت Flood
-# =============================================
 async def start_bot_instance(session_string: str, phone: str, user_id: int, font_style: str = 'bold', disable_clock: bool = False):
     max_retries = 3
     retry_delay = 10

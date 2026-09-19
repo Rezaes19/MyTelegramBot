@@ -2613,6 +2613,19 @@ PROFILE_PHOTO_CLOCK = {}  # user_id -> bool ساعت گرافیکی روی عک�
 PROFILE_PHOTO_CLOCK_BASE = {}  # user_id -> path عکس اصلی بدون قاب
 PROFILE_PHOTO_CLOCK_LAST = {}  # user_id -> file_id آخرین عکس ساعت (فقط همان پاک شود)
 PROFILE_PHOTO_CLOCK_LAST_MINUTE = {}  # user_id -> "HH:MM" آخرین دقیقه رسم‌شده
+PROFILE_PHOTO_CLOCK_COLOR = {}  # user_id -> color key
+PROFILE_PHOTO_CLOCK_STYLE = {}  # user_id -> neon|classic
+
+PHOTO_CLOCK_COLORS = {
+    "cyan":   (0, 255, 220),
+    "green":  (80, 255, 120),
+    "purple": (180, 100, 255),
+    "red":    (255, 70, 90),
+    "blue":   (80, 160, 255),
+    "gold":   (255, 200, 60),
+    "white":  (240, 240, 255),
+    "pink":   (255, 100, 180),
+}
 
 def profile_clock_base_path(user_id: int) -> str:
     d = os.path.join(os.path.dirname(os.path.abspath(DATA_FILE)) if "DATA_FILE" in dir() else ".", "profile_bases")
@@ -2836,6 +2849,8 @@ def load_all_states():
         USER_FONT_CHOICES[user_id] = settings.get("font", "bold")
         CLOCK_STATUS[user_id] = settings.get("clock", True)
         PROFILE_PHOTO_CLOCK[user_id] = bool(settings.get("photo_clock", False))
+        PROFILE_PHOTO_CLOCK_COLOR[user_id] = settings.get("photo_clock_color") or "cyan"
+        PROFILE_PHOTO_CLOCK_STYLE[user_id] = settings.get("photo_clock_style") or "neon"
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
@@ -3007,6 +3022,8 @@ def persist_all_user_settings(user_id: int):
             "font": USER_FONT_CHOICES.get(user_id, "bold"),
             "clock": CLOCK_STATUS.get(user_id, True),
             "photo_clock": bool(PROFILE_PHOTO_CLOCK.get(user_id, False)),
+            "photo_clock_color": PROFILE_PHOTO_CLOCK_COLOR.get(user_id) or "cyan",
+            "photo_clock_style": PROFILE_PHOTO_CLOCK_STYLE.get(user_id) or "neon",
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
@@ -3476,8 +3493,8 @@ async def rotate_profile_music_task(client: Client, user_id: int):
 
 
 async def build_profile_clock_image(client, user_id: int) -> str:
-    """قاب ساعت روی عکس پایه ثابت — وقت تهران HH:MM (مثل ساعت اسم)"""
-    from PIL import Image, ImageDraw, ImageFont
+    """ساعت نئون روی عکس پروفایل کاربر — مثل نمونه سایبر/نئون با رنگ قابل‌تنظیم"""
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
     import math
     size = 640
     path_out = f"/tmp/profile_clock_{user_id}.png"
@@ -3490,7 +3507,6 @@ async def build_profile_clock_image(client, user_id: int) -> str:
             PROFILE_PHOTO_CLOCK_BASE[user_id] = base_path
     except Exception:
         base = None
-    # فقط اگر پایه واقعاً نداریم — و ساعت هنوز روی پروفایل نکشیده
     if base is None:
         try:
             photos = []
@@ -3505,70 +3521,154 @@ async def build_profile_clock_image(client, user_id: int) -> str:
         except Exception as e:
             logging.warning(f"profile photo dl: {e}")
     if base is None:
-        base = Image.new("RGBA", (size, size), (25, 25, 25, 255))
+        base = Image.new("RGBA", (size, size), (15, 15, 20, 255))
 
+    # رنگ نئون
+    color_key = PROFILE_PHOTO_CLOCK_COLOR.get(user_id) or "cyan"
+    rgb = PHOTO_CLOCK_COLORS.get(color_key) or PHOTO_CLOCK_COLORS["cyan"]
+    neon = (*rgb, 255)
+    neon_dim = (*rgb, 160)
+    neon_soft = (*rgb, 90)
+
+    # بکگراند تیره
+    canvas = Image.new("RGBA", (size, size), (8, 10, 14, 255))
+    cx = cy = size / 2.0
+    photo_r = size * 0.38
+    outer_r = size * 0.48
+    ring_r = size * 0.44
+
+    # عکس کاربر دایره‌ای در مرکز
     mask = Image.new("L", (size, size), 0)
     md = ImageDraw.Draw(mask)
-    margin = 50
-    md.ellipse((margin, margin, size - margin, size - margin), fill=255)
+    md.ellipse([cx - photo_r, cy - photo_r, cx + photo_r, cy + photo_r], fill=255)
+    # کمی تاریک‌کردن لبه عکس برای حس نئون
+    photo = base.copy()
+    dark = Image.new("RGBA", (size, size), (0, 0, 0, 60))
+    photo = Image.alpha_composite(photo, dark)
     circ = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    circ.paste(base, (0, 0), mask=mask)
-
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 255))
+    circ.paste(photo, (0, 0), mask=mask)
     canvas.paste(circ, (0, 0), circ)
+
+    # لایه درخشش (glow) برای قاب
+    glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    for w, a in ((28, 25), (18, 45), (10, 70)):
+        col = (*rgb, a)
+        gd.ellipse([cx - outer_r - 2, cy - outer_r - 2, cx + outer_r + 2, cy + outer_r + 2], outline=col, width=w)
+    try:
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=6))
+    except Exception:
+        pass
+    canvas = Image.alpha_composite(canvas, glow)
+
     draw = ImageDraw.Draw(canvas)
-    cx = cy = size / 2.0
-    outer_r = size / 2.0 - 8
-    inner_r = outer_r - 32
 
-    draw.ellipse([cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r], outline=(235, 235, 235, 255), width=5)
-    draw.ellipse([cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r], outline=(150, 150, 150, 180), width=2)
-
+    # قاب کنگره‌دار / دندانه مثل نمونه
+    import math as _m
+    teeth = 48
+    pts_outer = []
+    pts_inner = []
+    for i in range(teeth):
+        ang = _m.radians(i * (360 / teeth) - 90)
+        # دندانه‌دار
+        r_o = outer_r + (4 if i % 2 == 0 else 0)
+        r_i = ring_r - 6
+        pts_outer.append((cx + r_o * _m.cos(ang), cy + r_o * _m.sin(ang)))
+        pts_inner.append((cx + r_i * _m.cos(ang), cy + r_i * _m.sin(ang)))
+    # حلقه بیرونی نئون
+    draw.ellipse([cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r], outline=neon, width=5)
+    draw.ellipse([cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r], outline=neon_dim, width=3)
+    # قوس پیشرفت (مثل درصد در نمونه) — بر اساس دقیقه
     tehran_time = datetime.now(TEHRAN_TIMEZONE)
     current_time_str = tehran_time.strftime("%H:%M")
     h12 = tehran_time.hour % 12
     m = tehran_time.minute
-    hour_angle = (h12 * 30) + (m * 0.5)
-    minute_angle = m * 6
-
-    # فقط ۱۲ علامت ساعت (نه ۶۰ خط که شبیه عقربه اضافه دیده شود)
-    for i in range(12):
-        ang = math.radians(i * 30 - 90)
-        r1 = outer_r - 16
-        r2 = outer_r - 3
-        draw.line(
-            [(cx + r1 * math.cos(ang), cy + r1 * math.sin(ang)),
-             (cx + r2 * math.cos(ang), cy + r2 * math.sin(ang))],
-            fill=(240, 240, 240, 255),
-            width=4,
-        )
-
-    def hand(angle_deg, length, width, color):
-        ang = math.radians(angle_deg - 90)
-        draw.line(
-            [(cx, cy), (cx + length * math.cos(ang), cy + length * math.sin(ang))],
-            fill=color,
-            width=width,
-        )
-
-    # فقط ۲ عقربه: ساعت + دقیقه
-    hand(hour_angle, inner_r * 0.40, 8, (255, 255, 255, 255))
-    hand(minute_angle, inner_r * 0.68, 5, (220, 220, 220, 255))
-    draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=(255, 255, 255, 255))
-
+    s = tehran_time.second
+    # قوس از ۱۲ تا موقعیت دقیقه
+    arc_end = -90 + (m / 60.0) * 360
+    bbox = [cx - outer_r - 6, cy - outer_r - 6, cx + outer_r + 6, cy + outer_r + 6]
     try:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((cx - 49, size - 52), current_time_str, fill=(0, 0, 0, 180), font=font)
-        draw.text((cx - 50, size - 53), current_time_str, fill=(255, 255, 255, 255), font=font)
+        draw.arc(bbox, start=-90, end=arc_end, fill=neon, width=8)
     except Exception:
         pass
 
-    canvas.convert("RGB").save(path_out, "PNG")
+    # ۱۲ عدد ساعت دور قاب
+    try:
+        font_n = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        font_t = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+    except Exception:
+        font_n = ImageFont.load_default()
+        font_t = font_n
+    for i in range(12):
+        num = i if i != 0 else 12
+        ang = _m.radians(i * 30 - 90)
+        nr = outer_r - 28
+        tx = cx + nr * _m.cos(ang)
+        ty = cy + nr * _m.sin(ang)
+        label = str(num)
+        try:
+            bbox_t = draw.textbbox((0, 0), label, font=font_n)
+            tw, th = bbox_t[2] - bbox_t[0], bbox_t[3] - bbox_t[1]
+        except Exception:
+            tw, th = 12, 12
+        draw.text((tx - tw / 2, ty - th / 2), label, fill=neon, font=font_n)
+
+    hour_angle = (h12 * 30) + (m * 0.5)
+    minute_angle = m * 6
+
+    def hand(angle_deg, length, width, color, tip=True):
+        ang = _m.radians(angle_deg - 90)
+        x2 = cx + length * _m.cos(ang)
+        y2 = cy + length * _m.sin(ang)
+        # سایه/درخشش
+        draw.line([(cx, cy), (x2, y2)], fill=(*rgb, 80), width=width + 6)
+        draw.line([(cx, cy), (x2, y2)], fill=color, width=width)
+        if tip:
+            draw.ellipse([x2 - 5, y2 - 5, x2 + 5, y2 + 5], fill=color)
+
+    # عقربه ساعت (کوتاه) و دقیقه (بلند) — نئون
+    hand(hour_angle, photo_r * 0.55, 7, neon)
+    hand(minute_angle, photo_r * 0.85, 4, neon)
+    # مرکز
+    draw.ellipse([cx - 12, cy - 12, cx + 12, cy + 12], fill=(20, 25, 30, 255), outline=neon, width=3)
+    draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill=neon)
+
+    # متن دیجیتال HH:MM گوشه
+    try:
+        draw.text((18, 16), current_time_str, fill=neon, font=font_t)
+    except Exception:
+        pass
+
+    canvas.convert("RGB").save(path_out, "PNG", quality=95)
     return path_out
 
+
+
+async def restore_profile_photo_from_base(client: Client, user_id: int):
+    """خاموش کردن ساعت: عکس اصلی برگردد"""
+    try:
+        bp = PROFILE_PHOTO_CLOCK_BASE.get(user_id) or profile_clock_base_path(user_id)
+        if bp and os.path.exists(bp):
+            prev = PROFILE_PHOTO_CLOCK_LAST.get(user_id)
+            await client.set_profile_photo(photo=bp)
+            await asyncio.sleep(0.8)
+            if prev:
+                try:
+                    await client.delete_profile_photos(prev)
+                except Exception:
+                    pass
+            # به‌روز file_id فعلی
+            try:
+                async for p in client.get_chat_photos("me", limit=1):
+                    PROFILE_PHOTO_CLOCK_LAST[user_id] = getattr(p, "file_id", None)
+                    break
+            except Exception:
+                pass
+            logging.info("profile clock restored base uid=%s", user_id)
+            return True
+    except Exception as e:
+        logging.warning(f"restore profile base: {e}")
+    return False
 
 async def update_profile_photo_clock_task(client: Client, user_id: int):
     """هر دقیقه قاب ساعت را از روی عکس پایه ثابت می‌سازد — پایه را وسط کار عوض نمی‌کند"""
@@ -7773,11 +7873,16 @@ async def reply_based_controller(client, message):
         return
     if cmd in (".ساعت پروفایل خاموش", "ساعت پروفایل خاموش"):
         PROFILE_PHOTO_CLOCK[user_id] = False
+        PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(user_id, None)
         try:
             persist_all_user_settings(user_id)
         except Exception:
             pass
-        await message.edit_text("❌ ساعت گرافیکی پروفایل خاموش شد.")
+        try:
+            await restore_profile_photo_from_base(client, user_id)
+        except Exception as e:
+            logging.warning(f"restore on off cmd: {e}")
+        await message.edit_text("❌ ساعت پروفایل خاموش شد — عکس قبلی برگشت.")
         return
 
     if cmd in (".تبدیل ایموجی روشن", "تبدیل ایموجی روشن", ".ایموجی پریمیوم روشن"):
@@ -8764,7 +8869,7 @@ def build_panel_keyboard(user_id, page=1):
         return [
             [
                 _styled_btn("⏰ ساعت اسم", f"toggle_clock_{user_id}", CLOCK_STATUS.get(user_id, True)),
-                _styled_btn("🕰 ساعت پروفایل", f"toggle_photo_clock_{user_id}", PROFILE_PHOTO_CLOCK.get(user_id, False)),
+                _styled_btn("🕰 ساعت در پروفایل", f"panel_page_51_{user_id}", style="primary"),
                 _styled_btn("🕐 فونت ساعت", f"panel_page_5_{user_id}", style="primary"),
             ],
             [
@@ -8948,6 +9053,29 @@ def build_panel_keyboard(user_id, page=1):
         ]
 
 
+
+    if page == 51:
+        on = PROFILE_PHOTO_CLOCK.get(user_id, False)
+        col = PROFILE_PHOTO_CLOCK_COLOR.get(user_id) or "cyan"
+        return [
+            [_styled_btn(f"وضعیت: ({'on ✓' if on else 'off ✗'})", f"toggle_photo_clock_{user_id}", on)],
+            [
+                _styled_btn("🔵 فیروزه‌ای", f"pclock_color_cyan_{user_id}", col == "cyan"),
+                _styled_btn("🟢 سبز", f"pclock_color_green_{user_id}", col == "green"),
+                _styled_btn("🟣 بنفش", f"pclock_color_purple_{user_id}", col == "purple"),
+            ],
+            [
+                _styled_btn("🔴 قرمز", f"pclock_color_red_{user_id}", col == "red"),
+                _styled_btn("🟦 آبی", f"pclock_color_blue_{user_id}", col == "blue"),
+                _styled_btn("🟡 طلایی", f"pclock_color_gold_{user_id}", col == "gold"),
+            ],
+            [
+                _styled_btn("⚪ سفید", f"pclock_color_white_{user_id}", col == "white"),
+                _styled_btn("🩷 صورتی", f"pclock_color_pink_{user_id}", col == "pink"),
+            ],
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+
     if page == 40:
         on = EMOJI_PREMIUM_CONVERT.get(user_id, False)
         return [
@@ -8980,7 +9108,7 @@ def build_panel_keyboard(user_id, page=1):
     back_map = {
         6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 3, 12: 3, 13: 1, 14: 1, 15: 1, 16: 1,
         17: 1, 18: 1, 20: 19, 21: 1, 22: 3, 23: 19, 24: 1, 25: 1, 26: 1, 27: 1,
-        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
+        28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 1, 34: 1, 37: 1, 38: 1, 39: 1, 40: 1, 41: 1, 51: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
     }
     back = back_map.get(page, 1)
     return [back_btn(back)]
@@ -9282,12 +9410,10 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             return
         new_state = not PROFILE_PHOTO_CLOCK.get(target_user_id, False)
         PROFILE_PHOTO_CLOCK[target_user_id] = new_state
-        # هنگام روشن شدن، عکس فعلی را به‌عنوان پایه ذخیره کن
+        cl = ACTIVE_BOTS[target_user_id][0] if target_user_id in ACTIVE_BOTS else None
         if new_state:
+            PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(target_user_id, None)
             try:
-                cl = None
-                if target_user_id in ACTIVE_BOTS:
-                    cl = ACTIVE_BOTS[target_user_id][0]
                 if cl:
                     photos = []
                     async for p in cl.get_chat_photos("me", limit=1):
@@ -9296,20 +9422,77 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                         dl = await cl.download_media(photos[0], file_name=profile_clock_base_path(target_user_id))
                         if dl:
                             PROFILE_PHOTO_CLOCK_BASE[target_user_id] = dl
+                    # آپدیت فوری
+                    path = await build_profile_clock_image(cl, target_user_id)
+                    if path and os.path.exists(path):
+                        await cl.set_profile_photo(photo=path)
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
             except Exception as e:
-                logging.warning(f"capture base on toggle: {e}")
+                logging.warning(f"capture/apply on toggle: {e}")
+        else:
+            PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(target_user_id, None)
+            if cl:
+                try:
+                    await restore_profile_photo_from_base(cl, target_user_id)
+                except Exception as e:
+                    logging.warning(f"restore on toggle off: {e}")
         try:
             persist_all_user_settings(target_user_id)
         except Exception:
             pass
-        await callback.answer("ساعت پروفایل: " + ("روشن ✅" if new_state else "خاموش ❌"))
+        await callback.answer("ساعت پروفایل: " + ("روشن ✅" if new_state else "خاموش ❌ — عکس برگشت"))
         try:
-            await edit_panel_colored(callback, target_user_id, 1)
+            await edit_panel_colored(callback, target_user_id, 51)
         except Exception:
             try:
-                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 1))
+                await callback.edit_message_reply_markup(generate_panel_markup(target_user_id, 51))
             except Exception:
                 pass
+        return
+
+    if data.startswith("pclock_color_"):
+        # pclock_color_cyan_USERID
+        try:
+            parts = data.split("_")
+            target_user_id = int(parts[-1])
+            color_key = parts[2]
+        except Exception:
+            await callback.answer("خطا", show_alert=True)
+            return
+        if callback.from_user.id != target_user_id and callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("دسترسی ندارید", show_alert=True)
+            return
+        if color_key not in PHOTO_CLOCK_COLORS:
+            await callback.answer("رنگ نامعتبر", show_alert=True)
+            return
+        PROFILE_PHOTO_CLOCK_COLOR[target_user_id] = color_key
+        PROFILE_PHOTO_CLOCK_LAST_MINUTE.pop(target_user_id, None)
+        try:
+            persist_all_user_settings(target_user_id)
+        except Exception:
+            pass
+        if PROFILE_PHOTO_CLOCK.get(target_user_id) and target_user_id in ACTIVE_BOTS:
+            try:
+                cl = ACTIVE_BOTS[target_user_id][0]
+                path = await build_profile_clock_image(cl, target_user_id)
+                if path and os.path.exists(path):
+                    prev = PROFILE_PHOTO_CLOCK_LAST.get(target_user_id)
+                    await cl.set_profile_photo(photo=path)
+                    PROFILE_PHOTO_CLOCK_LAST_MINUTE[target_user_id] = datetime.now(TEHRAN_TIMEZONE).strftime("%H:%M")
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logging.warning(f"pclock color apply: {e}")
+        await callback.answer(f"رنگ: {color_key}")
+        try:
+            await edit_panel_colored(callback, target_user_id, 51)
+        except Exception:
+            pass
         return
 
     if data.startswith("song_dl_"):
@@ -10633,6 +10816,7 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     5: "🕐 فونت ساعت | self MR",
                     19: "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید.",
                     35: "🐱 میو | self MR",
+                    51: "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود.",
                 }
                 panel_text = page_titles.get(page, f"⚡️ self MR\n📄 صفحه {page}")
                 try:

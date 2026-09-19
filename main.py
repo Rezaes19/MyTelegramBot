@@ -7128,192 +7128,21 @@ async def reply_based_controller(client, message):
         return
 
 
-# ========== AI: ساخت عکس / تحلیل عکس / خلاصه چت ==========
-async def ai_generate_image_file(prompt: str) -> str:
-    """تولید تصویر از متن — pollinations (بدون کلید)"""
-    import urllib.parse
-    prompt = (prompt or "").strip()
-    if not prompt:
-        raise ValueError("پرامپت خالی")
-    q = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
-    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 10000}.jpg"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"status={resp.status}")
-            data = await resp.read()
-            if len(data) < 1000:
-                raise RuntimeError("تصویر نامعتبر")
-            with open(path, "wb") as f:
-                f.write(data)
-    return path
-
-
-async def _temp_host_image(path: str) -> str:
-    """آپلود موقت برای تحلیل"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            with open(path, "rb") as f:
-                data = f.read()
-            form = aiohttp.FormData()
-            form.add_field("fileToUpload", data, filename="photo.jpg", content_type="image/jpeg")
-            form.add_field("reqtype", "fileupload")
-            async with session.post("https://catbox.moe/user/api.php", data=form, timeout=60) as resp:
-                txt = (await resp.text()).strip()
-                if txt.startswith("http"):
-                    return txt
-    except Exception as e:
-        logging.warning("catbox: %s", e)
-    try:
-        async with aiohttp.ClientSession() as session:
-            with open(path, "rb") as f:
-                form = aiohttp.FormData()
-                form.add_field("file", f, filename="photo.jpg", content_type="image/jpeg")
-                async with session.post("https://0x0.st", data=form, timeout=60) as resp:
-                    txt = (await resp.text()).strip()
-                    if txt.startswith("http"):
-                        return txt
-    except Exception as e:
-        logging.warning("0x0: %s", e)
-    return ""
-
-
-async def ai_analyze_image_file(path: str) -> str:
-    """تحلیل/توصیف عکس با مدل متنی (pollinations / DeepSeek)"""
-    img_url = await _temp_host_image(path)
-    # 1) pollinations openai-compatible vision-ish via URL in prompt
-    try:
-        async with aiohttp.ClientSession() as session:
-            if img_url:
-                body = {
-                    "model": "openai",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "این تصویر را به فارسی کامل و مرتب توصیف و تحلیل کن. موضوع، اشیاء، حس، رنگ‌ها و جزئیات مهم را بگو."},
-                                {"type": "image_url", "image_url": {"url": img_url}},
-                            ],
-                        }
-                    ],
-                }
-                async with session.post(
-                    "https://text.pollinations.ai/openai",
-                    json=body,
-                    timeout=aiohttp.ClientTimeout(total=90),
-                ) as resp:
-                    if resp.status == 200:
-                        js = await resp.json()
-                        try:
-                            t = js["choices"][0]["message"]["content"]
-                            if t and len(t.strip()) > 10:
-                                return t.strip()
-                        except Exception:
-                            pass
-                    raw = await resp.text()
-                    if raw and len(raw) > 20 and not raw.strip().startswith("{"):
-                        return raw.strip()[:3500]
-    except Exception as e:
-        logging.warning("pollinations vision: %s", e)
-
-    # 2) DeepSeek فقط متنی — با اشاره به لینک
-    if DEEPSEEK_API_KEY and img_url:
-        try:
-            headers = {
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": "deepseek-chat",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": (
-                            "این یک لینک تصویر است. اگر می‌توانی بر اساس نام/متن مرتبط تحلیل کن، "
-                            "وگرنه یک چارچوب تحلیل عکس حرفه‌ای به فارسی بده.\n"
-                            f"URL: {img_url}"
-                        ),
-                    }
-                ],
-                "temperature": 0.5,
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.deepseek.com/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                ) as resp:
-                    if resp.status == 200:
-                        js = await resp.json()
-                        t = js["choices"][0]["message"]["content"]
-                        if t:
-                            return t.strip()
-        except Exception as e:
-            logging.warning("deepseek analyze: %s", e)
-
-    return "❌ تحلیل تصویر الان در دسترس نیست. کمی بعد دوباره تلاش کن."
-
-
-async def ai_summarize_texts(texts: list) -> str:
-    """خلاصه مکالمه با DeepSeek یا pollinations"""
-    joined = "\n".join(texts)[:8000]
-    if not joined.strip():
-        return "❌ متنی برای خلاصه نیست."
-    system = "خلاصهٔ کوتاه، مرتب و فارسی از مکالمه زیر بده. نکات اصلی و تصمیم‌ها را لیست کن."
-    if DEEPSEEK_API_KEY:
-        try:
-            headers = {
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": joined},
-                ],
-                "temperature": 0.3,
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.deepseek.com/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                ) as resp:
-                    if resp.status == 200:
-                        js = await resp.json()
-                        t = js["choices"][0]["message"]["content"]
-                        if t:
-                            return t.strip()
-        except Exception as e:
-            logging.warning("deepseek summary: %s", e)
-    try:
-        async with aiohttp.ClientSession() as session:
-            prompt = system + "\n\n" + joined
-            url = "https://text.pollinations.ai/" + __import__("urllib.parse").parse.quote(prompt[:3000])
-            async with session.get(url, timeout=60) as resp:
-                if resp.status == 200:
-                    t = await resp.text()
-                    if t and len(t) > 15:
-                        return t.strip()[:3500]
-    except Exception as e:
-        logging.warning("pollinations summary: %s", e)
-    return "❌ خلاصه‌سازی الان ممکن نشد."
-
-
-
     # ========== ساخت عکس AI ==========
-    if cmd.startswith(".عکس ") or cmd.startswith("عکس "):
-        prompt = ""
-        for p in (".عکس ", "عکس "):
-            if cmd.startswith(p) or text.startswith(p):
-                prompt = (text[len(p):] if text.startswith(p) else cmd[len(p):]).strip()
+    text = (message.text or message.caption or "").strip()
+    if text.startswith(".عکس") or text.startswith("عکس"):
+        prompt = text
+        for p in (".عکس", "عکس"):
+            if prompt.startswith(p):
+                prompt = prompt[len(p):].strip()
+                if prompt.startswith("+"):
+                    prompt = prompt[1:].strip()
                 break
         if not prompt:
-            await message.edit_text("❌ مثال:\n`.عکس گربه فضانورد`")
+            try:
+                await message.edit_text("❌ مثال:\n`.عکس گربه فضانورد`")
+            except Exception:
+                await message.reply_text("❌ مثال: .عکس گربه فضانورد")
             return
         try:
             await message.edit_text("🎨 در حال ساخت تصویر...")
@@ -9382,6 +9211,183 @@ async def ai_summarize_texts(texts: list) -> str:
         data_manager.save_reactions(user_id, t)
         await message.edit_text("❌ واکنش حذف شد.")
         return
+
+# ========== AI: ساخت عکس / تحلیل عکس / خلاصه چت ==========
+async def ai_generate_image_file(prompt: str) -> str:
+    """تولید تصویر از متن — pollinations (بدون کلید)"""
+    import urllib.parse
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("پرامپت خالی")
+    q = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
+    path = f"/tmp/ai_img_{int(time.time())}_{abs(hash(prompt)) % 10000}.jpg"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"status={resp.status}")
+            data = await resp.read()
+            if len(data) < 1000:
+                raise RuntimeError("تصویر نامعتبر")
+            with open(path, "wb") as f:
+                f.write(data)
+    return path
+
+
+async def _temp_host_image(path: str) -> str:
+    """آپلود موقت برای تحلیل"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(path, "rb") as f:
+                data = f.read()
+            form = aiohttp.FormData()
+            form.add_field("fileToUpload", data, filename="photo.jpg", content_type="image/jpeg")
+            form.add_field("reqtype", "fileupload")
+            async with session.post("https://catbox.moe/user/api.php", data=form, timeout=60) as resp:
+                txt = (await resp.text()).strip()
+                if txt.startswith("http"):
+                    return txt
+    except Exception as e:
+        logging.warning("catbox: %s", e)
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(path, "rb") as f:
+                form = aiohttp.FormData()
+                form.add_field("file", f, filename="photo.jpg", content_type="image/jpeg")
+                async with session.post("https://0x0.st", data=form, timeout=60) as resp:
+                    txt = (await resp.text()).strip()
+                    if txt.startswith("http"):
+                        return txt
+    except Exception as e:
+        logging.warning("0x0: %s", e)
+    return ""
+
+
+async def ai_analyze_image_file(path: str) -> str:
+    """تحلیل/توصیف عکس با مدل متنی (pollinations / DeepSeek)"""
+    img_url = await _temp_host_image(path)
+    # 1) pollinations openai-compatible vision-ish via URL in prompt
+    try:
+        async with aiohttp.ClientSession() as session:
+            if img_url:
+                body = {
+                    "model": "openai",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "این تصویر را به فارسی کامل و مرتب توصیف و تحلیل کن. موضوع، اشیاء، حس، رنگ‌ها و جزئیات مهم را بگو."},
+                                {"type": "image_url", "image_url": {"url": img_url}},
+                            ],
+                        }
+                    ],
+                }
+                async with session.post(
+                    "https://text.pollinations.ai/openai",
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=90),
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        try:
+                            t = js["choices"][0]["message"]["content"]
+                            if t and len(t.strip()) > 10:
+                                return t.strip()
+                        except Exception:
+                            pass
+                    raw = await resp.text()
+                    if raw and len(raw) > 20 and not raw.strip().startswith("{"):
+                        return raw.strip()[:3500]
+    except Exception as e:
+        logging.warning("pollinations vision: %s", e)
+
+    # 2) DeepSeek فقط متنی — با اشاره به لینک
+    if DEEPSEEK_API_KEY and img_url:
+        try:
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "این یک لینک تصویر است. اگر می‌توانی بر اساس نام/متن مرتبط تحلیل کن، "
+                            "وگرنه یک چارچوب تحلیل عکس حرفه‌ای به فارسی بده.\n"
+                            f"URL: {img_url}"
+                        ),
+                    }
+                ],
+                "temperature": 0.5,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60,
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        t = js["choices"][0]["message"]["content"]
+                        if t:
+                            return t.strip()
+        except Exception as e:
+            logging.warning("deepseek analyze: %s", e)
+
+    return "❌ تحلیل تصویر الان در دسترس نیست. کمی بعد دوباره تلاش کن."
+
+
+async def ai_summarize_texts(texts: list) -> str:
+    """خلاصه مکالمه با DeepSeek یا pollinations"""
+    joined = "\n".join(texts)[:8000]
+    if not joined.strip():
+        return "❌ متنی برای خلاصه نیست."
+    system = "خلاصهٔ کوتاه، مرتب و فارسی از مکالمه زیر بده. نکات اصلی و تصمیم‌ها را لیست کن."
+    if DEEPSEEK_API_KEY:
+        try:
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": joined},
+                ],
+                "temperature": 0.3,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60,
+                ) as resp:
+                    if resp.status == 200:
+                        js = await resp.json()
+                        t = js["choices"][0]["message"]["content"]
+                        if t:
+                            return t.strip()
+        except Exception as e:
+            logging.warning("deepseek summary: %s", e)
+    try:
+        async with aiohttp.ClientSession() as session:
+            prompt = system + "\n\n" + joined
+            url = "https://text.pollinations.ai/" + __import__("urllib.parse").parse.quote(prompt[:3000])
+            async with session.get(url, timeout=60) as resp:
+                if resp.status == 200:
+                    t = await resp.text()
+                    if t and len(t) > 15:
+                        return t.strip()[:3500]
+    except Exception as e:
+        logging.warning("pollinations summary: %s", e)
+    return "❌ خلاصه‌سازی الان ممکن نشد."
+
+
 
 # =============================================
 # start_bot_instance با مدیریت Flood

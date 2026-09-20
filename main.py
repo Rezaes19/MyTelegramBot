@@ -1,4 +1,5 @@
 import os
+import html
 import asyncio
 import logging
 import re
@@ -10183,8 +10184,24 @@ async def _dooz_cancel_timer(key):
             pass
 
 
+
+
+async def _dooz_user_link(user_id: int, fallback: str = None) -> str:
+    """لینک تمیز مثل نبرد الماس"""
+    try:
+        u = await manager_bot.get_users(int(user_id))
+        name = (u.first_name or fallback or str(user_id)).replace("<", "").replace(">", "")
+        return f'<a href="tg://user?id={int(user_id)}">{name}</a>'
+    except Exception:
+        try:
+            name = (fallback or str(user_id)).replace("<", "").replace(">", "")
+            return f'<a href="tg://user?id={int(user_id)}">{name}</a>'
+        except Exception:
+            return html.escape(str(fallback or user_id))
+
+
 async def _dooz_force_show_result(chat_id, message_id, text: str, prize=0, wbal=0, lbal=0):
-    """نتیجه را حتماً نشان بده: ویرایش پیام، وگرنه پاک+ارسال جدید"""
+    """نمایش نتیجه دوز — مثل نبرد الماس با HTML تمیز"""
     text = str(text or "")
     kb = {
         "inline_keyboard": [
@@ -10203,56 +10220,86 @@ async def _dooz_force_show_result(chat_id, message_id, text: str, prize=0, wbal=
         ]
     }
     api = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    # 1) ویرایش با HTML (مثل بازی الماس)
     try:
         async with aiohttp.ClientSession() as session:
-            # 1) ویرایش متن پیام بازی
             async with session.post(
                 api + "/editMessageText",
                 json={
                     "chat_id": chat_id,
                     "message_id": int(message_id),
                     "text": text,
+                    "parse_mode": "HTML",
                     "reply_markup": kb,
+                    "disable_web_page_preview": True,
                 },
             ) as resp:
                 data = await resp.json()
                 if data.get("ok"):
-                    logging.info("dooz SHOW edit OK chat=%s mid=%s", chat_id, message_id)
+                    logging.info("dooz SHOW edit OK")
                     return True
                 logging.warning("dooz SHOW edit fail: %s", data)
+    except Exception as e:
+        logging.warning("dooz SHOW edit err: %s", e)
 
-            # 2) پاک کردن پیام قبلی
+    # 2) manager_bot
+    try:
+        rows = [
+            [
+                InlineKeyboardButton("💎 جایزه برنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {int(prize):,}", callback_data="noop"),
+            ],
+            [
+                InlineKeyboardButton("💎 موجودی برنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {int(wbal):,}", callback_data="noop"),
+            ],
+            [
+                InlineKeyboardButton("❌ موجودی بازنده", callback_data="noop"),
+                InlineKeyboardButton(f"💎 {int(lbal):,}", callback_data="noop"),
+            ],
+        ]
+        await manager_bot.edit_message_text(
+            chat_id,
+            int(message_id),
+            text,
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return True
+    except Exception as e:
+        logging.warning("dooz SHOW manager edit: %s", e)
+
+    # 3) پاک + ارسال جدید
+    try:
+        async with aiohttp.ClientSession() as session:
             try:
-                await session.post(
-                    api + "/deleteMessage",
-                    json={"chat_id": chat_id, "message_id": int(message_id)},
-                )
+                await session.post(api + "/deleteMessage", json={"chat_id": chat_id, "message_id": int(message_id)})
             except Exception:
                 pass
-
-            # 3) ارسال پیام نتیجه جدید
             async with session.post(
                 api + "/sendMessage",
                 json={
                     "chat_id": chat_id,
                     "text": text,
+                    "parse_mode": "HTML",
                     "reply_markup": kb,
+                    "disable_web_page_preview": True,
                 },
             ) as resp:
                 data = await resp.json()
                 if data.get("ok"):
-                    logging.info("dooz SHOW send OK chat=%s", chat_id)
+                    logging.info("dooz SHOW send OK")
                     return True
                 logging.warning("dooz SHOW send fail: %s", data)
     except Exception as e:
-        logging.exception("dooz SHOW error: %s", e)
+        logging.warning("dooz SHOW send err: %s", e)
 
-    # 4) آخرین تلاش با manager_bot
     try:
-        await manager_bot.send_message(chat_id, text)
+        await manager_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
         return True
     except Exception as e:
-        logging.warning("dooz SHOW manager send: %s", e)
+        logging.warning("dooz SHOW final: %s", e)
     return False
 
 
@@ -10265,8 +10312,9 @@ async def _dooz_apply_result_edit(chat_id, message_id, message, result_text, pri
     return await _dooz_force_show_result(chat_id, message_id, result_text, prize, wbal, lbal)
 
 
+
 async def _dooz_finish_timeout(client, message, key, st):
-    """۳۰ ثانیه گذشت — فقط نوبت‌دار می‌بازد و نتیجه نمایش داده می‌شود"""
+    """۳۰ ثانیه گذشت — نتیجه مثل نبرد الماس"""
     try:
         if not st or st.get("finished") or st.get("settling"):
             return
@@ -10279,7 +10327,6 @@ async def _dooz_finish_timeout(client, message, key, st):
             joi = int(st.get("joiner_id"))
         except Exception:
             return
-
         if turn not in (org, joi):
             return
 
@@ -10298,29 +10345,31 @@ async def _dooz_finish_timeout(client, message, key, st):
         except Exception as e:
             logging.warning("dooz timeout balance: %s", e)
 
-        async def _name(uid):
-            try:
-                n = str(await get_user_name(uid))
-                if "<" in n:
-                    n = n.replace("<", " ").replace(">", " ")
-                return n
-            except Exception:
-                return str(uid)
+        # اسم تمیز مثل بازی الماس
+        fb_w = st.get("organizer_name") if winner == org else st.get("joiner_name")
+        fb_l = st.get("joiner_name") if winner == org else st.get("organizer_name")
+        # اگر HTML بود فقط متنش
+        def _plain(x):
+            if not x:
+                return None
+            s = str(x)
+            if "<a " in s and ">" in s:
+                try:
+                    return s.split(">", 1)[1].split("<", 1)[0]
+                except Exception:
+                    return s
+            return s.replace("<", "").replace(">", "")
 
-        wname = await _name(winner)
-        lname = await _name(loser)
+        wname = await _dooz_user_link(winner, _plain(fb_w))
+        lname = await _dooz_user_link(loser, _plain(fb_l))
         wbal = get_balance(winner)
         lbal = get_balance(loser)
 
         text = (
-            "🎯 نتیجه دوز مشخص شد\n\n"
-            "⏱ تمام شدن ۳۰ ثانیه وقت\n\n"
-            f"🏆 برنده: {wname}\n"
-            f"❌ بازنده: {lname}\n\n"
-            "بازنده در ۳۰ ثانیه نوبتش را بازی نکرد.\n\n"
-            f"💎 جایزه: {prize:,}\n"
-            f"💎 موجودی برنده: {wbal:,}\n"
-            f"💎 موجودی بازنده: {lbal:,}"
+            "🎯 <b>نتیجه دوز مشخص شد</b>\n\n"
+            "⏱ علت: تمام شدن ۳۰ ثانیه وقت\n\n"
+            f"🏆 کاربر برنده: {wname}\n"
+            f"❌ کاربر بازنده: {lname}"
         )
 
         chat_id = st.get("chat_id") or (key[0] if isinstance(key, tuple) else None)
@@ -10340,15 +10389,15 @@ async def _dooz_finish_timeout(client, message, key, st):
             }
         except Exception:
             pass
+
         ok = await _dooz_force_show_result(chat_id, msg_id, text, prize, wbal, lbal)
         logging.info(
-            "dooz TIMEOUT result winner=%s loser=%s prize=%s show=%s chat=%s mid=%s",
-            winner, loser, prize, ok, chat_id, msg_id,
+            "dooz TIMEOUT ok=%s winner=%s loser=%s chat=%s mid=%s",
+            ok, winner, loser, chat_id, msg_id,
         )
-        # اگر ویرایش نشد، ۲ ثانیه بعد دوباره تلاش کن
         if not ok:
             async def _retry():
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 await _dooz_force_show_result(chat_id, msg_id, text, prize, wbal, lbal)
             try:
                 asyncio.create_task(_retry())
@@ -10424,12 +10473,23 @@ async def _dooz_render(client, message, st: dict):
     joi = st.get("joiner_id")
     amount = int(st.get("amount") or 0)
     turn = st.get("turn")
+    def _strip_a(s):
+        s = str(s or "")
+        if "<a " in s and ">" in s:
+            try:
+                return s.split(">", 1)[1].split("<", 1)[0]
+            except Exception:
+                return s
+        return s.replace("<", "").replace(">", "")
     try:
-        org_name = st.get("organizer_name") or await get_user_name(org)
+        org_name = _strip_a(st.get("organizer_name")) or _strip_a(await get_user_name(org))
     except Exception:
         org_name = str(org)
     try:
-        joi_name = st.get("joiner_name") or (await get_user_name(joi) if joi else "در انتظار حریف...")
+        if joi:
+            joi_name = _strip_a(st.get("joiner_name")) or _strip_a(await get_user_name(joi))
+        else:
+            joi_name = "در انتظار حریف..."
     except Exception:
         joi_name = str(joi) if joi else "در انتظار حریف..."
     # خانه‌ها دکمه آبی (primary) مثل پنل — نه مربع رنگی
@@ -11024,13 +11084,14 @@ async def _callback_panel_handler_impl(client, callback, data: str):
             st["board"] = [" "] * 9
             st["finished"] = False
             try:
-                st["organizer_name"] = await get_user_name(organizer_id)
+                st["organizer_name"] = await _dooz_user_link(organizer_id)
             except Exception:
                 st["organizer_name"] = str(organizer_id)
             try:
-                st["joiner_name"] = await get_user_name(joiner)
+                jn = (callback.from_user.first_name or str(joiner)).replace("<", "").replace(">", "")
+                st["joiner_name"] = f'<a href="tg://user?id={joiner}">{jn}</a>'
             except Exception:
-                st["joiner_name"] = (callback.from_user.first_name or str(joiner))
+                st["joiner_name"] = str(joiner)
             st["turn_token"] = time.time()
             st["turn_deadline"] = time.time() + DOOZ_TURN_SEC
             st["chat_id"] = callback.message.chat.id
@@ -11098,17 +11159,16 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                 prize -= tax
                 loser = joiner_id if winner == organizer_id else organizer_id
                 add_balance(winner, prize)
-                wname = await get_user_name(winner)
-                lname = await get_user_name(loser)
+                wname = await _dooz_user_link(winner)
+                lname = await _dooz_user_link(loser)
                 wbal = get_balance(winner)
                 lbal = get_balance(loser)
                 await _dooz_cancel_timer(key)
                 active_dooz.pop(key, None)
-                nl = chr(10)
                 result_text = (
-                    "🎯 <b>نتیجه دوز مشخص شد</b>" + nl + nl
-                    + f"🏆 کاربر برنده: {wname}" + nl
-                    + f"❌ کاربر بازنده: {lname}"
+                    "🎯 <b>نتیجه دوز مشخص شد</b>\n\n"
+                    f"🏆 کاربر برنده: {wname}\n"
+                    f"❌ کاربر بازنده: {lname}"
                 )
                 try:
                     DOOZ_LAST_RESULT[key] = {
@@ -14332,3 +14392,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(main())
+

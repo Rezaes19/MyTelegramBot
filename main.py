@@ -7159,11 +7159,16 @@ def _make_fancy_fonts(text: str) -> str:
         par[chr(ord("a") + i)] = chr(0x249C + i)
     styles.append(tr(text.lower(), par))
     # Upside down
-    flip = str.maketrans(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
-        "ɐqɔpǝɟƃɥᴉɾʞlɯuodbɹsʇnʌʍxʎz∀qƆpƎℲפHIſʞ˥WNOԀQɹS┴∩ΛMX⅄ZƖᄅƐㄣϛ9ㄥ860",
-    )
-    styles.append(text.translate(flip)[::-1])
+    flip_map = {
+        "a":"ɐ","b":"q","c":"ɔ","d":"p","e":"ǝ","f":"ɟ","g":"ƃ","h":"ɥ","i":"ᴉ","j":"ɾ",
+        "k":"ʞ","l":"l","m":"ɯ","n":"u","o":"o","p":"d","q":"b","r":"ɹ","s":"s","t":"ʇ",
+        "u":"n","v":"ʌ","w":"ʍ","x":"x","y":"ʎ","z":"z",
+        "A":"∀","B":"q","C":"Ɔ","D":"p","E":"Ǝ","F":"Ⅎ","G":"פ","H":"H","I":"I","J":"ſ",
+        "K":"ʞ","L":"˥","M":"W","N":"N","O":"O","P":"Ԁ","Q":"Q","R":"ɹ","S":"S","T":"┴",
+        "U":"∩","V":"Λ","W":"M","X":"X","Y":"⅄","Z":"Z",
+        "1":"Ɩ","2":"ᄅ","3":"Ɛ","4":"ㄣ","5":"ϛ","6":"9","7":"ㄥ","8":"8","9":"6","0":"0",
+    }
+    styles.append("".join(flip_map.get(ch, ch) for ch in text)[::-1])
     # Combining styles
     styles.append("".join(ch + "\u0336" for ch in text))  # strike
     styles.append("".join(ch + "\u0332" for ch in text))  # underline
@@ -7194,14 +7199,21 @@ def _make_fancy_fonts(text: str) -> str:
     # Underline spaces
     styles.append("_".join(list(text)))
     # Greek-ish lookalike
-    greek = str.maketrans("ABEFHIKMNOPTXYabehikmnopty", "ΑΒΕΗΙΚΜΝΟΡΤΧΥαβεηικμνορτυ")
-    styles.append(text.translate(greek))
-    # Currency-ish weird map
-    weird = str.maketrans(
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-        "ДВСFGHIJКLMИОPQRSTЦVШХУZдвсfghiјклмиорqrstuvwхуz",
-    )
-    styles.append(text.translate(weird))
+    greek_map = {
+        "A":"Α","B":"Β","E":"Ε","H":"Η","I":"Ι","K":"Κ","M":"Μ","N":"Ν","O":"Ο","P":"Ρ",
+        "T":"Τ","X":"Χ","Y":"Υ",
+        "a":"α","b":"β","e":"ε","h":"η","i":"ι","k":"κ","m":"μ","n":"ν","o":"ο","p":"ρ",
+        "t":"τ","y":"υ",
+    }
+    styles.append("".join(greek_map.get(ch, ch) for ch in text))
+    # Weird lookalike
+    weird_map = {
+        "A":"Д","B":"В","C":"С","E":"Е","H":"Н","I":"І","J":"Ј","K":"К","L":"L","M":"М",
+        "N":"И","O":"О","P":"Р","R":"Я","S":"Ѕ","T":"Т","X":"Х","Y":"У",
+        "a":"д","c":"с","e":"е","h":"һ","i":"і","j":"ј","k":"к","m":"м","n":"и","o":"о",
+        "p":"р","r":"я","s":"ѕ","t":"т","x":"х","y":"у",
+    }
+    styles.append("".join(weird_map.get(ch, ch) for ch in text))
     # Superscript / subscript digits+few letters
     sup_map = {
         "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",

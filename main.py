@@ -2861,6 +2861,7 @@ SENDER_CONFIG = {}
 SENDER_MASS = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
+SELF_STATUS = {}  # user_id -> True=روشن / False=خاموش (پیش‌فرض روشن)
 AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
@@ -3102,6 +3103,7 @@ def load_all_states():
             BIO_MILADI_ORIGINAL[user_id] = settings.get("bio_miladi_original") or ""
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
+        SELF_STATUS[user_id] = bool(settings.get("self_status", True))
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
         AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
@@ -3184,6 +3186,7 @@ def apply_user_settings_from_db(user_id: int):
         CLOCK_STATUS[user_id] = bool(settings.get("clock", True)) if "clock" in settings else True
         BOLD_MODE_STATUS[user_id] = bool(settings.get("bold", False))
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
+        SELF_STATUS[user_id] = bool(settings.get("self_status", True))
         SECRETARY_MODE_STATUS[user_id] = bool(settings.get("secretary", False))
         _sm = (settings.get("secretary_msg", "") or "").strip()
         if _sm in ("رید", "rid", "test") or len(_sm) < 2:
@@ -3277,6 +3280,7 @@ def persist_all_user_settings(user_id: int):
             "bio_miladi_original": BIO_MILADI_ORIGINAL.get(user_id, ""),
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
+            "self_status": bool(SELF_STATUS.get(user_id, True)),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
             "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
             "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
@@ -4656,6 +4660,9 @@ async def outgoing_sticker_premium_handler(client, message):
 async def outgoing_message_modifier(client, message):
     """اعمال فونت متن پنل روی پیام‌های خروجی کاربر"""
     try:
+        user_id = client.me.id if client.me else None
+        if user_id and not SELF_STATUS.get(user_id, True):
+            return
         # فقط پیام‌های خودمان
         is_out = bool(getattr(message, "outgoing", False))
         is_self = bool(message.from_user and getattr(message.from_user, "is_self", False))
@@ -7031,10 +7038,162 @@ async def meow_loop_task(client: Client, user_id: int):
             await asyncio.sleep(30)
 
 
+
+def _make_fancy_fonts(text: str) -> str:
+    """چندین استایل فونت یونیکد قابل کپی برای متن ورودی"""
+    text = str(text or "")[:80]
+    if not text:
+        return "❌ متن خالی است"
+
+    def _map(s, table):
+        return "".join(table.get(ch, ch) for ch in s)
+
+    # جداول حروف a-z / A-Z
+    def _az_table(base_a: int, base_A: int = None):
+        t = {}
+        for i in range(26):
+            t[chr(ord("a") + i)] = chr(base_a + i)
+            if base_A is not None:
+                t[chr(ord("A") + i)] = chr(base_A + i)
+            else:
+                t[chr(ord("A") + i)] = chr(base_a + i)
+        return t
+
+    styles = []
+    # Bold
+    styles.append(("Bold", _map(text, _az_table(0x1D41A, 0x1D400))))
+    # Italic
+    styles.append(("Italic", _map(text, _az_table(0x1D44E, 0x1D434))))
+    # Bold Italic
+    styles.append(("Bold Italic", _map(text, _az_table(0x1D482, 0x1D468))))
+    # Script
+    styles.append(("Script", _map(text, _az_table(0x1D4B6, 0x1D49C))))
+    # Bold Script
+    styles.append(("Bold Script", _map(text, _az_table(0x1D4EA, 0x1D4D0))))
+    # Fraktur
+    styles.append(("Fraktur", _map(text, _az_table(0x1D51E, 0x1D504))))
+    # Double Struck
+    styles.append(("Double", _map(text, _az_table(0x1D552, 0x1D538))))
+    # Monospace
+    styles.append(("Mono", _map(text, _az_table(0x1D68A, 0x1D670))))
+    # Sans
+    styles.append(("Sans", _map(text, _az_table(0x1D5BA, 0x1D5A0))))
+    # Sans Bold
+    styles.append(("Sans Bold", _map(text, _az_table(0x1D5EE, 0x1D5D4))))
+    # Fullwidth
+    fw = {}
+    for i in range(26):
+        fw[chr(ord("a") + i)] = chr(0xFF41 + i)
+        fw[chr(ord("A") + i)] = chr(0xFF21 + i)
+    for i in range(10):
+        fw[chr(ord("0") + i)] = chr(0xFF10 + i)
+    styles.append(("Fullwidth", _map(text, fw)))
+    # Small caps-ish (using unicode small letters where possible)
+    small = {
+        "a": "ᴀ", "b": "ʙ", "c": "ᴄ", "d": "ᴅ", "e": "ᴇ", "f": "ғ", "g": "ɢ", "h": "ʜ",
+        "i": "ɪ", "j": "ᴊ", "k": "ᴋ", "l": "ʟ", "m": "ᴍ", "n": "ɴ", "o": "ᴏ", "p": "ᴘ",
+        "q": "ǫ", "r": "ʀ", "s": "s", "t": "ᴛ", "u": "ᴜ", "v": "ᴠ", "w": "ᴡ", "x": "x",
+        "y": "ʏ", "z": "ᴢ",
+    }
+    styles.append(("Small", "".join(small.get(ch.lower(), ch) for ch in text)))
+    # Bubbled
+    bub = {}
+    for i in range(26):
+        bub[chr(ord("a") + i)] = chr(0x24D0 + i)
+        bub[chr(ord("A") + i)] = chr(0x24B6 + i)
+    for i in range(10):
+        bub[chr(ord("0") + i)] = chr(0x24EA) if i == 0 else chr(0x2460 + i - 1)
+    styles.append(("Bubble", _map(text, bub)))
+    # Squared
+    sq = {}
+    for i in range(26):
+        sq[chr(ord("A") + i)] = chr(0x1F130 + i)
+        sq[chr(ord("a") + i)] = chr(0x1F130 + i)
+    styles.append(("Squared", _map(text, sq)))
+    # Upside down
+    flip = str.maketrans(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+        "ɐqɔpǝɟƃɥᴉɾʞlɯuodbɹsʇnʌʍxʎz∀qƆpƎℲפHIſʞ˥WNOԀQɹS┴∩ΛMX⅄ZƖᄅƐㄣϛ9ㄥ860",
+    )
+    styles.append(("UpsideDown", text.translate(flip)[::-1]))
+    # Parenthesized
+    par = {}
+    for i in range(26):
+        par[chr(ord("a") + i)] = chr(0x249C + i)
+    styles.append(("Paren", _map(text.lower(), par)))
+    # Spaced
+    styles.append(("Spaced", " ".join(list(text))))
+    # Strikethrough combining
+    styles.append(("Strike", "".join(ch + "\u0336" for ch in text)))
+    # Underline combining
+    styles.append(("Underline", "".join(ch + "\u0332" for ch in text)))
+
+    lines = [f"🎨 فونت | self MR", f"متن: {text}", ""]
+    for title, val in styles:
+        lines.append(f"• {title}:")
+        lines.append(val)
+        lines.append("")
+    lines.append("روی هر فونت بزن و کپی کن")
+    return "\n".join(lines)
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
     if not cmd:
+        return
+
+    # ========== وضعیت سلف روشن/خاموش ==========
+    if cmd in (".سلف روشن", "سلف روشن"):
+        SELF_STATUS[user_id] = True
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("✅ سلف روشن شد | self MR")
+        except Exception:
+            pass
+        return
+    if cmd in (".سلف خاموش", "سلف خاموش"):
+        SELF_STATUS[user_id] = False
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("⏹ سلف خاموش شد | self MR\nدیگر دستورات و قابلیت‌ها اجرا نمی‌شوند.")
+        except Exception:
+            pass
+        return
+
+    # اگر سلف خاموش است هیچ دستوری اجرا نشود
+    if not SELF_STATUS.get(user_id, True):
+        return
+
+    # ========== فونت چندسبکی ==========
+    if cmd.startswith(".فونت") or cmd.startswith("فونت"):
+        body = cmd
+        for p in (".فونت", "فونت"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        if not body:
+            try:
+                await message.edit_text("❌ مثال:\n`.فونت Gang`")
+            except Exception:
+                pass
+            return
+        try:
+            out = _make_fancy_fonts(body)
+            await message.edit_text(out)
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا در ساخت فونت: {e}")
+            except Exception:
+                pass
         return
 
 
@@ -9709,6 +9868,10 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("📋 خلاصه چت", f"panel_page_55_{user_id}", style="primary"),
+                _styled_btn("🔘 وضعیت سلف", f"panel_page_56_{user_id}", style="primary"),
+                _styled_btn("🔤 فونت", f"panel_page_57_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -12088,8 +12251,24 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     ".خلاصه\n"
                     "ریپلای + .خلاصه\n\n"
                     "مکالمه اخیر را خلاصه می‌کند"
-                )
-
+                ),
+                56: (
+                    "🔘 وضعیت سلف | self MR\n\n"
+                    "دستورات:\n"
+                    ".سلف روشن\n"
+                    ".سلف خاموش\n\n"
+                    "با خاموش کردن، کل سلف از کار می‌افتد.\n"
+                    "با روشن کردن دوباره فعال می‌شود."
+                ),
+                57: (
+                    "🔤 فونت | self MR\n\n"
+                    "دستورات:\n"
+                    ".فونت + متن\n\n"
+                    "مثال:\n"
+                    ".فونت Gang\n\n"
+                    "متن با فونت‌های مختلف نمایش داده می‌شود\n"
+                    "و قابل کپی است."
+                ),
             }
             try:
                 if page in HELP_TEXTS:
@@ -12120,6 +12299,7 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     except Exception:
                         pass
                     return
+
 
                 # صفحات منو (۱ تا ۵ و ۱۹ با کیبورد مخصوص)
                 page_titles = {
@@ -14392,4 +14572,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(main())
-

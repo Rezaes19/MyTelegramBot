@@ -2862,6 +2862,9 @@ SENDER_MASS = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 SELF_STATUS = {}  # user_id -> True=روشن / False=خاموش (پیش‌فرض روشن)
+
+def is_self_on(user_id) -> bool:
+    return bool(SELF_STATUS.get(int(user_id), True))
 AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
@@ -3333,6 +3336,8 @@ def stylize_time(time_str: str, style: str) -> str:
 
 async def perform_clock_update_now(client, user_id):
     try:
+        if not is_self_on(user_id):
+            return
         # فقط FLOOD اسم — مستقل از ساعت عکس پروفایل
         until = max(PROFILE_NAME_FLOOD_UNTIL.get(user_id, 0), 0)
         if time.time() < until:
@@ -3366,6 +3371,10 @@ async def rotate_profile_name_task(client: Client, user_id: int):
     await asyncio.sleep(3)
     while True:
         try:
+            
+            if not is_self_on(user_id):
+                await asyncio.sleep(3)
+                continue
             if user_id not in ACTIVE_BOTS:
                 break
             if not ROTATING_NAME_STATUS.get(user_id, False):
@@ -4005,6 +4014,9 @@ async def update_profile_photo_clock_task(client: Client, user_id: int):
     await asyncio.sleep(4)
     while user_id in ACTIVE_BOTS:
         try:
+            if not is_self_on(user_id):
+                await asyncio.sleep(5)
+                continue
             if not PROFILE_PHOTO_CLOCK.get(user_id, False):
                 await asyncio.sleep(5)
                 continue
@@ -4076,13 +4088,13 @@ async def update_profile_clock(client: Client, user_id: int):
     await asyncio.sleep(2)
     # یک‌بار فوری بعد از استارت
     try:
-        if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
+        if is_self_on(user_id) and CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
             await perform_clock_update_now(client, user_id)
     except Exception as e:
         logging.warning(f"initial name clock: {e}")
     while user_id in ACTIVE_BOTS:
         try:
-            if CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
+            if is_self_on(user_id) and CLOCK_STATUS.get(user_id, True) and not COPY_MODE_STATUS.get(user_id, False):
                 await perform_clock_update_now(client, user_id)
             wait = 60 - datetime.now(TEHRAN_TIMEZONE).second + 0.15
             await asyncio.sleep(max(5, wait))
@@ -5220,11 +5232,28 @@ async def incoming_message_manager(client, message):
 
 async def help_controller(client, message):
     try:
+        uid = client.me.id if client.me else None
+        if uid and not is_self_on(uid):
+            try:
+                await message.edit_text("⏹ سلف خاموش است. برای فعال‌سازی:\n`.سلف روشن`")
+            except Exception:
+                pass
+            return
         await message.edit_text(HELP_TEXT)
     except:
         await message.reply_text(HELP_TEXT)
 
 async def panel_command_controller(client, message):
+    try:
+        uid = client.me.id if client.me else None
+        if uid and not is_self_on(uid):
+            try:
+                await message.edit_text("⏹ سلف خاموش است. برای فعال‌سازی:\n`.سلف روشن`")
+            except Exception:
+                pass
+            return
+    except Exception:
+        pass
     bot_username = "None"
     try:
         bot_info = await manager_bot.get_me()
@@ -6813,6 +6842,10 @@ async def sender_loop_task(client: Client, user_id: int):
     await asyncio.sleep(12)
     while True:
         try:
+            
+            if not is_self_on(user_id):
+                await asyncio.sleep(10)
+                continue
             if user_id not in ACTIVE_BOTS:
                 break
             configs = SENDER_CONFIG.get(user_id) or {}
@@ -7007,6 +7040,10 @@ async def meow_loop_task(client: Client, user_id: int):
     await asyncio.sleep(15)
     while True:
         try:
+            
+            if not is_self_on(user_id):
+                await asyncio.sleep(10)
+                continue
             if user_id not in ACTIVE_BOTS:
                 break
             raw = MEOW_CHATS.get(user_id) or set()
@@ -7039,47 +7076,41 @@ async def meow_loop_task(client: Client, user_id: int):
 
 
 
+
 def _make_fancy_fonts(text: str) -> str:
-    """چندین استایل فونت یونیکد قابل کپی برای متن ورودی"""
+    """فونت‌های یونیکد زیاد و قابل کپی"""
     text = str(text or "")[:80]
     if not text:
         return "❌ متن خالی است"
 
-    def _map(s, table):
+    def tr(s, table):
         return "".join(table.get(ch, ch) for ch in s)
 
-    # جداول حروف a-z / A-Z
-    def _az_table(base_a: int, base_A: int = None):
+    def az(base_a, base_A=None, digits=None):
         t = {}
         for i in range(26):
             t[chr(ord("a") + i)] = chr(base_a + i)
-            if base_A is not None:
-                t[chr(ord("A") + i)] = chr(base_A + i)
-            else:
-                t[chr(ord("A") + i)] = chr(base_a + i)
+            t[chr(ord("A") + i)] = chr((base_A if base_A is not None else base_a) + i)
+        if digits is not None:
+            for i in range(10):
+                t[chr(ord("0") + i)] = chr(digits + i)
         return t
 
     styles = []
-    # Bold
-    styles.append(("Bold", _map(text, _az_table(0x1D41A, 0x1D400))))
-    # Italic
-    styles.append(("Italic", _map(text, _az_table(0x1D44E, 0x1D434))))
-    # Bold Italic
-    styles.append(("Bold Italic", _map(text, _az_table(0x1D482, 0x1D468))))
-    # Script
-    styles.append(("Script", _map(text, _az_table(0x1D4B6, 0x1D49C))))
-    # Bold Script
-    styles.append(("Bold Script", _map(text, _az_table(0x1D4EA, 0x1D4D0))))
-    # Fraktur
-    styles.append(("Fraktur", _map(text, _az_table(0x1D51E, 0x1D504))))
-    # Double Struck
-    styles.append(("Double", _map(text, _az_table(0x1D552, 0x1D538))))
-    # Monospace
-    styles.append(("Mono", _map(text, _az_table(0x1D68A, 0x1D670))))
-    # Sans
-    styles.append(("Sans", _map(text, _az_table(0x1D5BA, 0x1D5A0))))
-    # Sans Bold
-    styles.append(("Sans Bold", _map(text, _az_table(0x1D5EE, 0x1D5D4))))
+    # Mathematical styles
+    styles.append(tr(text, az(0x1D41A, 0x1D400, 0x1D7CE)))          # Bold
+    styles.append(tr(text, az(0x1D44E, 0x1D434)))                     # Italic
+    styles.append(tr(text, az(0x1D482, 0x1D468)))                     # Bold Italic
+    styles.append(tr(text, az(0x1D4B6, 0x1D49C)))                     # Script
+    styles.append(tr(text, az(0x1D4EA, 0x1D4D0)))                     # Bold Script
+    styles.append(tr(text, az(0x1D51E, 0x1D504)))                     # Fraktur
+    styles.append(tr(text, az(0x1D586, 0x1D56C)))                     # Bold Fraktur
+    styles.append(tr(text, az(0x1D552, 0x1D538, 0x1D7D8)))            # Double Struck
+    styles.append(tr(text, az(0x1D5BA, 0x1D5A0, 0x1D7E2)))            # Sans
+    styles.append(tr(text, az(0x1D5EE, 0x1D5D4, 0x1D7EC)))            # Sans Bold
+    styles.append(tr(text, az(0x1D622, 0x1D608)))                     # Sans Italic
+    styles.append(tr(text, az(0x1D656, 0x1D63C)))                     # Sans Bold Italic
+    styles.append(tr(text, az(0x1D68A, 0x1D670, 0x1D7F6)))            # Mono
     # Fullwidth
     fw = {}
     for i in range(26):
@@ -7087,54 +7118,118 @@ def _make_fancy_fonts(text: str) -> str:
         fw[chr(ord("A") + i)] = chr(0xFF21 + i)
     for i in range(10):
         fw[chr(ord("0") + i)] = chr(0xFF10 + i)
-    styles.append(("Fullwidth", _map(text, fw)))
-    # Small caps-ish (using unicode small letters where possible)
+    styles.append(tr(text, fw))
+    # Circled
+    bub = {}
+    for i in range(26):
+        bub[chr(ord("a") + i)] = chr(0x24D0 + i)
+        bub[chr(ord("A") + i)] = chr(0x24B6 + i)
+    for i in range(10):
+        bub[chr(ord("0") + i)] = (chr(0x24EA) if i == 0 else chr(0x2460 + i - 1))
+    styles.append(tr(text, bub))
+    # Negative circled (caps)
+    neg = {}
+    for i in range(26):
+        neg[chr(ord("A") + i)] = chr(0x1F150 + i)
+        neg[chr(ord("a") + i)] = chr(0x1F150 + i)
+    styles.append(tr(text, neg))
+    # Squared
+    sq = {}
+    for i in range(26):
+        sq[chr(ord("A") + i)] = chr(0x1F130 + i)
+        sq[chr(ord("a") + i)] = chr(0x1F130 + i)
+    styles.append(tr(text, sq))
+    # Regional indicator (flag letters)
+    reg = {}
+    for i in range(26):
+        reg[chr(ord("a") + i)] = chr(0x1F1E6 + i)
+        reg[chr(ord("A") + i)] = chr(0x1F1E6 + i)
+    styles.append(tr(text, reg))
+    # Small caps
     small = {
         "a": "ᴀ", "b": "ʙ", "c": "ᴄ", "d": "ᴅ", "e": "ᴇ", "f": "ғ", "g": "ɢ", "h": "ʜ",
         "i": "ɪ", "j": "ᴊ", "k": "ᴋ", "l": "ʟ", "m": "ᴍ", "n": "ɴ", "o": "ᴏ", "p": "ᴘ",
         "q": "ǫ", "r": "ʀ", "s": "s", "t": "ᴛ", "u": "ᴜ", "v": "ᴠ", "w": "ᴡ", "x": "x",
         "y": "ʏ", "z": "ᴢ",
     }
-    styles.append(("Small", "".join(small.get(ch.lower(), ch) for ch in text)))
-    # Bubbled
-    bub = {}
+    styles.append("".join(small.get(ch.lower(), ch) for ch in text))
+    # Parenthesized
+    par = {}
     for i in range(26):
-        bub[chr(ord("a") + i)] = chr(0x24D0 + i)
-        bub[chr(ord("A") + i)] = chr(0x24B6 + i)
-    for i in range(10):
-        bub[chr(ord("0") + i)] = chr(0x24EA) if i == 0 else chr(0x2460 + i - 1)
-    styles.append(("Bubble", _map(text, bub)))
-    # Squared
-    sq = {}
-    for i in range(26):
-        sq[chr(ord("A") + i)] = chr(0x1F130 + i)
-        sq[chr(ord("a") + i)] = chr(0x1F130 + i)
-    styles.append(("Squared", _map(text, sq)))
+        par[chr(ord("a") + i)] = chr(0x249C + i)
+    styles.append(tr(text.lower(), par))
     # Upside down
     flip = str.maketrans(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
         "ɐqɔpǝɟƃɥᴉɾʞlɯuodbɹsʇnʌʍxʎz∀qƆpƎℲפHIſʞ˥WNOԀQɹS┴∩ΛMX⅄ZƖᄅƐㄣϛ9ㄥ860",
     )
-    styles.append(("UpsideDown", text.translate(flip)[::-1]))
-    # Parenthesized
-    par = {}
-    for i in range(26):
-        par[chr(ord("a") + i)] = chr(0x249C + i)
-    styles.append(("Paren", _map(text.lower(), par)))
-    # Spaced
-    styles.append(("Spaced", " ".join(list(text))))
-    # Strikethrough combining
-    styles.append(("Strike", "".join(ch + "\u0336" for ch in text)))
-    # Underline combining
-    styles.append(("Underline", "".join(ch + "\u0332" for ch in text)))
+    styles.append(text.translate(flip)[::-1])
+    # Combining styles
+    styles.append("".join(ch + "\u0336" for ch in text))  # strike
+    styles.append("".join(ch + "\u0332" for ch in text))  # underline
+    styles.append("".join(ch + "\u0301" for ch in text))  # acute
+    styles.append("".join(ch + "\u0308" for ch in text))  # diaeresis
+    styles.append("".join(ch + "\u0330" for ch in text))  # tilde below
+    styles.append("".join(ch + "\u030a" for ch in text))  # ring
+    styles.append("".join(ch + "\u033f" for ch in text))  # double overline
+    # Spaced variants
+    styles.append(" ".join(list(text)))
+    styles.append("・".join(list(text)))
+    styles.append("✧".join(list(text)))
+    styles.append("★".join(list(text)))
+    # Bracketed
+    styles.append("".join(f"[{ch}]" for ch in text))
+    styles.append("".join(f"「{ch}」" for ch in text))
+    styles.append("".join(f"【{ch}】" for ch in text))
+    # Reverse
+    styles.append(text[::-1])
+    # Upper / lower
+    styles.append(text.upper())
+    styles.append(text.lower())
+    # Slash / backslash
+    styles.append("/".join(list(text)))
+    styles.append("\\".join(list(text)))
+    # Dot middle
+    styles.append("·".join(list(text)))
+    # Underline spaces
+    styles.append("_".join(list(text)))
+    # Greek-ish lookalike
+    greek = str.maketrans("ABEFHIKMNOPTXYabehikmnopty", "ΑΒΕΗΙΚΜΝΟΡΤΧΥαβεηικμνορτυ")
+    styles.append(text.translate(greek))
+    # Currency-ish weird map
+    weird = str.maketrans(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        "ДВСFGHIJКLMИОPQRSTЦVШХУZдвсfghiјклмиорqrstuvwхуz",
+    )
+    styles.append(text.translate(weird))
+    # Superscript / subscript digits+few letters
+    sup_map = {
+        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+        "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ", "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "i": "ⁱ", "j": "ʲ",
+        "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "n": "ⁿ", "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
+        "v": "ᵛ", "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
+        "A": "ᴬ", "B": "ᴮ", "D": "ᴰ", "E": "ᴱ", "G": "ᴳ", "H": "ᴴ", "I": "ᴵ", "J": "ᴶ", "K": "ᴷ", "L": "ᴸ",
+        "M": "ᴹ", "N": "ᴺ", "O": "ᴼ", "P": "ᴾ", "R": "ᴿ", "T": "ᵀ", "U": "ᵁ", "V": "ⱽ", "W": "ᵂ",
+    }
+    styles.append("".join(sup_map.get(ch, ch) for ch in text))
+    sub_map = {
+        "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+        "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ", "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ",
+        "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ", "v": "ᵥ", "x": "ₓ",
+    }
+    styles.append("".join(sub_map.get(ch, ch) for ch in text))
 
-    lines = [f"🎨 فونت | self MR", f"متن: {text}", ""]
-    for title, val in styles:
-        lines.append(f"• {title}:")
-        lines.append(val)
-        lines.append("")
-    lines.append("روی هر فونت بزن و کپی کن")
-    return "\n".join(lines)
+    # یکتا کن و خالی‌ها را بردار
+    seen = set()
+    out = []
+    for s in styles:
+        s = str(s)
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+
+    return "\n".join(out)
 
 
 async def reply_based_controller(client, message):

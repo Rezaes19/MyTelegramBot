@@ -11248,6 +11248,13 @@ async def _callback_panel_handler_impl(client, callback, data: str):
         not_subscribed = await check_all_channels(user_id)
 
         if not not_subscribed:
+            try:
+                await try_claim_referral_reward(
+                    user_id,
+                    (callback.from_user.first_name if callback.from_user else None) or str(user_id),
+                )
+            except Exception as e:
+                logging.warning("check_sub claim referral: %s", e)
             await callback.message.edit_text("✅ **عضویت شما تأیید شد!**\n\nلطفاً دوباره روی /start کلیک کنید.")
             await callback.answer("✅ عضویت تأیید شد!")
             return
@@ -12898,8 +12905,9 @@ async def mm_edit(callback, text, keyboard):
         logging.warning(f"mm_edit fallback: {e}")
 
 
+
 async def process_referral_from_start(message) -> None:
-    """ثبت زیرمجموعه از /start — قبل از عضویت اجباری تا payload از دست نرود"""
+    """فقط دعوت‌کننده را ثبت می‌کند — جایزه بعد از عضویت کانال داده می‌شود"""
     try:
         if not message or not message.from_user:
             return
@@ -12915,7 +12923,6 @@ async def process_referral_from_start(message) -> None:
                 payload = parts[1].strip().split()[0]
         if not payload:
             return
-        # فقط آیدی عددی
         payload = payload.strip().lstrip("=")
         if not payload.isdigit():
             return
@@ -12932,38 +12939,102 @@ async def process_referral_from_start(message) -> None:
         cur.execute("SELECT reward_claimed FROM referrals WHERE referred_id = ?", (user_id,))
         ref_row = cur.fetchone()
         already_rewarded = bool(ref_row and int(ref_row[0] or 0) == 1)
-        db.close()
-        if already_invited or already_rewarded:
-            logging.info("referral skip uid=%s invited=%s rewarded=%s", user_id, already_invited, already_rewarded)
+        if already_rewarded:
+            db.close()
+            logging.info("referral already rewarded uid=%s", user_id)
             return
-        db = get_user_db(user_id)
-        cur = db.cursor()
+        if already_invited:
+            db.close()
+            logging.info("referral pending uid=%s — try claim", user_id)
+            await try_claim_referral_reward(user_id, message.from_user.first_name or str(user_id))
+            return
+        # ثبت دعوت بدون جایزه
         cur.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (referrer_id, user_id))
         cur.execute(
-            "INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 1)",
+            "INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 0)",
             (referrer_id, user_id),
         )
         cur.execute(
-            "UPDATE referrals SET reward_claimed = 1, referrer_id = ? WHERE referred_id = ?",
+            "UPDATE referrals SET reward_claimed = 0, referrer_id = ? WHERE referred_id = ? AND IFNULL(reward_claimed,0) = 0",
             (referrer_id, user_id),
         )
         db.commit()
         db.close()
+        logging.info("referral registered pending referrer=%s new=%s", referrer_id, user_id)
+        # اگر همین الان عضو کانال است، جایزه بده
+        await try_claim_referral_reward(user_id, message.from_user.first_name or str(user_id))
+    except Exception as e:
+        logging.warning("process_referral_from_start: %s", e)
+
+
+async def try_claim_referral_reward(user_id: int, uname: str = None) -> bool:
+    """جایزه رفرال فقط اگر کاربر عضو همه کانال‌های اجباری باشد"""
+    try:
+        user_id = int(user_id)
+        # عضو کانال؟
+        missing = await check_all_channels(user_id)
+        if missing:
+            logging.info("referral wait join uid=%s missing=%s", user_id, missing)
+            return False
+        init_user_db(user_id)
+        db = get_user_db(user_id)
+        cur = db.cursor()
+        cur.execute("SELECT invited_by FROM users WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        referrer_id = int(row[0]) if row and row[0] else 0
+        cur.execute("SELECT referrer_id, reward_claimed FROM referrals WHERE referred_id = ?", (user_id,))
+        ref_row = cur.fetchone()
+        if ref_row:
+            if int(ref_row[1] or 0) == 1:
+                db.close()
+                return False
+            if not referrer_id:
+                referrer_id = int(ref_row[0] or 0)
+        if not referrer_id or referrer_id == user_id:
+            db.close()
+            return False
+        # قفل جایزه
+        cur.execute(
+            "UPDATE referrals SET reward_claimed = 1, referrer_id = ? WHERE referred_id = ? AND IFNULL(reward_claimed,0) = 0",
+            (referrer_id, user_id),
+        )
+        if cur.rowcount == 0:
+            # ممکن است ردیف نباشد
+            cur.execute(
+                "INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_claimed) VALUES (?, ?, 1)",
+                (referrer_id, user_id),
+            )
+            cur.execute("SELECT reward_claimed FROM referrals WHERE referred_id = ?", (user_id,))
+            r2 = cur.fetchone()
+            if r2 and int(r2[0] or 0) == 1 and cur.rowcount == 0:
+                # قبلاً claim شده
+                pass
+            cur.execute(
+                "UPDATE referrals SET reward_claimed = 1 WHERE referred_id = ?",
+                (user_id,),
+            )
+        cur.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (referrer_id, user_id))
+        db.commit()
+        db.close()
+        init_user_db(referrer_id)
         add_balance(referrer_id, REFERRAL_REWARD)
-        uname = message.from_user.first_name or str(user_id)
-        logging.info("referral OK referrer=%s new=%s +%s", referrer_id, user_id, REFERRAL_REWARD)
+        if not uname:
+            uname = str(user_id)
+        logging.info("referral CLAIMED referrer=%s new=%s +%s", referrer_id, user_id, REFERRAL_REWARD)
         try:
             await manager_bot.send_message(
                 referrer_id,
                 f"🎉 **زیرمجموعه جدید | self MR**\n\n"
-                f"👤 {uname} با لینک شما وارد شد.\n"
+                f"👤 {uname} با لینک شما وارد شد و عضو کانال شد.\n"
                 f"💎 `{REFERRAL_REWARD}` الماس به حساب شما اضافه شد.\n"
                 f"✨ موجودی جدید: `{get_balance(referrer_id):,}` الماس",
             )
         except Exception as e:
             logging.warning("referral notify: %s", e)
+        return True
     except Exception as e:
-        logging.warning("process_referral_from_start: %s", e)
+        logging.warning("try_claim_referral_reward: %s", e)
+        return False
 
 
 @manager_bot.on_message(filters.command("start"))
@@ -12971,11 +13042,20 @@ async def start_login(client, message):
     user_id = message.from_user.id
     init_user_db(user_id)
 
-    # اول رفرال — حتی اگر هنوز عضو کانال نباشد
+    # اول رفرال را ثبت کن (بدون جایزه تا عضویت کانال)
     await process_referral_from_start(message)
 
     if not await force_subscribe_check(client, message):
         return
+
+    # عضو کانال شد → اگر رفرال pending بود جایزه بده
+    try:
+        await try_claim_referral_reward(
+            message.from_user.id,
+            message.from_user.first_name or str(message.from_user.id),
+        )
+    except Exception as e:
+        logging.warning("start claim referral: %s", e)
 
     # کیبورد ادمین (اختیاری پایین)
     if message.from_user and message.from_user.id in GOD_ADMIN_IDS:

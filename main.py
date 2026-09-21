@@ -78,7 +78,7 @@ MANAGER_BOT_USERNAME = None  # بعد از استارت پر می‌شود
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 # اینلاین هلپر ایموجی پریمیوم (بات ساخته‌شده با اکانت پریمیوم)
-HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "helperselfmr_bot").strip().lstrip("@")
+HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "SelfmrhelPerbot").strip().lstrip("@")
 
 # =============================================
 # ایموجی پریمیوم برای ربات منیجر (Bot API / tg-emoji)
@@ -14806,7 +14806,7 @@ async def helper_premium_message_handler(client, message):
 
 async def start_helper_bot():
     """هلپر کاملاً جدا از منیجر — خطا/توکن منقضی باعث توقف بات اصلی نمی‌شود"""
-    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED
+    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED, HELPER_INLINE_BOT
     HELPER_BOT_INSTANCE = None
     if not HELPER_BOT_ENABLED:
         logging.warning("Helper disabled via HELPER_ENABLED=0")
@@ -14856,6 +14856,9 @@ async def start_helper_bot():
         try:
             me = await helper_bot.get_me()
             logging.info("✅ Helper bot started @%s id=%s", me.username, me.id)
+            if me.username:
+                HELPER_INLINE_BOT = me.username.lstrip("@")
+                logging.info("HELPER_INLINE_BOT set to @%s", HELPER_INLINE_BOT)
         except Exception:
             logging.info("✅ Helper bot started")
         HELPER_BOT_INSTANCE = helper_bot

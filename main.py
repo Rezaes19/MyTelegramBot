@@ -2916,9 +2916,45 @@ SENDER_MASS = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 SELF_STATUS = {}  # user_id -> True=روشن / False=خاموش (پیش‌فرض روشن)
+PANEL_DARK_THEME = {}  # user_id -> True=تم شب پنل
 
 def is_self_on(user_id) -> bool:
     return bool(SELF_STATUS.get(int(user_id), True))
+
+def is_panel_dark(user_id) -> bool:
+    try:
+        return bool(PANEL_DARK_THEME.get(int(user_id), False))
+    except Exception:
+        return False
+
+def panel_main_title(user_id) -> str:
+    uid = int(user_id)
+    if is_panel_dark(uid):
+        return (
+            "🌙 ▓▓▓ پنل تم شب | self MR ▓▓▓\n"
+            "━━━━━━━━━━━━━━━━\n"
+            f"👤 کاربر: `{uid}`\n"
+            "🕶 حالت: تاریک"
+        )
+    return f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {uid}"
+
+def panel_page_title(user_id, page: int) -> str:
+    uid = int(user_id)
+    dark = is_panel_dark(uid)
+    titles = {
+        1: panel_main_title(uid),
+        2: ("🌙 حالت متن | شب" if dark else "✏️ حالت متن / فونت‌ها | self MR"),
+        3: ("🌙 بخش امنیتی | شب" if dark else "🛡 بخش امنیتی | self MR"),
+        4: ("🌙 اکشن‌ها | شب" if dark else "⚡ اکشن‌ها | self MR"),
+        5: ("🌙 فونت ساعت | شب" if dark else "🕐 فونت ساعت | self MR"),
+        19: ("🌙 هوش مصنوعی | شب" if dark else "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید."),
+        35: ("🌙 میو | شب" if dark else "🐱 میو | self MR"),
+        51: ("🌙 ساعت پروفایل | شب" if dark else "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود."),
+        52: ("🌙 تاریخ میلادی بیو | شب" if dark else "📅 تاریخ میلادی بیو | self MR\nروشن/خاموش — تاریخ روز در بیو\nدستور: .تاریخ"),
+    }
+    if page in titles:
+        return titles[page]
+    return ("🌙 self MR | شب\n📄 صفحه " if dark else "⚡️ self MR\n📄 صفحه ") + str(page)
 AUTO_SEEN_STATUS = {}
 AUTO_REACTION_TARGETS = {}
 AUTO_TRANSLATE_TARGET = {}
@@ -3161,6 +3197,7 @@ def load_all_states():
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SELF_STATUS[user_id] = bool(settings.get("self_status", True))
+        PANEL_DARK_THEME[user_id] = bool(settings.get("panel_dark", False))
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
         AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
@@ -3338,6 +3375,7 @@ def persist_all_user_settings(user_id: int):
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
             "self_status": bool(SELF_STATUS.get(user_id, True)),
+            "panel_dark": bool(PANEL_DARK_THEME.get(user_id, False)),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
             "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
             "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
@@ -7412,6 +7450,42 @@ async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
     if not cmd:
+        return
+
+
+    # ========== تم شب پنل ==========
+    if cmd in (".پنل تم شب", "پنل تم شب", ".پنل تم روز", "پنل تم روز"):
+        if not is_self_on(user_id):
+            return
+        dark = cmd in (".پنل تم شب", "پنل تم شب")
+        if cmd in (".پنل تم روز", "پنل تم روز"):
+            dark = False
+        else:
+            # toggle if already dark and command is night? user asked only night command
+            # .پنل تم شب → on; if already on stay on; optional toggle: if already dark turn off
+            dark = True
+            if is_panel_dark(user_id):
+                dark = False  # toggle
+        PANEL_DARK_THEME[user_id] = dark
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            try:
+                # fallback if function name differs
+                u = data_manager.get_user_data(user_id)
+                st = u.get("settings") or {}
+                st["panel_dark"] = dark
+                u["settings"] = st
+                data_manager.save_data()
+            except Exception:
+                pass
+        try:
+            if dark:
+                await message.edit_text("🌙 تم شب پنل روشن شد\nدوباره بنویس: `پنل`")
+            else:
+                await message.edit_text("☀️ تم روز پنل فعال شد\nدوباره بنویس: `پنل`")
+        except Exception:
+            pass
         return
 
     # ========== وضعیت سلف روشن/خاموش ==========
@@ -12858,18 +12932,7 @@ async def _callback_panel_handler_impl(client, callback, data: str):
 
 
                 # صفحات منو (۱ تا ۵ و ۱۹ با کیبورد مخصوص)
-                page_titles = {
-                    1: f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {target_user_id}",
-                    2: "✏️ حالت متن / فونت‌ها | self MR",
-                    3: "🛡 بخش امنیتی | self MR",
-                    4: "⚡ اکشن‌ها | self MR",
-                    5: "🕐 فونت ساعت | self MR",
-                    19: "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید.",
-                    35: "🐱 میو | self MR",
-                    51: "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود.",
-                    52: "📅 تاریخ میلادی بیو | self MR\nروشن/خاموش — تاریخ روز در بیو\nدستور: .تاریخ",
-                }
-                panel_text = page_titles.get(page, f"⚡️ self MR\n📄 صفحه {page}")
+                panel_text = panel_page_title(target_user_id, page)
                 try:
                     if callback.inline_message_id:
                         await client.edit_inline_text(

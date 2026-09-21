@@ -86,6 +86,39 @@ HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "SelfmrhelPerbot").strip
 MANAGER_PREMIUM_EMOJIS = {}  # str(id) -> {"id": int, "fallback": str}
 
 
+
+def build_bracket_premium_message(text: str):
+    """
+    متن با [custom_emoji_id] → (message_text, entities)
+    برای answerInlineQuery / sendMessage با ایموجی پریمیوم واقعی
+    """
+    import re as _re
+    rx = _re.compile(r"\[(\d{10,})\]")
+    text = text or ""
+    out = []
+    entities = []
+    utf16 = 0
+    last = 0
+    for m in rx.finditer(text):
+        before = text[last:m.start()]
+        out.append(before)
+        utf16 += len(before.encode("utf-16-le")) // 2
+        # یک کاراکتر ستاره — length در UTF-16
+        ph = "⭐"
+        ph_len = len(ph.encode("utf-16-le")) // 2
+        entities.append({
+            "type": "custom_emoji",
+            "offset": utf16,
+            "length": ph_len,
+            "custom_emoji_id": str(m.group(1)),
+        })
+        out.append(ph)
+        utf16 += ph_len
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), entities
+
+
 def html_tg_emoji(custom_emoji_id, fallback: str = "⭐") -> str:
     """ساخت تگ HTML رسمی تلگرام برای ایموجی پریمیوم (Bot API)"""
     try:
@@ -10427,21 +10460,14 @@ async def inline_panel_handler(client, query):
     # ===== ایموجی پریمیوم از طریق اینلاین =====
     # فرمت‌ها: pe|uid|hex  یا  pe|uid|i|slot  یا  pe:uid:hex
 
-    # --- تبدیل مثل pyiuebot: متن [کد] متن ---
+    
+    # --- تبدیل مثل pyiuebot: متن [کد] متن (با entities واقعی) ---
     try:
         import re as _re_h
         _rx = _re_h.compile(r"\[(\d{10,})\]")
         if _rx.search(q or ""):
             n = len(_rx.findall(q))
-            import html as _html_h
-            parts = []
-            last = 0
-            for m in _rx.finditer(q):
-                parts.append(_html_h.escape(q[last:m.start()]))
-                parts.append(f'<tg-emoji emoji-id="{m.group(1)}">⭐</tg-emoji>')
-                last = m.end()
-            parts.append(_html_h.escape(q[last:]))
-            html_body = "".join(parts)
+            msg_text, ents = build_bracket_premium_message(q)
             plain = _rx.sub("⭐", q)
             results_list = [
                 {
@@ -10450,18 +10476,18 @@ async def inline_panel_handler(client, query):
                     "title": "پیام آماده تبدیل",
                     "description": f"پیام با {n} ایموجی پریمیوم",
                     "input_message_content": {
-                        "message_text": html_body,
-                        "parse_mode": "HTML",
+                        "message_text": msg_text,
+                        "entities": ents,
                     },
                 },
                 {
                     "type": "article",
                     "id": "pyiue_send",
                     "title": f"ارسال مستقیم ({n} ایموجی)",
-                    "description": plain[:60],
+                    "description": (plain[:60] if plain else msg_text[:60]),
                     "input_message_content": {
-                        "message_text": html_body,
-                        "parse_mode": "HTML",
+                        "message_text": msg_text,
+                        "entities": ents,
                     },
                 },
             ]
@@ -10477,13 +10503,36 @@ async def inline_panel_handler(client, query):
                 async with session.post(url, data=payload) as resp:
                     data = await resp.json()
                     if data.get("ok"):
-                        logging.info("inline pyiue-style ok n=%s", n)
+                        logging.info("inline pyiue-style ok n=%s ents=%s", n, len(ents))
                     else:
                         logging.warning("inline pyiue-style fail: %s", data)
+                        # fallback HTML
                         try:
-                            await query.answer([], cache_time=0, is_personal=True)
-                        except Exception:
-                            pass
+                            import html as _html_h
+                            parts = []
+                            last = 0
+                            for m in _rx.finditer(q):
+                                parts.append(_html_h.escape(q[last:m.start()]))
+                                parts.append(f'<tg-emoji emoji-id="{m.group(1)}">⭐</tg-emoji>')
+                                last = m.end()
+                            parts.append(_html_h.escape(q[last:]))
+                            html_body = "".join(parts)
+                            results_list = [{
+                                "type": "article",
+                                "id": "pyiue_html",
+                                "title": "پیام آماده تبدیل (HTML)",
+                                "description": f"{n} ایموجی",
+                                "input_message_content": {
+                                    "message_text": html_body,
+                                    "parse_mode": "HTML",
+                                },
+                            }]
+                            payload["results"] = json.dumps(results_list, ensure_ascii=False)
+                            async with session.post(url, data=payload) as resp2:
+                                data2 = await resp2.json()
+                                logging.info("inline pyiue html fallback: %s", data2)
+                        except Exception as e2:
+                            logging.warning("pyiue html fallback: %s", e2)
             return
     except Exception as e:
         logging.warning("inline pyiue-style: %s", e)

@@ -7303,6 +7303,87 @@ async def reply_based_controller(client, message):
                 pass
         return
 
+    # ========== پسورد ساز ==========
+    if cmd.startswith(".پسورد") or cmd.startswith("پسورد"):
+        body = cmd
+        for p in (".پسورد", "پسورد"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        n = 16
+        try:
+            if body:
+                n = int("".join(ch for ch in body if ch.isdigit()) or "16")
+        except Exception:
+            n = 16
+        n = max(4, min(64, n))
+        try:
+            import secrets
+            import string
+            alphabet = string.ascii_letters + string.digits + "!@#$%^&*_-+=?"
+            pwd = "".join(secrets.choice(alphabet) for _ in range(n))
+            await message.edit_text(
+                f"🔑 پسورد ساز | self MR\n\n"
+                f"طول: `{n}`\n"
+                f"پسورد:\n`{pwd}`"
+            )
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا در ساخت پسورد: {e}")
+            except Exception:
+                pass
+        return
+
+    # ========== ماشین حساب ==========
+    if cmd.startswith(".حساب") or cmd.startswith("حساب"):
+        body = cmd
+        for p in (".حساب", "حساب"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        if not body:
+            try:
+                await message.edit_text("❌ مثال:\n`.حساب 2*2`\n`.حساب 25*4+10`")
+            except Exception:
+                pass
+            return
+        expr = body.replace("×", "*").replace("÷", "/").replace(" ", "")
+        # فقط کاراکترهای مجاز
+        import re as _re
+        if not _re.fullmatch(r"[0-9+\-*/().,%**]+", expr.replace("**", "")) and not _re.fullmatch(r"[0-9+\-*/().,%]+", expr):
+            # fallback simpler check
+            allowed = set("0123456789+-*/().,% ")
+            if any(ch not in allowed and not (ch == "*" ) for ch in expr):
+                try:
+                    await message.edit_text("❌ فقط عدد و عملگرهای + - * / ( ) مجاز است.")
+                except Exception:
+                    pass
+                return
+        try:
+            allowed = set("0123456789+-*/().,% ")
+            if not all(ch in allowed for ch in expr):
+                await message.edit_text("❌ عبارت نامعتبر است.")
+                return
+            # جلوگیری از ** خطرناک / تقسیم زنجیره‌ای عجیب — eval امن
+            result = eval(expr, {"__builtins__": {}}, {})
+            if isinstance(result, float) and result == int(result):
+                result = int(result)
+            await message.edit_text(
+                f"🧮 ماشین حساب | self MR\n\n"
+                f"`{body}`\n"
+                f"= `{result}`"
+            )
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا در محاسبه:\n`{body}`")
+            except Exception:
+                pass
+        return
+
 
     # ========== ساخت عکس AI / تحلیل / خلاصه (اولویت بالا) ==========
     text_full = (message.text or message.caption or "").strip()
@@ -9979,6 +10060,8 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔤 فونت", f"panel_page_57_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🔑 پسوورد ساز", f"panel_page_58_{user_id}", style="primary"),
+                _styled_btn("🧮 ماشین حساب", f"panel_page_59_{user_id}", style="primary"),
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -12383,6 +12466,23 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "متن با فونت‌های مختلف نمایش داده می‌شود\n"
                     "و قابل کپی است."
                 ),
+                58: (
+                    "🔑 پسوورد ساز | self MR\n\n"
+                    "دستورات:\n"
+                    ".پسورد + تعداد حروف\n\n"
+                    "مثال:\n"
+                    ".پسورد 16\n\n"
+                    "یک پسورد قوی تصادفی می‌سازد."
+                ),
+                59: (
+                    "🧮 ماشین حساب | self MR\n\n"
+                    "دستورات:\n"
+                    ".حساب + عبارت\n\n"
+                    "مثال:\n"
+                    ".حساب 2*2\n"
+                    ".حساب 25*4+10"
+                ),
+
             }
             try:
                 if page in HELP_TEXTS:

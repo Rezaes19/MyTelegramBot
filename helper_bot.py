@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Helper Bot — استخراج و نمایش کد ایموجی پریمیوم + اینلاین
-مثل ربات‌های ID-extractor (مثلاً pyiuebot)
+Helper Bot — تبدیل کد ایموجی پریمیوم مثل @pyiuebot
+
+نحوه استفاده در هر چت:
+  @SelfmrhelPerbot متن [کد] متن
+
+مثال:
+  @SelfmrhelPerbot سلام [6298332994260175589] خوبی؟
 
 محیط سرور:
-  HELPER_BOT_TOKEN=توکن_ربات_هلپر
+  HELPER_BOT_TOKEN=توکن
   API_ID=...
   API_HASH=...
-  (اختیاری) HELPER_INLINE_BOT=SelfmrhelPerbot
 """
 
 import os
@@ -26,8 +30,7 @@ from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from pyrogram.enums import ParseMode, MessageEntityType
-from pyrogram.raw import functions, types as raw_types
+from pyrogram.enums import ParseMode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +43,7 @@ API_ID = int(os.environ.get("API_ID") or os.environ.get("TELEGRAM_API_ID") or "0
 API_HASH = (os.environ.get("API_HASH") or os.environ.get("TELEGRAM_API_HASH") or "").strip()
 
 if not BOT_TOKEN:
-    raise SystemExit("❌ HELPER_BOT_TOKEN (یا BOT_TOKEN) تنظیم نشده")
+    raise SystemExit("❌ HELPER_BOT_TOKEN تنظیم نشده")
 if not API_ID or not API_HASH:
     raise SystemExit("❌ API_ID و API_HASH لازم است")
 
@@ -52,215 +55,219 @@ app = Client(
     in_memory=True,
 )
 
-BOT_USERNAME = None  # بعد از start پر می‌شود
+BOT_USERNAME = "SelfmrhelPerbot"
+
+# [عدد بلند] = کد ایموجی پریمیوم
+CODE_RE = re.compile(r"\[(\d{10,})\]")
 
 
-def utf16_slice(text: str, offset: int, length: int) -> str:
-    try:
-        b = text.encode("utf-16-le")
-        return b[offset * 2 : (offset + length) * 2].decode("utf-16-le")
-    except Exception:
-        return "⭐"
+def count_codes(text: str) -> int:
+    return len(CODE_RE.findall(text or ""))
 
 
-def extract_custom_emojis(message: Message):
-    """لیست dict: id, fallback, offset, length"""
-    out = []
-    text = message.text or message.caption or ""
-    entities = list(message.entities or []) + list(message.caption_entities or [])
-    for ent in entities:
-        cid = getattr(ent, "custom_emoji_id", None)
-        if not cid:
-            t = str(getattr(ent, "type", "") or "")
-            if "CUSTOM_EMOJI" not in t.upper() and "custom_emoji" not in t.lower():
-                continue
-            cid = getattr(ent, "custom_emoji_id", None)
-        if not cid:
-            continue
-        off = int(getattr(ent, "offset", 0) or 0)
-        ln = int(getattr(ent, "length", 0) or 0)
-        fb = utf16_slice(text, off, ln) if text and ln else "⭐"
-        if not (fb or "").strip():
-            fb = "⭐"
-        out.append({
-            "id": int(cid),
-            "fallback": fb,
-            "offset": off,
-            "length": ln,
-        })
-    return out
-
-
-def format_result(items: list, bot_username: str) -> str:
+def build_html_with_premium(text: str) -> str:
     """
-    خروجی شبیه ربات‌های استخراج‌کننده:
-    متن + کد عددی + تگ HTML + @یوزرنیم
+    متن را به HTML تبدیل می‌کند:
+    سلام [6298...] خوبی؟  →  سلام <tg-emoji ...>⭐</tg-emoji> خوبی؟
     """
-    uname = (bot_username or "SelfmrhelPerbot").lstrip("@")
-    lines = []
-    for i, it in enumerate(items, 1):
-        cid = it["id"]
-        fb = it["fallback"]
-        lines.append(f"{fb}")
-        lines.append(f"`{cid}`")
-        lines.append(f"<tg-emoji emoji-id=\"{cid}\">{html.escape(fb)}</tg-emoji>")
-        lines.append(f"@{uname}")
-        if i < len(items):
-            lines.append("──────────")
-    if not lines:
-        return "❌ ایموجی پریمیوم در پیام پیدا نشد.\n\nیک پیام که داخلش ایموجی پریمیوم باشد بفرست."
-    header = f"✨ <b>کد ایموجی پریمیوم</b> | @{uname}\n\n"
-    return header + "\n".join(lines)
+    if not text:
+        return ""
 
+    def repl(m):
+        cid = m.group(1)
+        # fallback ساده — کلاینت پریمیوم واقعی را نشان می‌دهد
+        return f'<tg-emoji emoji-id="{cid}">⭐</tg-emoji>'
 
-def format_result_plain(items: list, bot_username: str) -> str:
-    """نسخه mono برای کپی راحت (بدون HTML پیچیده)"""
-    uname = (bot_username or "SelfmrhelPerbot").lstrip("@")
+    # بقیه متن را escape کن ولی تگ‌های ما را بعداً برگردان
     parts = []
-    for it in items:
-        cid = it["id"]
-        fb = it["fallback"]
-        parts.append(f"{fb}\n{cid}\n@{uname}")
-    return "\n──────────\n".join(parts) if parts else "no emoji"
+    last = 0
+    for m in CODE_RE.finditer(text):
+        parts.append(html.escape(text[last:m.start()]))
+        parts.append(repl(m))
+        last = m.end()
+    parts.append(html.escape(text[last:]))
+    return "".join(parts)
+
+
+def preview_plain(text: str) -> str:
+    """پیش‌نمایش ساده بدون تگ"""
+    return CODE_RE.sub("⭐", text or "")
 
 
 # -------------------- handlers --------------------
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
-    uname = BOT_USERNAME or "SelfmrhelPerbot"
+    uname = BOT_USERNAME
     text = (
-        f"👋 <b>هلپر self MR</b>\n"
-        f"یوزرنیم: @{uname}\n\n"
-        f"📌 <b>نحوه استفاده:</b>\n"
-        f"۱) یک پیام حاوی <b>ایموجی پریمیوم</b> بفرست\n"
-        f"۲) کد عددی + تگ HTML را بگیر\n\n"
-        f"🔹 اینلاین:\n"
-        f"<code>@{uname} </code> + ایموجی/متن\n\n"
-        f"🔹 در کانال/گپ با ادمین بودن ربات هم می‌توانی "
-        f"از تگ <code>tg-emoji</code> استفاده کنی."
+        f"👑 به ربات تبدیل ایموجی پریمیوم خوش آمدید\n\n"
+        f"تعداد کانال‌های ثبت شده شما: 0\n\n"
+        f"‼️ نحوه استفاده:\n"
+        f"در هر چتی تایپ کنید:\n"
+        f"<code>@{uname}</code> متن [کد] متن\n\n"
+        f"مثال:\n"
+        f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>\n\n"
+        f"پیام شما تبدیل شده و قابل ارسال خواهد بود\n"
+        f"و توجه داشته باشید کد ایموجی را از کانال\n"
+        f"https://t.me/CustomEmojiPack بردارید"
     )
-    await message.reply_text(text, parse_mode=ParseMode.HTML)
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⭐ ایموجی‌های پرکاربرد", url="https://t.me/CustomEmojiPack"),
+            InlineKeyboardButton("💎 Rich Text/مقاله", url="https://t.me/CustomEmojiPack"),
+        ],
+        [
+            InlineKeyboardButton("📢 قسمت کانال", callback_data="ch"),
+            InlineKeyboardButton("➡️ راهنما", callback_data="help"),
+        ],
+    ])
+    await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@app.on_callback_query()
+async def cb_handler(client, callback):
+    data = callback.data or ""
+    uname = BOT_USERNAME
+    if data == "help":
+        await callback.answer()
+        await callback.message.reply_text(
+            f"📖 راهنما\n\n"
+            f"۱) کد ایموجی را از کانال‌های پک بگیر\n"
+            f"۲) در هر چت بنویس:\n"
+            f"<code>@{uname} متن [کد] متن</code>\n"
+            f"۳) روی نتیجه اینلاین بزن تا پیام پریمیوم ارسال شود\n\n"
+            f"مثال:\n"
+            f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    elif data == "ch":
+        await callback.answer("کانال پک‌ها را از لینک زیر باز کنید", show_alert=True)
+    else:
+        await callback.answer()
 
 
 @app.on_message(filters.private & filters.incoming & ~filters.command("start"))
-async def private_emoji_handler(client: Client, message: Message):
-    items = extract_custom_emojis(message)
-    if not items:
-        # اگر فقط متن عادی بود راهنما بده
+async def private_handler(client: Client, message: Message):
+    """در پیوی: اگر [کد] داشت پیش‌نمایش بده؛ اگر ایموجی پریمیوم فرستاد ID بده"""
+    text = message.text or message.caption or ""
+    items = []
+    entities = list(message.entities or []) + list(message.caption_entities or [])
+    for ent in entities:
+        cid = getattr(ent, "custom_emoji_id", None)
+        if cid:
+            items.append(int(cid))
+
+    if items:
+        lines = [f"`{cid}`" for cid in items]
         await message.reply_text(
-            "❌ در این پیام ایموجی <b>پریمیوم</b> پیدا نشد.\n\n"
-            "یک پیام که داخلش ایموجی پریمیوم باشد بفرست "
-            "(از پک‌های پریمیوم تلگرام).",
+            "📋 کد ایموجی‌های پیام شما:\n\n" + "\n".join(lines) +
+            f"\n\nاستفاده:\n<code>@{BOT_USERNAME} متن [{items[0]}] متن</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    uname = BOT_USERNAME or "SelfmrhelPerbot"
-    body = format_result(items, uname)
-
-    # دکمه کپی‌محور: نسخه ساده mono
-    plain = format_result_plain(items, uname)
-    try:
-        await message.reply_text(body, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        log.warning("html reply fail: %s", e)
-        await message.reply_text(plain)
-
-    # پیام دوم فقط کدها برای کپی سریع
-    codes = "\n".join(f"`{it['id']}`" for it in items)
-    try:
+    if CODE_RE.search(text):
+        n = count_codes(text)
+        html_body = build_html_with_premium(text)
         await message.reply_text(
-            f"📋 <b>کدها (قابل کپی):</b>\n{codes}\n\n@{uname}",
+            f"پیام شما با {n} کد ایموجی پریمیوم آماده تبدیل است.\n\n"
+            f"پیش‌نمایش:\n{html_body}\n\n"
+            f"در چت بنویس:\n<code>@{BOT_USERNAME} {html.escape(text)}</code>",
             parse_mode=ParseMode.HTML,
         )
-    except Exception:
-        pass
+        return
+
+    await message.reply_text(
+        f"در هر چتی تایپ کنید:\n"
+        f"<code>@{BOT_USERNAME} سلام [6298332994260175589] خوبی؟</code>",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @app.on_inline_query()
 async def inline_handler(client: Client, query: InlineQuery):
-    """اینلاین: نمایش نتایج با ایموجی پریمیوم در متن"""
+    """
+    اینلاین مثل pyiuebot:
+    کوئری: سلام [6298332994260175589] خوبی؟
+    → نتیجه قابل ارسال با ایموجی پریمیوم واقعی
+    """
     q = (query.query or "").strip()
-    uname = BOT_USERNAME or "SelfmrhelPerbot"
+    uname = BOT_USERNAME
     results = []
 
-    # اگر کوئری عدد خالص است = custom_emoji_id
-    cid = None
-    fallback = "⭐"
-    if q.isdigit() and len(q) >= 15:
-        cid = int(q)
-    else:
-        # جستجوی entity در خود کوئری ممکن نیست؛ فقط متن
-        # فرمت: id یا id|emoji
-        if "|" in q:
-            a, b = q.split("|", 1)
-            if a.strip().isdigit():
-                cid = int(a.strip())
-                fallback = (b.strip() or "⭐")[:8]
-        elif q:
-            fallback = q[:8]
-
-    if cid:
-        # نتیجه با entity پریمیوم از طریق HTML در InputTextMessageContent
-        # Bot API: parse_mode HTML + tg-emoji
-        html_text = f'<tg-emoji emoji-id="{cid}">{html.escape(fallback)}</tg-emoji>'
-        title = f"پریمیوم {cid}"
-        description = f"{fallback} → {cid}"
+    n = count_codes(q)
+    if n > 0:
+        html_body = build_html_with_premium(q)
+        plain = preview_plain(q)
+        # نتیجه اصلی — با HTML tg-emoji
         results.append(
             InlineQueryResultArticle(
-                id=f"pe_{cid}",
-                title=title,
-                description=description,
+                id="convert_main",
+                title="پیام آماده تبدیل",
+                description=f"پیام با {n} ایموجی پریمیوم",
                 input_message_content=InputTextMessageContent(
-                    message_text=html_text,
+                    message_text=html_body,
+                    parse_mode=ParseMode.HTML,
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("تبدیل و ارسال پیام", switch_inline_query_current_chat=q)]
+                ]),
+            )
+        )
+        # نتیجه دوم بدون دکمه (ارسال مستقیم)
+        results.append(
+            InlineQueryResultArticle(
+                id="convert_send",
+                title=f"ارسال مستقیم ({n} ایموجی)",
+                description=plain[:60],
+                input_message_content=InputTextMessageContent(
+                    message_text=html_body,
                     parse_mode=ParseMode.HTML,
                 ),
             )
         )
-        # نسخه متنی کد
-        results.append(
-            InlineQueryResultArticle(
-                id=f"code_{cid}",
-                title="کپی کد عددی",
-                description=str(cid),
-                input_message_content=InputTextMessageContent(
-                    message_text=f"{fallback}\n`{cid}`\n@{uname}",
-                    parse_mode=ParseMode.MARKDOWN,
-                ),
-            )
-        )
     else:
+        # راهنما وقتی هنوز کدی ننوشته
+        sample = f"سلام [6298332994260175589] خوبی؟"
         results.append(
             InlineQueryResultArticle(
                 id="help",
-                title="راهنما",
-                description="عدد custom_emoji_id را بنویس یا در پیوی ایموجی بفرست",
+                title="‼️ نحوه استفاده",
+                description=f"@{uname} متن [کد] متن",
                 input_message_content=InputTextMessageContent(
                     message_text=(
-                        f"هلپر @{uname}\n"
-                        f"در پیوی یک ایموجی پریمیوم بفرست تا کد بگیری.\n"
-                        f"اینلاین: @{uname} 6033..."
+                        f"👑 تبدیل ایموجی پریمیوم\n\n"
+                        f"تایپ کنید:\n"
+                        f"@{uname} متن [کد] متن\n\n"
+                        f"مثال:\n"
+                        f"@{uname} {sample}\n\n"
+                        f"کدها را از https://t.me/CustomEmojiPack بردارید"
                     ),
                 ),
             )
         )
 
     try:
-        await query.answer(results, cache_time=5, is_personal=True)
+        await query.answer(
+            results,
+            cache_time=1,
+            is_personal=True,
+            switch_pm_text="راهنما / استارت ربات" if n == 0 else f"{n} کد آماده تبدیل",
+            switch_pm_parameter="start",
+        )
     except Exception as e:
         log.warning("inline answer: %s", e)
         try:
-            await query.answer([], cache_time=0)
-        except Exception:
-            pass
+            await query.answer(results[:1], cache_time=0, is_personal=True)
+        except Exception as e2:
+            log.warning("inline fallback: %s", e2)
 
 
 async def main():
     global BOT_USERNAME
     await app.start()
     me = await app.get_me()
-    BOT_USERNAME = me.username or "SelfmrhelPerbot"
+    BOT_USERNAME = (me.username or "SelfmrhelPerbot").lstrip("@")
     log.info("✅ Helper started @%s id=%s", BOT_USERNAME, me.id)
     await idle()
     await app.stop()

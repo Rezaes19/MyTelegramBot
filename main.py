@@ -78,12 +78,66 @@ MANAGER_BOT_USERNAME = None  # بعد از استارت پر می‌شود
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 # اینلاین هلپر ایموجی پریمیوم (بات ساخته‌شده با اکانت پریمیوم)
-HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "helperselfmr_bot").strip().lstrip("@")
+HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "SelfmrhelPerbot").strip().lstrip("@")
 
 # =============================================
 # ایموجی پریمیوم برای ربات منیجر (Bot API / tg-emoji)
 # =============================================
 MANAGER_PREMIUM_EMOJIS = {}  # str(id) -> {"id": int, "fallback": str}
+
+
+
+
+def build_bracket_premium_message(text: str, placeholder: str = "🔥"):
+    """
+    متن با [custom_emoji_id] → (message_text, entities)
+    placeholder باید طول UTF-16 مناسب داشته باشد (معمولاً 2 برای ایموجی رنگی)
+    """
+    import re as _re
+    rx = _re.compile(r"\[(\d{10,})\]")
+    text = text or ""
+    # اطمینان از placeholder با طول UTF-16 >= 1
+    ph = placeholder or "🔥"
+    ph_len = len(ph.encode("utf-16-le")) // 2
+    if ph_len < 1:
+        ph, ph_len = "🔥", 2
+    out = []
+    entities = []
+    utf16 = 0
+    last = 0
+    for m in rx.finditer(text):
+        before = text[last:m.start()]
+        out.append(before)
+        utf16 += len(before.encode("utf-16-le")) // 2
+        entities.append({
+            "type": "custom_emoji",
+            "offset": int(utf16),
+            "length": int(ph_len),
+            "custom_emoji_id": str(m.group(1)),
+        })
+        out.append(ph)
+        utf16 += ph_len
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), entities
+
+
+def build_bracket_premium_html(text: str, placeholder: str = "🔥") -> str:
+    """نسخه HTML tg-emoji برای fallback"""
+    import re as _re
+    import html as _html
+    rx = _re.compile(r"\[(\d{10,})\]")
+    text = text or ""
+    ph = _html.escape(placeholder or "🔥")
+    parts = []
+    last = 0
+    for m in rx.finditer(text):
+        parts.append(_html.escape(text[last:m.start()]))
+        parts.append(f'<tg-emoji emoji-id="{m.group(1)}">{ph}</tg-emoji>')
+        last = m.end()
+    parts.append(_html.escape(text[last:]))
+    return "".join(parts)
+
 
 
 def html_tg_emoji(custom_emoji_id, fallback: str = "⭐") -> str:
@@ -7247,12 +7301,44 @@ def _make_fancy_fonts(text: str) -> str:
 
 
 
-async def apply_golden_profile_frame(client, user_id: int) -> str:
-    """دانلود پروفایل + قاب طلایی لوکس دایره‌ای → مسیر فایل خروجی"""
+
+# پالت رنگ قاب پروفایل
+PROFILE_FRAME_COLORS = {
+    "طلایی": [(255, 215, 0, 255), (255, 193, 7, 255), (218, 165, 32, 255), (255, 235, 150, 255), (184, 134, 11, 255)],
+    "آبی": [(30, 144, 255, 255), (0, 191, 255, 255), (70, 130, 180, 255), (135, 206, 250, 255), (25, 25, 112, 255)],
+    "قرمز": [(220, 20, 60, 255), (255, 69, 0, 255), (178, 34, 34, 255), (255, 99, 71, 255), (139, 0, 0, 255)],
+    "سبز": [(50, 205, 50, 255), (0, 255, 127, 255), (34, 139, 34, 255), (144, 238, 144, 255), (0, 100, 0, 255)],
+    "بنفش": [(186, 85, 211, 255), (138, 43, 226, 255), (147, 112, 219, 255), (221, 160, 221, 255), (75, 0, 130, 255)],
+    "صورتی": [(255, 105, 180, 255), (255, 20, 147, 255), (255, 182, 193, 255), (219, 112, 147, 255), (199, 21, 133, 255)],
+    "مشکی": [(40, 40, 40, 255), (80, 80, 80, 255), (20, 20, 20, 255), (120, 120, 120, 255), (0, 0, 0, 255)],
+    "سفید": [(255, 255, 255, 255), (240, 240, 240, 255), (220, 220, 220, 255), (200, 200, 200, 255), (180, 180, 180, 255)],
+    "نارنجی": [(255, 140, 0, 255), (255, 165, 0, 255), (255, 120, 0, 255), (255, 200, 100, 255), (210, 105, 30, 255)],
+    "فیروزه‌ای": [(0, 206, 209, 255), (64, 224, 208, 255), (0, 139, 139, 255), (72, 209, 204, 255), (0, 128, 128, 255)],
+    "نقره‌ای": [(192, 192, 192, 255), (211, 211, 211, 255), (169, 169, 169, 255), (230, 230, 230, 255), (128, 128, 128, 255)],
+    "رنگین‌کمان": [(255, 0, 0, 255), (255, 165, 0, 255), (255, 255, 0, 255), (0, 255, 0, 255), (0, 128, 255, 255)],
+}
+
+
+async def apply_profile_frame(client, user_id: int, color_name: str = "طلایی") -> str:
+    """دانلود پروفایل + قاب رنگی دایره‌ای → مسیر فایل خروجی"""
     from PIL import Image, ImageDraw, ImageFilter
     import math
     import tempfile
     size = 640
+    color_name = (color_name or "طلایی").strip()
+    palette = PROFILE_FRAME_COLORS.get(color_name) or PROFILE_FRAME_COLORS["طلایی"]
+    bg = (20, 16, 8, 255)
+    if color_name in ("آبی", "فیروزه‌ای"):
+        bg = (8, 16, 28, 255)
+    elif color_name in ("قرمز", "صورتی", "نارنجی"):
+        bg = (28, 10, 12, 255)
+    elif color_name in ("سبز",):
+        bg = (8, 22, 12, 255)
+    elif color_name in ("بنفش",):
+        bg = (18, 8, 28, 255)
+    elif color_name in ("مشکی", "نقره‌ای", "سفید"):
+        bg = (12, 12, 12, 255)
+
     photos = []
     async for p in client.get_chat_photos("me", limit=1):
         photos.append(p)
@@ -7261,12 +7347,10 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
 
     tmp_dir = tempfile.gettempdir()
     tmp_in = os.path.join(tmp_dir, f"profile_in_{user_id}_{int(time.time())}.jpg")
-    tmp_out = os.path.join(tmp_dir, f"profile_gold_{user_id}_{int(time.time())}.jpg")
+    tmp_out = os.path.join(tmp_dir, f"profile_frame_{color_name}_{user_id}_{int(time.time())}.jpg")
 
-    # download_media مسیر واقعی را برمی‌گرداند
     downloaded = await client.download_media(photos[0], file_name=tmp_in)
     if not downloaded:
-        # روش دوم: با file_id
         try:
             downloaded = await client.download_media(photos[0])
         except Exception:
@@ -7290,18 +7374,11 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
     circle.paste(img, (0, 0))
     circle.putalpha(mask)
 
-    canvas = Image.new("RGBA", (size, size), (20, 16, 8, 255))
+    canvas = Image.new("RGBA", (size, size), bg)
     canvas.paste(circle, (0, 0), circle)
     draw = ImageDraw.Draw(canvas)
     cx = cy = size // 2
-    gold_colors = [
-        (255, 215, 0, 255),
-        (255, 193, 7, 255),
-        (218, 165, 32, 255),
-        (255, 235, 150, 255),
-        (184, 134, 11, 255),
-    ]
-    for i, col in enumerate(gold_colors):
+    for i, col in enumerate(palette):
         r0 = size // 2 - 8 - i * 5
         draw.ellipse((cx - r0, cy - r0, cx + r0, cy + r0), outline=col, width=3)
     outer = size // 2 - 12
@@ -7310,7 +7387,7 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
         x = cx + int(outer * math.cos(ang))
         y = cy + int(outer * math.sin(ang))
         rr = 5 if k % 3 == 0 else 3
-        draw.ellipse((x - rr, y - rr, x + rr, y + rr), fill=gold_colors[k % len(gold_colors)])
+        draw.ellipse((x - rr, y - rr, x + rr, y + rr), fill=palette[k % len(palette)])
     glow = canvas.filter(ImageFilter.GaussianBlur(2))
     canvas = Image.blend(canvas, glow, 0.25)
     out = canvas.convert("RGB")
@@ -7323,6 +7400,12 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
     if not os.path.exists(tmp_out):
         raise RuntimeError("ذخیره تصویر خروجی ناموفق بود")
     return tmp_out
+
+
+async def apply_golden_profile_frame(client, user_id: int) -> str:
+    """سازگاری با نام قبلی"""
+    return await apply_profile_frame(client, user_id, "طلایی")
+
 
 
 async def reply_based_controller(client, message):
@@ -7463,25 +7546,57 @@ async def reply_based_controller(client, message):
                 pass
         return
 
-    # ========== قاب طلایی پروفایل ==========
-    if cmd in (".قاب طلایی", "قاب طلایی", ".قاب طلايي", "قاب طلايي"):
+
+    # ========== قاب پروفایل رنگی ==========
+    _frame_cmd = cmd.replace("ي", "ی").replace("ك", "ک")
+    if _frame_cmd.startswith(".قاب ") or _frame_cmd.startswith("قاب "):
         if not is_self_on(user_id):
             return
+        body = _frame_cmd
+        if body.startswith("."):
+            body = body[1:]
+        body = body.strip()
+        # قاب طلایی پروفایل / قاب آبی / قاب طلایی
+        color = None
+        if body.startswith("قاب"):
+            rest = body[3:].strip()
+            # حذف کلمه پروفایل از انتها
+            if rest.endswith("پروفایل"):
+                rest = rest[: -len("پروفایل")].strip()
+            rest = rest.strip()
+            if rest in PROFILE_FRAME_COLORS:
+                color = rest
+            else:
+                # تطبیق جزئی
+                for k in PROFILE_FRAME_COLORS:
+                    if k in rest or rest in k:
+                        color = k
+                        break
+        if not color:
+            try:
+                cols = " / ".join(PROFILE_FRAME_COLORS.keys())
+                await message.edit_text(
+                    f"❌ رنگ نامعتبر\n\nدستورات:\n"
+                    + "\n".join(f".قاب {k} پروفایل" for k in PROFILE_FRAME_COLORS.keys())
+                )
+            except Exception:
+                pass
+            return
         try:
-            await message.edit_text("⏳ در حال ساخت قاب طلایی...")
+            await message.edit_text(f"⏳ در حال ساخت قاب {color}...")
         except Exception:
             pass
         path = None
         try:
-            path = await apply_golden_profile_frame(client, user_id)
+            path = await apply_profile_frame(client, user_id, color)
             await client.set_profile_photo(photo=path)
             try:
-                await message.edit_text("✅ قاب طلایی روی پروفایل ست شد | self MR")
+                await message.edit_text(f"✅ قاب {color} روی پروفایل ست شد | self MR")
             except Exception:
                 pass
         except Exception as e:
             try:
-                await message.edit_text(f"❌ خطا در قاب طلایی:\n{e}")
+                await message.edit_text(f"❌ خطا در قاب پروفایل:\n{e}")
             except Exception:
                 pass
         finally:
@@ -7491,7 +7606,6 @@ async def reply_based_controller(client, message):
                 except Exception:
                     pass
         return
-
 
     # ========== ساخت عکس AI / تحلیل / خلاصه (اولویت بالا) ==========
     text_full = (message.text or message.caption or "").strip()
@@ -10170,7 +10284,7 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🔑 پسوورد ساز", f"panel_page_58_{user_id}", style="primary"),
                 _styled_btn("🧮 ماشین حساب", f"panel_page_59_{user_id}", style="primary"),
-                _styled_btn("🖼 قاب پروفایل", f"panel_page_60_{user_id}", style="primary"),
+                _styled_btn("🖼 قاب پروفایل کل رنگ‌ها", f"panel_page_60_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
@@ -10426,6 +10540,93 @@ async def inline_panel_handler(client, query):
 
     # ===== ایموجی پریمیوم از طریق اینلاین =====
     # فرمت‌ها: pe|uid|hex  یا  pe|uid|i|slot  یا  pe:uid:hex
+
+    
+    
+    # --- تبدیل مثل pyiuebot: متن [کد] متن ---
+    try:
+        import re as _re_h
+        _rx = _re_h.compile(r"\[(\d{10,})\]")
+        if _rx.search(q or ""):
+            n = len(_rx.findall(q))
+            # چند placeholder امتحان می‌شود؛ تلگرام گاهی روی ⭐ گیر می‌کند
+            results_list = []
+            for pi, ph in enumerate(("🔥", "👍", "😀", "⭐")):
+                msg_text, ents = build_bracket_premium_message(q, placeholder=ph)
+                if not ents:
+                    continue
+                results_list.append({
+                    "type": "article",
+                    "id": f"pyiue_ent_{pi}",
+                    "title": "پیام آماده تبدیل" if pi == 0 else f"نسخه {ph}",
+                    "description": f"{n} ایموجی پریمیوم | entity",
+                    "input_message_content": {
+                        "message_text": msg_text,
+                        "entities": ents,
+                    },
+                })
+            # HTML fallback
+            html_body = build_bracket_premium_html(q, "🔥")
+            results_list.append({
+                "type": "article",
+                "id": "pyiue_html",
+                "title": "تبدیل HTML",
+                "description": f"{n} ایموجی | HTML tg-emoji",
+                "input_message_content": {
+                    "message_text": html_body,
+                    "parse_mode": "HTML",
+                },
+            })
+            # فقط متن با کدها (برای کپی)
+            results_list.append({
+                "type": "article",
+                "id": "pyiue_raw",
+                "title": "کپی متن خام",
+                "description": q[:60],
+                "input_message_content": {
+                    "message_text": q,
+                },
+            })
+            _tok = (HELPER_BOT_TOKEN if (HELPER_BOT_ENABLED and HELPER_BOT_TOKEN) else BOT_TOKEN) or BOT_TOKEN
+            url = f"https://api.telegram.org/bot{_tok}/answerInlineQuery"
+            payload = {
+                "inline_query_id": query.id,
+                "cache_time": 0,
+                "is_personal": True,
+                "results": json.dumps(results_list, ensure_ascii=False),
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=payload) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        logging.info("inline pyiue-style ok n=%s results=%s", n, len(results_list))
+                    else:
+                        logging.warning("inline pyiue-style fail: %s", data)
+                        # تلاش با query.answer مستقیم
+                        try:
+                            from pyrogram.types import InlineQueryResultArticle, InputTextMessageContent
+                            from pyrogram.enums import ParseMode as _PM
+                            await query.answer(
+                                [
+                                    InlineQueryResultArticle(
+                                        id="pyiue_direct",
+                                        title="پیام آماده تبدیل",
+                                        description=f"{n} ایموجی",
+                                        input_message_content=InputTextMessageContent(
+                                            message_text=html_body,
+                                            parse_mode=_PM.HTML,
+                                        ),
+                                    )
+                                ],
+                                cache_time=0,
+                                is_personal=True,
+                            )
+                        except Exception as e2:
+                            logging.warning("pyiue direct answer: %s", e2)
+            return
+    except Exception as e:
+        logging.warning("inline pyiue-style: %s", e)
+
     if q.startswith("pe|") or q.startswith("pe:"):
         try:
             raw = q.replace("pe:", "pe|")
@@ -12593,12 +12794,35 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     ".حساب 2*2\n"
                     ".حساب 25*4+10"
                 ),
-                60: (
-                    "🖼 قاب پروفایل | self MR\n\n"
+                                60: (
+                    "🖼 قاب پروفایل کل رنگ‌ها | self MR\n\n"
                     "دستورات:\n"
-                    ".قاب طلایی\n\n"
-                    "دور عکس پروفایل یک قاب طلایی زیبا می‌گذارد."
+                    ".قاب طلایی پروفایل\n"
+                    ".قاب آبی پروفایل\n"
+                    ".قاب قرمز پروفایل\n"
+                    ".قاب سبز پروفایل\n"
+                    ".قاب بنفش پروفایل\n"
+                    ".قاب صورتی پروفایل\n"
+                    ".قاب مشکی پروفایل\n"
+                    ".قاب سفید پروفایل\n"
+                    ".قاب نارنجی پروفایل\n"
+                    ".قاب فیروزه‌ای پروفایل\n"
+                    ".قاب نقره‌ای پروفایل\n"
+                    ".قاب رنگین‌کمان پروفایل\n"
+                    "\n"
+                    "راهنمای سریع ویژگی‌ها:\n"
+                    "• پنل — باز کردن پنل\n"
+                    "• .سلف روشن / .سلف خاموش\n"
+                    "• .فونت + متن\n"
+                    "• .پسورد 16 | .حساب 2*2\n"
+                    "• .ذخیره | .حذف 20\n"
+                    "• .ترجمه (ریپلای)\n"
+                    "• .دلار .یورو ... قیمت ارز\n"
+                    "• بازی / دوز + مبلغ در گپ\n"
+                    "• .اسکرین .میو روشن .سندر\n"
+                    "• تاریخ / ساعت اسم / قاب پروفایل"
                 ),
+
 
 
             }
@@ -14720,52 +14944,77 @@ async def hourly_diamond_deduction_task():
 # =============================================
 # 🤖 هلپر اینلاین / پریمیوم (مثل Premiumemoji bots)
 # =============================================
+
 async def helper_start_handler(client, message):
-    """استارت هلپر — راهنما"""
-    uname = HELPER_INLINE_BOT or "helperselfmr_bot"
+    """استارت هلپر — مثل pyiuebot"""
+    uname = (HELPER_INLINE_BOT or "SelfmrhelPerbot").lstrip("@")
     text = (
-        "⭐ <b>هلپر ایموجی پریمیوم | self MR</b>\n\n"
-        "این ربات برای <b>ارسال و ثبت ایموجی پریمیوم</b> با Bot API است.\n\n"
-        "📌 <b>ثبت ایموجی:</b>\n"
-        "همین‌جا یک پیام با ایموجی پریمیوم بفرستید.\n\n"
-        "📌 <b>دستورات:</b>\n"
-        "/start — راهنما\n"
-        "/list — لیست ایموجی‌های ثبت‌شده\n"
-        "/test — تست ارسال پریمیوم\n\n"
-        "📌 <b>اینلاین:</b>\n"
-        f"در هر چت بنویسید:\n"
-        f"<code>@{uname}</code> + فاصله\n\n"
-        "اگر ایموجی پریمیوم فرستادید و پیش‌نمایش آمد، یعنی درست کار می‌کند."
+        f"👑 به ربات تبدیل ایموجی پریمیوم خوش آمدید\n\n"
+        f"تعداد کانال‌های ثبت شده شما: 0\n\n"
+        f"‼️ نحوه استفاده:\n"
+        f"در هر چتی تایپ کنید:\n"
+        f"<code>@{uname}</code> متن [کد] متن\n\n"
+        f"مثال:\n"
+        f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>\n\n"
+        f"پیام شما تبدیل شده و قابل ارسال خواهد بود\n"
+        f"و توجه داشته باشید کد ایموجی را از کانال\n"
+        f"https://t.me/CustomEmojiPack بردارید"
     )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⭐ ایموجی‌های پرکاربرد", url="https://t.me/CustomEmojiPack"),
+            InlineKeyboardButton("💎 Rich Text/مقاله", url="https://t.me/CustomEmojiPack"),
+        ],
+        [
+            InlineKeyboardButton("➡️ راهنما", callback_data="helper_help"),
+        ],
+    ])
     try:
-        await message.reply_text(text, parse_mode=ParseMode.HTML)
+        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     except Exception as e:
-        logging.warning(f"helper_start: {e}")
-        try:
-            await message.reply_text("⭐ هلپر self MR آماده است.\nیک ایموجی پریمیوم بفرستید.")
-        except Exception:
-            pass
+        logging.warning("helper_start: %s", e)
+
+
+def _helper_code_re():
+    import re as _re
+    return _re.compile(r"\[(\d{10,})\]")
+
+
+def _helper_build_html(text: str) -> str:
+    import html as _html
+    import re as _re
+    rx = _re.compile(r"\[(\d{10,})\]")
+    parts = []
+    last = 0
+    for m in rx.finditer(text or ""):
+        parts.append(_html.escape(text[last:m.start()]))
+        parts.append(f'<tg-emoji emoji-id="{m.group(1)}">⭐</tg-emoji>')
+        last = m.end()
+    parts.append(_html.escape((text or "")[last:]))
+    return "".join(parts)
 
 
 async def helper_premium_message_handler(client, message):
-    """ثبت ایموجی پریمیوم روی هلپر + نمایش با tg-emoji"""
+    """پیوی هلپر: ثبت ایموجی پریمیوم یا راهنمای [کد]"""
     try:
-        if not message.from_user:
+        if not message or not message.from_user:
             return
-        text = (message.text or "").strip()
-        if text in ("/start", "start"):
-            return
+        text = (message.text or message.caption or "").strip()
+        uname = (HELPER_INLINE_BOT or "SelfmrhelPerbot").lstrip("@")
+
         if text in ("/list", "list", "لیست"):
-            if not MANAGER_PREMIUM_EMOJIS:
-                await message.reply_text("لیست خالی است.\nیک ایموجی پریمیوم بفرستید.")
+            items = list(MANAGER_PREMIUM_EMOJIS.values())
+            if not items:
+                await message.reply_text("هنوز ایموجی ثبت نشده.")
                 return
-            parts = ["📋 <b>لیست ایموجی‌ها</b>", ""]
-            for i, (k, v) in enumerate(list(MANAGER_PREMIUM_EMOJIS.items())[:40], 1):
-                cid = v.get("id") or k
+            parts = ["📋 <b>لیست ثبت‌شده</b>", ""]
+            for i, v in enumerate(items[:40], 1):
+                cid = v.get("id")
                 fb = v.get("fallback") or "⭐"
                 parts.append(f"{i}. {html_tg_emoji(cid, fb)} <code>{cid}</code>")
             await message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
             return
+
         if text in ("/test", "test", "تست"):
             items = list(MANAGER_PREMIUM_EMOJIS.values())[:15]
             if not items:
@@ -14775,38 +15024,53 @@ async def helper_premium_message_handler(client, message):
             await message.reply_text(f"🧪 <b>تست</b>\n\n{html}", parse_mode=ParseMode.HTML)
             return
 
-        found = extract_custom_emojis_from_message(message)
-        if not found:
-            # اگر فقط متن عادی بود
-            if text and not text.startswith("/"):
-                await message.reply_text(
-                    "⭐ برای ثبت، یک <b>ایموجی پریمیوم</b> بفرستید.\n"
-                    "ایموجی عادی (غیرپریمیوم) قابل ثبت با Bot API نیست.",
-                    parse_mode=ParseMode.HTML,
-                )
+        if text in ("/help", "help", "راهنما"):
+            await message.reply_text(
+                f"در هر چت:\n<code>@{uname} سلام [6298332994260175589] خوبی؟</code>",
+                parse_mode=ParseMode.HTML,
+            )
             return
 
-        lines = ["✅ <b>ثبت شد | هلپر self MR</b>", ""]
-        html_parts = []
-        for cid, fb in found[:20]:
-            save_manager_premium_emoji(cid, fb)
-            html_parts.append(html_tg_emoji(cid, fb))
-            lines.append(f"• ID: <code>{cid}</code>")
-        lines.append("")
-        lines.append("پیش‌نمایش جداگانه ارسال می‌شود:")
-        await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
-        for cid, fb in found[:5]:
-            try:
-                await send_premium_emoji_message(client, message.chat.id, cid, fb)
-            except Exception as e:
-                logging.warning(f"helper preview: {e}")
+        # ایموجی پریمیوم در پیام → ثبت + نمایش کد
+        found = extract_custom_emojis_from_message(message)
+        if found:
+            lines = ["✅ <b>کد ایموجی | self MR</b>", ""]
+            for cid, fb in found[:20]:
+                save_manager_premium_emoji(cid, fb)
+                lines.append(f"{fb}")
+                lines.append(f"<code>{cid}</code>")
+                lines.append(f"<code>[{cid}]</code>")
+                lines.append("")
+            lines.append(f"استفاده:\n<code>@{uname} متن [{found[0][0]}] متن</code>")
+            await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+            return
+
+        # اگر [کد] در متن بود
+        rx = _helper_code_re()
+        if rx.search(text or ""):
+            n = len(rx.findall(text))
+            html_body = _helper_build_html(text)
+            await message.reply_text(
+                f"پیام با {n} کد آماده است.\n\nپیش‌نمایش:\n{html_body}\n\n"
+                f"در چت بنویس:\n<code>@{uname} {html.escape(text)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        if text and not text.startswith("/"):
+            await message.reply_text(
+                f"‼️ نحوه استفاده:\n"
+                f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>\n\n"
+                f"یا یک <b>ایموجی پریمیوم</b> بفرست تا کدش را بگیری.",
+                parse_mode=ParseMode.HTML,
+            )
     except Exception as e:
         logging.warning(f"helper_premium_message_handler: {e}")
 
 
 async def start_helper_bot():
     """هلپر کاملاً جدا از منیجر — خطا/توکن منقضی باعث توقف بات اصلی نمی‌شود"""
-    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED
+    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED, HELPER_INLINE_BOT
     HELPER_BOT_INSTANCE = None
     if not HELPER_BOT_ENABLED:
         logging.warning("Helper disabled via HELPER_ENABLED=0")
@@ -14856,6 +15120,9 @@ async def start_helper_bot():
         try:
             me = await helper_bot.get_me()
             logging.info("✅ Helper bot started @%s id=%s", me.username, me.id)
+            if me.username:
+                HELPER_INLINE_BOT = me.username.lstrip("@")
+                logging.info("HELPER_INLINE_BOT set to @%s", HELPER_INLINE_BOT)
         except Exception:
             logging.info("✅ Helper bot started")
         HELPER_BOT_INSTANCE = helper_bot
@@ -14922,8 +15189,11 @@ async def main():
     if not manager_ok:
         logging.error("❌ Manager bot could not start after retries — continuing sessions only")
 
-    # هلپر عمداً استارت نمی‌شود (جدا / توکن خراب)
-    logging.info("Helper bot: skipped (disabled in main)")
+    # هلپر از HELPER_BOT_TOKEN روی سرور — جدا از منیجر، خطا بات اصلی را نمی‌خواباند
+    try:
+        await start_helper_bot()
+    except Exception as e:
+        logging.warning("Helper bot start ignored: %s", e)
 
     try:
         await ensure_premium_client()

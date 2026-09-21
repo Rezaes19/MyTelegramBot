@@ -78,66 +78,12 @@ MANAGER_BOT_USERNAME = None  # بعد از استارت پر می‌شود
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 
 # اینلاین هلپر ایموجی پریمیوم (بات ساخته‌شده با اکانت پریمیوم)
-HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "SelfmrhelPerbot").strip().lstrip("@")
+HELPER_INLINE_BOT = os.environ.get("HELPER_INLINE_BOT", "helperselfmr_bot").strip().lstrip("@")
 
 # =============================================
 # ایموجی پریمیوم برای ربات منیجر (Bot API / tg-emoji)
 # =============================================
 MANAGER_PREMIUM_EMOJIS = {}  # str(id) -> {"id": int, "fallback": str}
-
-
-
-
-def build_bracket_premium_message(text: str, placeholder: str = "🔥"):
-    """
-    متن با [custom_emoji_id] → (message_text, entities)
-    placeholder باید طول UTF-16 مناسب داشته باشد (معمولاً 2 برای ایموجی رنگی)
-    """
-    import re as _re
-    rx = _re.compile(r"\[(\d{10,})\]")
-    text = text or ""
-    # اطمینان از placeholder با طول UTF-16 >= 1
-    ph = placeholder or "🔥"
-    ph_len = len(ph.encode("utf-16-le")) // 2
-    if ph_len < 1:
-        ph, ph_len = "🔥", 2
-    out = []
-    entities = []
-    utf16 = 0
-    last = 0
-    for m in rx.finditer(text):
-        before = text[last:m.start()]
-        out.append(before)
-        utf16 += len(before.encode("utf-16-le")) // 2
-        entities.append({
-            "type": "custom_emoji",
-            "offset": int(utf16),
-            "length": int(ph_len),
-            "custom_emoji_id": str(m.group(1)),
-        })
-        out.append(ph)
-        utf16 += ph_len
-        last = m.end()
-    out.append(text[last:])
-    return "".join(out), entities
-
-
-def build_bracket_premium_html(text: str, placeholder: str = "🔥") -> str:
-    """نسخه HTML tg-emoji برای fallback"""
-    import re as _re
-    import html as _html
-    rx = _re.compile(r"\[(\d{10,})\]")
-    text = text or ""
-    ph = _html.escape(placeholder or "🔥")
-    parts = []
-    last = 0
-    for m in rx.finditer(text):
-        parts.append(_html.escape(text[last:m.start()]))
-        parts.append(f'<tg-emoji emoji-id="{m.group(1)}">{ph}</tg-emoji>')
-        last = m.end()
-    parts.append(_html.escape(text[last:]))
-    return "".join(parts)
-
 
 
 def html_tg_emoji(custom_emoji_id, fallback: str = "⭐") -> str:
@@ -10480,93 +10426,6 @@ async def inline_panel_handler(client, query):
 
     # ===== ایموجی پریمیوم از طریق اینلاین =====
     # فرمت‌ها: pe|uid|hex  یا  pe|uid|i|slot  یا  pe:uid:hex
-
-    
-    
-    # --- تبدیل مثل pyiuebot: متن [کد] متن ---
-    try:
-        import re as _re_h
-        _rx = _re_h.compile(r"\[(\d{10,})\]")
-        if _rx.search(q or ""):
-            n = len(_rx.findall(q))
-            # چند placeholder امتحان می‌شود؛ تلگرام گاهی روی ⭐ گیر می‌کند
-            results_list = []
-            for pi, ph in enumerate(("🔥", "👍", "😀", "⭐")):
-                msg_text, ents = build_bracket_premium_message(q, placeholder=ph)
-                if not ents:
-                    continue
-                results_list.append({
-                    "type": "article",
-                    "id": f"pyiue_ent_{pi}",
-                    "title": "پیام آماده تبدیل" if pi == 0 else f"نسخه {ph}",
-                    "description": f"{n} ایموجی پریمیوم | entity",
-                    "input_message_content": {
-                        "message_text": msg_text,
-                        "entities": ents,
-                    },
-                })
-            # HTML fallback
-            html_body = build_bracket_premium_html(q, "🔥")
-            results_list.append({
-                "type": "article",
-                "id": "pyiue_html",
-                "title": "تبدیل HTML",
-                "description": f"{n} ایموجی | HTML tg-emoji",
-                "input_message_content": {
-                    "message_text": html_body,
-                    "parse_mode": "HTML",
-                },
-            })
-            # فقط متن با کدها (برای کپی)
-            results_list.append({
-                "type": "article",
-                "id": "pyiue_raw",
-                "title": "کپی متن خام",
-                "description": q[:60],
-                "input_message_content": {
-                    "message_text": q,
-                },
-            })
-            _tok = (HELPER_BOT_TOKEN if (HELPER_BOT_ENABLED and HELPER_BOT_TOKEN) else BOT_TOKEN) or BOT_TOKEN
-            url = f"https://api.telegram.org/bot{_tok}/answerInlineQuery"
-            payload = {
-                "inline_query_id": query.id,
-                "cache_time": 0,
-                "is_personal": True,
-                "results": json.dumps(results_list, ensure_ascii=False),
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload) as resp:
-                    data = await resp.json()
-                    if data.get("ok"):
-                        logging.info("inline pyiue-style ok n=%s results=%s", n, len(results_list))
-                    else:
-                        logging.warning("inline pyiue-style fail: %s", data)
-                        # تلاش با query.answer مستقیم
-                        try:
-                            from pyrogram.types import InlineQueryResultArticle, InputTextMessageContent
-                            from pyrogram.enums import ParseMode as _PM
-                            await query.answer(
-                                [
-                                    InlineQueryResultArticle(
-                                        id="pyiue_direct",
-                                        title="پیام آماده تبدیل",
-                                        description=f"{n} ایموجی",
-                                        input_message_content=InputTextMessageContent(
-                                            message_text=html_body,
-                                            parse_mode=_PM.HTML,
-                                        ),
-                                    )
-                                ],
-                                cache_time=0,
-                                is_personal=True,
-                            )
-                        except Exception as e2:
-                            logging.warning("pyiue direct answer: %s", e2)
-            return
-    except Exception as e:
-        logging.warning("inline pyiue-style: %s", e)
-
     if q.startswith("pe|") or q.startswith("pe:"):
         try:
             raw = q.replace("pe:", "pe|")
@@ -14861,77 +14720,52 @@ async def hourly_diamond_deduction_task():
 # =============================================
 # 🤖 هلپر اینلاین / پریمیوم (مثل Premiumemoji bots)
 # =============================================
-
 async def helper_start_handler(client, message):
-    """استارت هلپر — مثل pyiuebot"""
-    uname = (HELPER_INLINE_BOT or "SelfmrhelPerbot").lstrip("@")
+    """استارت هلپر — راهنما"""
+    uname = HELPER_INLINE_BOT or "helperselfmr_bot"
     text = (
-        f"👑 به ربات تبدیل ایموجی پریمیوم خوش آمدید\n\n"
-        f"تعداد کانال‌های ثبت شده شما: 0\n\n"
-        f"‼️ نحوه استفاده:\n"
-        f"در هر چتی تایپ کنید:\n"
-        f"<code>@{uname}</code> متن [کد] متن\n\n"
-        f"مثال:\n"
-        f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>\n\n"
-        f"پیام شما تبدیل شده و قابل ارسال خواهد بود\n"
-        f"و توجه داشته باشید کد ایموجی را از کانال\n"
-        f"https://t.me/CustomEmojiPack بردارید"
+        "⭐ <b>هلپر ایموجی پریمیوم | self MR</b>\n\n"
+        "این ربات برای <b>ارسال و ثبت ایموجی پریمیوم</b> با Bot API است.\n\n"
+        "📌 <b>ثبت ایموجی:</b>\n"
+        "همین‌جا یک پیام با ایموجی پریمیوم بفرستید.\n\n"
+        "📌 <b>دستورات:</b>\n"
+        "/start — راهنما\n"
+        "/list — لیست ایموجی‌های ثبت‌شده\n"
+        "/test — تست ارسال پریمیوم\n\n"
+        "📌 <b>اینلاین:</b>\n"
+        f"در هر چت بنویسید:\n"
+        f"<code>@{uname}</code> + فاصله\n\n"
+        "اگر ایموجی پریمیوم فرستادید و پیش‌نمایش آمد، یعنی درست کار می‌کند."
     )
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⭐ ایموجی‌های پرکاربرد", url="https://t.me/CustomEmojiPack"),
-            InlineKeyboardButton("💎 Rich Text/مقاله", url="https://t.me/CustomEmojiPack"),
-        ],
-        [
-            InlineKeyboardButton("➡️ راهنما", callback_data="helper_help"),
-        ],
-    ])
     try:
-        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        await message.reply_text(text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logging.warning("helper_start: %s", e)
-
-
-def _helper_code_re():
-    import re as _re
-    return _re.compile(r"\[(\d{10,})\]")
-
-
-def _helper_build_html(text: str) -> str:
-    import html as _html
-    import re as _re
-    rx = _re.compile(r"\[(\d{10,})\]")
-    parts = []
-    last = 0
-    for m in rx.finditer(text or ""):
-        parts.append(_html.escape(text[last:m.start()]))
-        parts.append(f'<tg-emoji emoji-id="{m.group(1)}">⭐</tg-emoji>')
-        last = m.end()
-    parts.append(_html.escape((text or "")[last:]))
-    return "".join(parts)
+        logging.warning(f"helper_start: {e}")
+        try:
+            await message.reply_text("⭐ هلپر self MR آماده است.\nیک ایموجی پریمیوم بفرستید.")
+        except Exception:
+            pass
 
 
 async def helper_premium_message_handler(client, message):
-    """پیوی هلپر: ثبت ایموجی پریمیوم یا راهنمای [کد]"""
+    """ثبت ایموجی پریمیوم روی هلپر + نمایش با tg-emoji"""
     try:
-        if not message or not message.from_user:
+        if not message.from_user:
             return
-        text = (message.text or message.caption or "").strip()
-        uname = (HELPER_INLINE_BOT or "SelfmrhelPerbot").lstrip("@")
-
+        text = (message.text or "").strip()
+        if text in ("/start", "start"):
+            return
         if text in ("/list", "list", "لیست"):
-            items = list(MANAGER_PREMIUM_EMOJIS.values())
-            if not items:
-                await message.reply_text("هنوز ایموجی ثبت نشده.")
+            if not MANAGER_PREMIUM_EMOJIS:
+                await message.reply_text("لیست خالی است.\nیک ایموجی پریمیوم بفرستید.")
                 return
-            parts = ["📋 <b>لیست ثبت‌شده</b>", ""]
-            for i, v in enumerate(items[:40], 1):
-                cid = v.get("id")
+            parts = ["📋 <b>لیست ایموجی‌ها</b>", ""]
+            for i, (k, v) in enumerate(list(MANAGER_PREMIUM_EMOJIS.items())[:40], 1):
+                cid = v.get("id") or k
                 fb = v.get("fallback") or "⭐"
                 parts.append(f"{i}. {html_tg_emoji(cid, fb)} <code>{cid}</code>")
             await message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
             return
-
         if text in ("/test", "test", "تست"):
             items = list(MANAGER_PREMIUM_EMOJIS.values())[:15]
             if not items:
@@ -14941,53 +14775,38 @@ async def helper_premium_message_handler(client, message):
             await message.reply_text(f"🧪 <b>تست</b>\n\n{html}", parse_mode=ParseMode.HTML)
             return
 
-        if text in ("/help", "help", "راهنما"):
-            await message.reply_text(
-                f"در هر چت:\n<code>@{uname} سلام [6298332994260175589] خوبی؟</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        # ایموجی پریمیوم در پیام → ثبت + نمایش کد
         found = extract_custom_emojis_from_message(message)
-        if found:
-            lines = ["✅ <b>کد ایموجی | self MR</b>", ""]
-            for cid, fb in found[:20]:
-                save_manager_premium_emoji(cid, fb)
-                lines.append(f"{fb}")
-                lines.append(f"<code>{cid}</code>")
-                lines.append(f"<code>[{cid}]</code>")
-                lines.append("")
-            lines.append(f"استفاده:\n<code>@{uname} متن [{found[0][0]}] متن</code>")
-            await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        if not found:
+            # اگر فقط متن عادی بود
+            if text and not text.startswith("/"):
+                await message.reply_text(
+                    "⭐ برای ثبت، یک <b>ایموجی پریمیوم</b> بفرستید.\n"
+                    "ایموجی عادی (غیرپریمیوم) قابل ثبت با Bot API نیست.",
+                    parse_mode=ParseMode.HTML,
+                )
             return
 
-        # اگر [کد] در متن بود
-        rx = _helper_code_re()
-        if rx.search(text or ""):
-            n = len(rx.findall(text))
-            html_body = _helper_build_html(text)
-            await message.reply_text(
-                f"پیام با {n} کد آماده است.\n\nپیش‌نمایش:\n{html_body}\n\n"
-                f"در چت بنویس:\n<code>@{uname} {html.escape(text)}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-
-        if text and not text.startswith("/"):
-            await message.reply_text(
-                f"‼️ نحوه استفاده:\n"
-                f"<code>@{uname} سلام [6298332994260175589] خوبی؟</code>\n\n"
-                f"یا یک <b>ایموجی پریمیوم</b> بفرست تا کدش را بگیری.",
-                parse_mode=ParseMode.HTML,
-            )
+        lines = ["✅ <b>ثبت شد | هلپر self MR</b>", ""]
+        html_parts = []
+        for cid, fb in found[:20]:
+            save_manager_premium_emoji(cid, fb)
+            html_parts.append(html_tg_emoji(cid, fb))
+            lines.append(f"• ID: <code>{cid}</code>")
+        lines.append("")
+        lines.append("پیش‌نمایش جداگانه ارسال می‌شود:")
+        await message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        for cid, fb in found[:5]:
+            try:
+                await send_premium_emoji_message(client, message.chat.id, cid, fb)
+            except Exception as e:
+                logging.warning(f"helper preview: {e}")
     except Exception as e:
         logging.warning(f"helper_premium_message_handler: {e}")
 
 
 async def start_helper_bot():
     """هلپر کاملاً جدا از منیجر — خطا/توکن منقضی باعث توقف بات اصلی نمی‌شود"""
-    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED, HELPER_INLINE_BOT
+    global HELPER_BOT_INSTANCE, HELPER_BOT_TOKEN, HELPER_BOT_ENABLED
     HELPER_BOT_INSTANCE = None
     if not HELPER_BOT_ENABLED:
         logging.warning("Helper disabled via HELPER_ENABLED=0")
@@ -15037,9 +14856,6 @@ async def start_helper_bot():
         try:
             me = await helper_bot.get_me()
             logging.info("✅ Helper bot started @%s id=%s", me.username, me.id)
-            if me.username:
-                HELPER_INLINE_BOT = me.username.lstrip("@")
-                logging.info("HELPER_INLINE_BOT set to @%s", HELPER_INLINE_BOT)
         except Exception:
             logging.info("✅ Helper bot started")
         HELPER_BOT_INSTANCE = helper_bot
@@ -15106,11 +14922,8 @@ async def main():
     if not manager_ok:
         logging.error("❌ Manager bot could not start after retries — continuing sessions only")
 
-    # هلپر از HELPER_BOT_TOKEN روی سرور — جدا از منیجر، خطا بات اصلی را نمی‌خواباند
-    try:
-        await start_helper_bot()
-    except Exception as e:
-        logging.warning("Helper bot start ignored: %s", e)
+    # هلپر عمداً استارت نمی‌شود (جدا / توکن خراب)
+    logging.info("Helper bot: skipped (disabled in main)")
 
     try:
         await ensure_premium_client()

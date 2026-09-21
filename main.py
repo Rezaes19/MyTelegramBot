@@ -608,6 +608,36 @@ def _cipher_plain_str(text) -> str:
         return ""
 
 
+
+_SMR_CRYPT_PREFIX = "SMR1."
+
+
+def text_encrypt_smr(text: str) -> str:
+    """رمزنگاری برگشت‌پذیر (base64 + پیشوند)"""
+    import base64
+    raw = (text or "").encode("utf-8")
+    token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return _SMR_CRYPT_PREFIX + token
+
+
+def text_decrypt_smr(text: str) -> str:
+    import base64
+    s = (text or "").strip()
+    if s.startswith(_SMR_CRYPT_PREFIX):
+        s = s[len(_SMR_CRYPT_PREFIX):]
+    # padding
+    pad = "=" * (-len(s) % 4)
+    try:
+        return base64.urlsafe_b64decode(s + pad).decode("utf-8")
+    except Exception:
+        # اگر کل پیام چند خط است، خط دارای پیشوند را پیدا کن
+        for line in (text or "").splitlines():
+            line = line.strip()
+            if line.startswith(_SMR_CRYPT_PREFIX):
+                return text_decrypt_smr(line)
+        raise ValueError("متن رمز معتبر نیست")
+
+
 def text_to_emoji_cipher(text) -> str:
     s = _cipher_plain_str(text)
     out = []
@@ -2916,224 +2946,31 @@ SENDER_MASS = {}
 BOLD_MODE_STATUS = {}
 TEXT_FONT_STATUS = {}
 SELF_STATUS = {}  # user_id -> True=روشن / False=خاموش (پیش‌فرض روشن)
-PANEL_DARK_THEME = {}  # user_id -> True=تم شب پنل
-
 def is_self_on(user_id) -> bool:
     return bool(SELF_STATUS.get(int(user_id), True))
 
-def is_panel_dark(user_id) -> bool:
-    try:
-        return bool(PANEL_DARK_THEME.get(int(user_id), False))
-    except Exception:
-        return False
 
 def panel_main_title(user_id) -> str:
     uid = int(user_id)
-    if is_panel_dark(uid):
-        return (
-            "🌙 ▓▓▓ پنل تم شب | self MR ▓▓▓\n"
-            "━━━━━━━━━━━━━━━━\n"
-            f"👤 کاربر: `{uid}`\n"
-            "🕶 حالت: تاریک"
-        )
     return f"⚡️ مدیریت پیشرفته self MR\n👤 کاربر: {uid}"
+
 
 def panel_page_title(user_id, page: int) -> str:
     uid = int(user_id)
-    dark = is_panel_dark(uid)
     titles = {
         1: panel_main_title(uid),
-        2: ("🌙 حالت متن | شب" if dark else "✏️ حالت متن / فونت‌ها | self MR"),
-        3: ("🌙 بخش امنیتی | شب" if dark else "🛡 بخش امنیتی | self MR"),
-        4: ("🌙 اکشن‌ها | شب" if dark else "⚡ اکشن‌ها | self MR"),
-        5: ("🌙 فونت ساعت | شب" if dark else "🕐 فونت ساعت | self MR"),
-        19: ("🌙 هوش مصنوعی | شب" if dark else "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید."),
-        35: ("🌙 میو | شب" if dark else "🐱 میو | self MR"),
-        51: ("🌙 ساعت پروفایل | شب" if dark else "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود."),
-        52: ("🌙 تاریخ میلادی بیو | شب" if dark else "📅 تاریخ میلادی بیو | self MR\nروشن/خاموش — تاریخ روز در بیو\nدستور: .تاریخ"),
+        2: "✏️ حالت متن / فونت‌ها | self MR",
+        3: "🛡 بخش امنیتی | self MR",
+        4: "⚡ اکشن‌ها | self MR",
+        5: "🕐 فونت ساعت | self MR",
+        19: "🧠 هوش مصنوعی | self MR\nاز دکمه‌ها یک قابلیت را انتخاب کنید.",
+        35: "🐱 میو | self MR",
+        51: "🕰 ساعت در پروفایل | self MR\nروشن/خاموش + رنگ نئون\nهر دقیقه عکس پروفایل با عقربه به‌روز می‌شود.",
+        52: "📅 تاریخ میلادی بیو | self MR\nروشن/خاموش — تاریخ روز در بیو\nدستور: .تاریخ",
     }
     if page in titles:
         return titles[page]
-    return ("🌙 self MR | شب\n📄 صفحه " if dark else "⚡️ self MR\n📄 صفحه ") + str(page)
-AUTO_SEEN_STATUS = {}
-AUTO_REACTION_TARGETS = {}
-AUTO_TRANSLATE_TARGET = {}
-PROFILE_SNOOPS = {}  # owner_id -> {viewer_id: info}
-PREMIUM_EMOJI_MAP = {}  # user_id -> {name: custom_emoji_id}
-# چند ایموجی پیش‌فرض رایج (custom_emoji_id)
-EMOJI_PREMIUM_CONVERT = {}
-_PREMIUM_CONVERT_DONE = set()  # (chat_id, msg_id) جلوگیری از دابل  # user_id -> bool: تبدیل خودکار ایموجی عادی به پریمیوم
-EMOJI_CHAR_TO_PREMIUM = {}  # user_id -> {emoji_char: custom_emoji_id}
-EMOJI_PREMIUM_TEMPLATES = {}  # user_id -> {emoji_char: (chat_id, msg_id)}
-
-# پک حروف/اعداد/علائم پریمیوم (custom_emoji_id) — تست اینلاین/entity
-PREMIUM_LETTER_MAP = {
-    "A": 5293991227513914037, "B": 5294446571356697709, "C": 5323692545568424149,
-    "D": 5294029641701407930, "E": 5327938799345349736, "F": 5325878958799994800,
-    "G": 5294448748905119870, "H": 5463362571341942623, "I": 5310097750010901912,
-    "J": 5298628306134909270, "K": 5330144144792763349, "L": 5312383462886356958,
-    "M": 5330094426251344221, "N": 5321450791683241246, "O": 5307644490461231051,
-    "P": 5327844718086733432, "Q": 5314463451123300950, "R": 5328162635860948105,
-    "S": 5332815043220225405, "T": 5330292450013494017, "U": 5330388403877853223,
-    "V": 5332614094585345389, "W": 5332470243245702221, "X": 5334637865995352639,
-    "Y": 5298741607372178279, "Z": 5334671517064117716,
-    "0": 5364021841801262907, "1": 5363858809137677324, "2": 5363938558090425835,
-    "4": 5363839335755953463, "5": 5364345867018974771, "6": 5363807703321818872,
-    "7": 5364243419164064459, "8": 5363897880455167063, "9": 5363848393841985608,
-    "+": 5298954496016138169, "-": 5301240299085906131, "!": 5325798810415287550,
-    "*": 5325614745296847217, ".": 5332565024583991774, ":": 5332675989359052329,
-    ";": 5341633328338451873, "?": 5341689815748329896, "@": 5463336165883013485,
-    "#": 5393369129996534190,
-}
-# حروف کوچک هم همان ID
-PREMIUM_LETTER_MAP.update({k.lower(): v for k, v in list(PREMIUM_LETTER_MAP.items()) if k.isalpha()})
-
-# پک ایموجی پریمیوم: https://t.me/addemoji/thehornyclubemojis
-PREMIUM_EMOJI_PACK_SHORT = "thehornyclubemojis"
-PACK_EMOJI_CACHE = {}  # emoticon/alt -> custom_emoji document id
-PACK_DOC_BY_ID = {}  # document_id -> raw Document
-PACK_EMOJI_LOADED = False
-
-async def ensure_premium_emoji_pack(client) -> dict:
-    """لود پک addemoji و ساخت مپ + نگه‌داشتن Document خام برای ارسال"""
-    global PACK_EMOJI_CACHE, PACK_EMOJI_LOADED, PACK_DOC_BY_ID
-    if PACK_EMOJI_CACHE and PACK_DOC_BY_ID:
-        return PACK_EMOJI_CACHE
-    try:
-        from pyrogram.raw.functions.messages import GetStickerSet
-        from pyrogram.raw.types import InputStickerSetShortName
-        r = await client.invoke(
-            GetStickerSet(
-                stickerset=InputStickerSetShortName(short_name=PREMIUM_EMOJI_PACK_SHORT),
-                hash=0,
-            )
-        )
-        cache = {}
-        docs_map = {}
-        for d in (getattr(r, "documents", None) or []):
-            did = int(getattr(d, "id", 0) or 0)
-            if did:
-                docs_map[did] = d
-                for attr in (getattr(d, "attributes", None) or []):
-                    alt = getattr(attr, "alt", None)
-                    if alt:
-                        cache[str(alt)] = did
-                        cache[str(alt).replace("️", "").replace("︎", "")] = did
-        for p in (getattr(r, "packs", None) or []):
-            emo = getattr(p, "emoticon", None) or ""
-            dlist = getattr(p, "documents", None) or []
-            if emo and dlist:
-                eid = int(dlist[0])
-                cache[str(emo)] = eid
-                cache[str(emo).replace("️", "").replace("︎", "")] = eid
-        # fix fe0f keys
-        fixed = {}
-        for k, v in cache.items():
-            fixed[k] = v
-            fixed[k.replace("️", "").replace("︎", "")] = v
-        PACK_EMOJI_CACHE = fixed
-        PACK_DOC_BY_ID = docs_map
-        PACK_EMOJI_LOADED = True
-        logging.info(
-            "premium emoji pack loaded short=%s emotes=%s docs=%s",
-            PREMIUM_EMOJI_PACK_SHORT,
-            len(PACK_EMOJI_CACHE),
-            len(PACK_DOC_BY_ID),
-        )
-    except Exception as e:
-        logging.warning("ensure_premium_emoji_pack: %s", e)
-        PACK_EMOJI_LOADED = False
-    return PACK_EMOJI_CACHE
-    try:
-        from pyrogram.raw.functions.messages import GetStickerSet
-        from pyrogram.raw.types import InputStickerSetShortName
-        r = await client.invoke(
-            GetStickerSet(
-                stickerset=InputStickerSetShortName(short_name=PREMIUM_EMOJI_PACK_SHORT),
-                hash=0,
-            )
-        )
-        cache = {}
-        for p in (getattr(r, "packs", None) or []):
-            emo = getattr(p, "emoticon", None) or ""
-            docs = getattr(p, "documents", None) or []
-            if emo and docs:
-                eid = int(docs[0])
-                cache[str(emo)] = eid
-                cache[str(emo).replace("️", "").replace("︎", "")] = eid
-        for d in (getattr(r, "documents", None) or []):
-            did = int(getattr(d, "id", 0) or 0)
-            if not did:
-                continue
-            for attr in (getattr(d, "attributes", None) or []):
-                alt = getattr(attr, "alt", None)
-                if alt:
-                    cache[str(alt)] = did
-                    cache[str(alt).replace("️", "").replace("︎", "")] = did
-        PACK_EMOJI_CACHE = cache
-        PACK_EMOJI_LOADED = True
-        logging.info(
-            "premium emoji pack loaded short=%s items=%s",
-            PREMIUM_EMOJI_PACK_SHORT,
-            len(PACK_EMOJI_CACHE),
-        )
-    except Exception as e:
-        logging.warning("ensure_premium_emoji_pack: %s", e)
-        PACK_EMOJI_LOADED = False
-    return PACK_EMOJI_CACHE
-
-
-DEFAULT_EMOJI_CHAR_TO_PREMIUM = {
-    "❤": 5386650613544205592,
-    "❤️": 5386650613544205592,
-    "👍": 5408900743127339898,
-    "🔥": 5409141755087678642,
-    "⭐": 5417916264542682953,
-    "😂": 5431896702279886413,
-    "💰": 5411227513668973897,
-    "👑": 5440661526033634830,
-    "✅": 5411225752743381226,
-    "✔": 5411225752743381226,
-    "♥️": 5386650613544205592,
-}
-DEFAULT_PREMIUM_EMOJIS = {
-    "قلب": 5386650613544205592,
-    "لایک": 5408900743127339898,
-    "آتش": 5409141755087678642,
-    "ستاره": 5417916264542682953,
-    "خنده": 5431896702279886413,
-    "پول": 5411227513668973897,
-    "تاج": 5440661526033634830,
-    "چک": 5411225752743381226,
-}
-
-ANTI_LOGIN_STATUS = {}
-COPY_MODE_STATUS = {}
-PV_LOCK_STATUS = {}
-PV_FILTER_STICKER = {}  # user_id -> bool
-PV_FILTER_GIF = {}  # user_id -> bool
-FORCE_JOIN_PV_STATUS = {}
-FORCE_JOIN_CHANNELS = {}
-EDIT_ALERT_STATUS = {}
-DELETE_ALERT_STATUS = {}
-TTS_VOICE_STATUS = {}
-FIRST_COMMENT_STATUS = {}
-FIRST_COMMENT_TEXT = {}
-SONG_SEARCH_CACHE = {}
-IMAGE_SEARCH_HISTORY = {}  # user_id -> list recent image urls
-  # user_id -> list[{artist, title, query}]
-PENDING_SONG_PICK = {}  # user_id -> True وقتی منتظر انتخاب شماره است
-TYPING_MODE_STATUS = {}
-PLAYING_MODE_STATUS = {}
-ACTION_STATUS = {}
-GLOBAL_ENEMY_STATUS = {}
-ORIGINAL_PROFILE_DATA = {}
-PV_MSG_CACHE = {}
-PROFILE_FLOOD_UNTIL = {}
-PROFILE_NAME_FLOOD_UNTIL = {}
-PROFILE_PHOTO_FLOOD_UNTIL = {}
-PROFILE_PHOTO_LAST_UPLOAD = {}  # user_id -> unix time آخرین آپلود موفق
-PROFILE_PHOTO_MIN_GAP = 50  # حدود یک دقیقه بین آپلودها
+    return f"⚡️ self MR\n📄 صفحه {page}"
 
 
 def can_upload_profile_photo(user_id: int) -> tuple:
@@ -3197,7 +3034,6 @@ def load_all_states():
         BOLD_MODE_STATUS[user_id] = settings.get("bold", False)
         TEXT_FONT_STATUS[user_id] = settings.get("text_font", "none")
         SELF_STATUS[user_id] = bool(settings.get("self_status", True))
-        PANEL_DARK_THEME[user_id] = bool(settings.get("panel_dark", False))
         SECRETARY_MODE_STATUS[user_id] = settings.get("secretary", False)
         SECRETARY_CUSTOM_MESSAGES[user_id] = settings.get("secretary_msg", "")
         AUTO_SEEN_STATUS[user_id] = settings.get("auto_seen", False)
@@ -3375,7 +3211,6 @@ def persist_all_user_settings(user_id: int):
             "bold": BOLD_MODE_STATUS.get(user_id, False),
             "text_font": TEXT_FONT_STATUS.get(user_id, "none"),
             "self_status": bool(SELF_STATUS.get(user_id, True)),
-            "panel_dark": bool(PANEL_DARK_THEME.get(user_id, False)),
             "secretary": SECRETARY_MODE_STATUS.get(user_id, False),
             "secretary_msg": SECRETARY_CUSTOM_MESSAGES.get(user_id, "") or "",
             "auto_seen": AUTO_SEEN_STATUS.get(user_id, False),
@@ -7453,41 +7288,6 @@ async def reply_based_controller(client, message):
         return
 
 
-    # ========== تم شب پنل ==========
-    if cmd in (".پنل تم شب", "پنل تم شب", ".پنل تم روز", "پنل تم روز"):
-        if not is_self_on(user_id):
-            return
-        dark = cmd in (".پنل تم شب", "پنل تم شب")
-        if cmd in (".پنل تم روز", "پنل تم روز"):
-            dark = False
-        else:
-            # toggle if already dark and command is night? user asked only night command
-            # .پنل تم شب → on; if already on stay on; optional toggle: if already dark turn off
-            dark = True
-            if is_panel_dark(user_id):
-                dark = False  # toggle
-        PANEL_DARK_THEME[user_id] = dark
-        try:
-            persist_all_user_settings(user_id)
-        except Exception:
-            try:
-                # fallback if function name differs
-                u = data_manager.get_user_data(user_id)
-                st = u.get("settings") or {}
-                st["panel_dark"] = dark
-                u["settings"] = st
-                data_manager.save_data()
-            except Exception:
-                pass
-        try:
-            if dark:
-                await message.edit_text("🌙 تم شب پنل روشن شد\nدوباره بنویس: `پنل`")
-            else:
-                await message.edit_text("☀️ تم روز پنل فعال شد\nدوباره بنویس: `پنل`")
-        except Exception:
-            pass
-        return
-
     # ========== وضعیت سلف روشن/خاموش ==========
     if cmd in (".سلف روشن", "سلف روشن"):
         SELF_STATUS[user_id] = True
@@ -7537,6 +7337,65 @@ async def reply_based_controller(client, message):
         except Exception as e:
             try:
                 await message.edit_text(f"❌ خطا در ساخت فونت: {e}")
+            except Exception:
+                pass
+        return
+
+
+    # ========== متن رمزی ==========
+    if cmd.startswith(".رمزنگاری") or cmd.startswith("رمزنگاری"):
+        body = cmd
+        for p in (".رمزنگاری", "رمزنگاری"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        if not body and message.reply_to_message:
+            body = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if not body:
+            try:
+                await message.edit_text("❌ مثال:\n`.رمزنگاری + متن شما`")
+            except Exception:
+                pass
+            return
+        try:
+            enc = text_encrypt_smr(body)
+            await message.edit_text(f"🔐 `{enc}`")
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا در رمزنگاری: {e}")
+            except Exception:
+                pass
+        return
+
+    if cmd in (".رمزگشایی", "رمزگشایی") or cmd.startswith(".رمزگشایی") or cmd.startswith("رمزگشایی"):
+        src = ""
+        if message.reply_to_message:
+            src = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if not src:
+            body = cmd
+            for p in (".رمزگشایی", "رمزگشایی"):
+                if body.startswith(p):
+                    body = body[len(p):].strip()
+                    if body.startswith("+"):
+                        body = body[1:].strip()
+                    break
+            src = body
+        if not src:
+            try:
+                await message.edit_text("❌ روی پیام رمز ریپلای کن و بگو:\n`.رمزگشایی`")
+            except Exception:
+                pass
+            return
+        try:
+            # پاک کردن بک‌تیک‌های مونو
+            src2 = src.strip().strip("`").strip()
+            dec = text_decrypt_smr(src2)
+            await message.edit_text(f"🔓 {dec}")
+        except Exception:
+            try:
+                await message.edit_text("❌ رمزگشایی ناموفق — متن رمز معتبر نیست.")
             except Exception:
                 pass
         return
@@ -10361,6 +10220,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🖼 قاب پروفایل کل رنگ‌ها", f"panel_page_60_{user_id}", style="primary"),
             ],
             [
+                _styled_btn("🔐 متن رمزی", f"panel_page_61_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -10476,6 +10338,10 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
     if page == 54:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+    if page == 61:
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -12895,6 +12761,12 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "• بازی / دوز + مبلغ در گپ\n"
                     "• .اسکرین .میو روشن .سندر\n"
                     "• تاریخ / ساعت اسم / قاب پروفایل"
+                ),
+                61: (
+                    "🔐 متن رمزی | self MR\n\n"
+                    "دستورات:\n"
+                    ".رمزنگاری + متن\n"
+                    "ریپلای + .رمزگشایی"
                 ),
 
 

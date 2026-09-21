@@ -7081,7 +7081,7 @@ def _make_fancy_fonts(text: str) -> str:
     """فونت‌های یونیکد زیاد و قابل کپی"""
     text = str(text or "")[:80]
     if not text:
-        return "❌ متن خالی است"
+        return "\n".join(f"`{s}`" for s in out)
 
     def tr(s, table):
         return "".join(table.get(ch, ch) for ch in s)
@@ -7241,7 +7241,75 @@ def _make_fancy_fonts(text: str) -> str:
         seen.add(s)
         out.append(s)
 
-    return "\n".join(out)
+    # هر فونت داخل کد برای کپی راحت
+    return "\n".join(f"`{s}`" for s in out)
+
+
+
+async def apply_golden_profile_frame(client, user_id: int) -> str:
+    """دانلود پروفایل + قاب طلایی لوکس دایره‌ای → مسیر فایل خروجی"""
+    from PIL import Image, ImageDraw, ImageFilter
+    import math
+    size = 640
+    # عکس فعلی پروفایل
+    photos = []
+    async for p in client.get_chat_photos("me", limit=1):
+        photos.append(p)
+    if not photos:
+        raise RuntimeError("عکس پروفایل ندارید")
+    tmp_in = f"profile_in_{user_id}_{int(time.time())}.jpg"
+    tmp_out = f"profile_gold_{user_id}_{int(time.time())}.jpg"
+    await client.download_media(photos[0], file_name=tmp_in)
+    img = Image.open(tmp_in).convert("RGBA")
+    # مربع وسط
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    img = img.crop((left, top, left + side, top + side)).resize((size, size), Image.LANCZOS)
+    # ماسک دایره
+    mask = Image.new("L", (size, size), 0)
+    md = ImageDraw.Draw(mask)
+    pad = 48
+    md.ellipse((pad, pad, size - pad, size - pad), fill=255)
+    circle = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    circle.paste(img, (0, 0))
+    circle.putalpha(mask)
+    # پس‌زمینه تیره نرم
+    canvas = Image.new("RGBA", (size, size), (20, 16, 8, 255))
+    canvas.paste(circle, (0, 0), circle)
+    draw = ImageDraw.Draw(canvas)
+    cx = cy = size // 2
+    # حلقه‌های طلایی چندلایه
+    gold_colors = [
+        (255, 215, 0, 255),
+        (255, 193, 7, 255),
+        (218, 165, 32, 255),
+        (255, 235, 150, 255),
+        (184, 134, 11, 255),
+    ]
+    for i, col in enumerate(gold_colors):
+        r0 = size // 2 - 8 - i * 5
+        r1 = r0 - 4
+        draw.ellipse((cx - r0, cy - r0, cx + r0, cy + r0), outline=col, width=3)
+    # نقاط تزئینی دور قاب
+    outer = size // 2 - 12
+    for k in range(24):
+        ang = (k / 24.0) * 2 * math.pi
+        x = cx + int(outer * math.cos(ang))
+        y = cy + int(outer * math.sin(ang))
+        rr = 5 if k % 3 == 0 else 3
+        draw.ellipse((x - rr, y - rr, x + rr, y + rr), fill=gold_colors[k % len(gold_colors)])
+    # درخشش ملایم
+    glow = canvas.filter(ImageFilter.GaussianBlur(2))
+    canvas = Image.blend(canvas, glow, 0.25)
+    out = canvas.convert("RGB")
+    out.save(tmp_out, "JPEG", quality=95)
+    try:
+        os.remove(tmp_in)
+    except Exception:
+        pass
+    return tmp_out
 
 
 async def reply_based_controller(client, message):
@@ -7373,15 +7441,42 @@ async def reply_based_controller(client, message):
             if isinstance(result, float) and result == int(result):
                 result = int(result)
             await message.edit_text(
-                f"🧮 ماشین حساب | self MR\n\n"
-                f"`{body}`\n"
-                f"= `{result}`"
+                f"🧮 `{body} = {result}`"
             )
         except Exception as e:
             try:
                 await message.edit_text(f"❌ خطا در محاسبه:\n`{body}`")
             except Exception:
                 pass
+        return
+
+    # ========== قاب طلایی پروفایل ==========
+    if cmd in (".قاب طلایی", "قاب طلایی", ".قاب طلايي", "قاب طلايي"):
+        if not is_self_on(user_id):
+            return
+        try:
+            await message.edit_text("⏳ در حال ساخت قاب طلایی...")
+        except Exception:
+            pass
+        path = None
+        try:
+            path = await apply_golden_profile_frame(client, user_id)
+            await client.set_profile_photo(photo=path)
+            try:
+                await message.edit_text("✅ قاب طلایی روی پروفایل ست شد | self MR")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا در قاب طلایی:\n{e}")
+            except Exception:
+                pass
+        finally:
+            if path:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
         return
 
 
@@ -10062,6 +10157,9 @@ def build_panel_keyboard(user_id, page=1):
             [
                 _styled_btn("🔑 پسوورد ساز", f"panel_page_58_{user_id}", style="primary"),
                 _styled_btn("🧮 ماشین حساب", f"panel_page_59_{user_id}", style="primary"),
+                _styled_btn("🖼 قاب پروفایل", f"panel_page_60_{user_id}", style="primary"),
+            ],
+            [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
             ],
         ]
@@ -12482,6 +12580,13 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     ".حساب 2*2\n"
                     ".حساب 25*4+10"
                 ),
+                60: (
+                    "🖼 قاب پروفایل | self MR\n\n"
+                    "دستورات:\n"
+                    ".قاب طلایی\n\n"
+                    "دور عکس پروفایل یک قاب طلایی زیبا می‌گذارد."
+                ),
+
 
             }
             try:

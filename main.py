@@ -7246,28 +7246,42 @@ def _make_fancy_fonts(text: str) -> str:
 
 
 
+
 async def apply_golden_profile_frame(client, user_id: int) -> str:
     """دانلود پروفایل + قاب طلایی لوکس دایره‌ای → مسیر فایل خروجی"""
     from PIL import Image, ImageDraw, ImageFilter
     import math
+    import tempfile
     size = 640
-    # عکس فعلی پروفایل
     photos = []
     async for p in client.get_chat_photos("me", limit=1):
         photos.append(p)
     if not photos:
         raise RuntimeError("عکس پروفایل ندارید")
-    tmp_in = f"profile_in_{user_id}_{int(time.time())}.jpg"
-    tmp_out = f"profile_gold_{user_id}_{int(time.time())}.jpg"
-    await client.download_media(photos[0], file_name=tmp_in)
+
+    tmp_dir = tempfile.gettempdir()
+    tmp_in = os.path.join(tmp_dir, f"profile_in_{user_id}_{int(time.time())}.jpg")
+    tmp_out = os.path.join(tmp_dir, f"profile_gold_{user_id}_{int(time.time())}.jpg")
+
+    # download_media مسیر واقعی را برمی‌گرداند
+    downloaded = await client.download_media(photos[0], file_name=tmp_in)
+    if not downloaded:
+        # روش دوم: با file_id
+        try:
+            downloaded = await client.download_media(photos[0])
+        except Exception:
+            downloaded = None
+    if not downloaded or not os.path.exists(str(downloaded)):
+        raise RuntimeError("دانلود عکس پروفایل ناموفق بود")
+    tmp_in = str(downloaded)
+
     img = Image.open(tmp_in).convert("RGBA")
-    # مربع وسط
     w, h = img.size
     side = min(w, h)
     left = (w - side) // 2
     top = (h - side) // 2
     img = img.crop((left, top, left + side, top + side)).resize((size, size), Image.LANCZOS)
-    # ماسک دایره
+
     mask = Image.new("L", (size, size), 0)
     md = ImageDraw.Draw(mask)
     pad = 48
@@ -7275,12 +7289,11 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
     circle = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     circle.paste(img, (0, 0))
     circle.putalpha(mask)
-    # پس‌زمینه تیره نرم
+
     canvas = Image.new("RGBA", (size, size), (20, 16, 8, 255))
     canvas.paste(circle, (0, 0), circle)
     draw = ImageDraw.Draw(canvas)
     cx = cy = size // 2
-    # حلقه‌های طلایی چندلایه
     gold_colors = [
         (255, 215, 0, 255),
         (255, 193, 7, 255),
@@ -7290,9 +7303,7 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
     ]
     for i, col in enumerate(gold_colors):
         r0 = size // 2 - 8 - i * 5
-        r1 = r0 - 4
         draw.ellipse((cx - r0, cy - r0, cx + r0, cy + r0), outline=col, width=3)
-    # نقاط تزئینی دور قاب
     outer = size // 2 - 12
     for k in range(24):
         ang = (k / 24.0) * 2 * math.pi
@@ -7300,15 +7311,17 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
         y = cy + int(outer * math.sin(ang))
         rr = 5 if k % 3 == 0 else 3
         draw.ellipse((x - rr, y - rr, x + rr, y + rr), fill=gold_colors[k % len(gold_colors)])
-    # درخشش ملایم
     glow = canvas.filter(ImageFilter.GaussianBlur(2))
     canvas = Image.blend(canvas, glow, 0.25)
     out = canvas.convert("RGB")
     out.save(tmp_out, "JPEG", quality=95)
     try:
-        os.remove(tmp_in)
+        if os.path.exists(tmp_in) and tmp_in != tmp_out:
+            os.remove(tmp_in)
     except Exception:
         pass
+    if not os.path.exists(tmp_out):
+        raise RuntimeError("ذخیره تصویر خروجی ناموفق بود")
     return tmp_out
 
 

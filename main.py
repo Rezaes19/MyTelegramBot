@@ -11593,6 +11593,42 @@ async def _callback_panel_handler_impl(client, callback, data: str):
         await mm_edit(callback, shop_text(uid), shop_keyboard_for(uid))
         return
 
+
+    # ===== مافیا لابی دکمه‌ای =====
+    if data.startswith("mafia_join_"):
+        try:
+            chat_id = int(data.split("mafia_join_", 1)[1])
+        except Exception:
+            await callback.answer("خطا", show_alert=True)
+            return
+        msg = await _mafia_try_join(callback.from_user, chat_id)
+        game = MAFIA_GAMES.get(chat_id)
+        if game and game.get("phase") == "lobby":
+            try:
+                await callback.message.edit_text(
+                    _mafia_lobby_text(game),
+                    reply_markup=_mafia_lobby_keyboard(chat_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+        await callback.answer(msg[:180], show_alert=True)
+        return
+
+    if data.startswith("mafia_cancel_"):
+        try:
+            chat_id = int(data.split("mafia_cancel_", 1)[1])
+        except Exception:
+            await callback.answer("خطا", show_alert=True)
+            return
+        msg = await _mafia_try_cancel(callback.from_user.id, chat_id)
+        try:
+            await callback.message.edit_text(msg)
+        except Exception:
+            pass
+        await callback.answer(msg[:180], show_alert=True)
+        return
+
     if data.startswith("order_ok_"):
         await callback.answer()
         if callback.from_user.id not in GOD_ADMIN_IDS:
@@ -14765,17 +14801,100 @@ async def _mafia_check_win(game):
     return False
 
 
+
+def _mafia_lobby_text(game) -> str:
+    n = len(game.get("players") or {})
+    need = int(game.get("need_players") or MAFIA_MIN_PLAYERS)
+    bet = int(game.get("bet") or 0)
+    lobby_sec = int(game.get("lobby_sec") or MAFIA_JOIN_SEC)
+    bet_line = f"\n💰 شرط هر نفر: <code>{bet:,}</code> الماس" if bet else "\n🏆 جایزه: برنده ۵۰ / بازنده ۱۰ الماس"
+    return (
+        f"🎭 <b>بازی مافیا شروع شد!</b>\n"
+        f"👥 بازیکن‌ها: <b>{n}</b> / <b>{need}</b>{bet_line}\n"
+        f"⏳ زمان لابی: <b>{lobby_sec}</b> ثانیه\n\n"
+        f"با دکمه زیر عضو شوید یا لغو کنید."
+    )
+
+
+def _mafia_lobby_keyboard(chat_id: int):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ عضو شدن", callback_data=f"mafia_join_{chat_id}"),
+            InlineKeyboardButton("🛑 لغو", callback_data=f"mafia_cancel_{chat_id}"),
+        ]
+    ])
+
+
+async def _mafia_try_join(user, chat_id: int) -> str:
+    """عضویت در لابی — پیام نتیجه برمی‌گرداند"""
+    uid = user.id
+    game = MAFIA_GAMES.get(chat_id)
+    if not game or game.get("phase") != "lobby":
+        return "❌ لابی فعالی نیست."
+    if uid in game["players"]:
+        return "قبلاً عضو شدی."
+    if uid in MAFIA_USER_CHAT:
+        return "❌ در بازی دیگری هستی."
+    need = int(game.get("need_players") or MAFIA_MIN_PLAYERS)
+    if len(game["players"]) >= need:
+        return f"❌ ظرفیت کامل است ({need} نفر)."
+    if len(game["players"]) >= MAFIA_MAX_PLAYERS:
+        return f"❌ ظرفیت کامل است (حداکثر {MAFIA_MAX_PLAYERS})."
+    bet = int(game.get("bet") or 0)
+    if bet > 0:
+        if get_balance(uid) < bet:
+            return f"❌ برای عضویت به {bet:,} الماس نیاز دارید."
+        if not deduct_balance(uid, bet):
+            return "❌ کسر الماس ناموفق."
+    game["players"][uid] = {
+        "name": user.first_name or str(uid),
+        "username": user.username or "",
+        "role": None,
+        "alive": True,
+    }
+    MAFIA_USER_CHAT[uid] = chat_id
+    return f"✅ عضو شدی! ({len(game['players'])}/{need})"
+
+
+async def _mafia_try_cancel(user_id: int, chat_id: int) -> str:
+    game = MAFIA_GAMES.get(chat_id)
+    if not game:
+        return "❌ بازی‌ای نیست."
+    if game.get("phase") != "lobby":
+        return "❌ فقط در لابی می‌توان لغو کرد."
+    if user_id != game.get("host_id") and user_id not in GOD_ADMIN_IDS:
+        return "❌ فقط میزبان می‌تواند لغو کند."
+    await _mafia_refund_all(game)
+    for uid in list(game["players"].keys()):
+        MAFIA_USER_CHAT.pop(uid, None)
+    MAFIA_GAMES.pop(chat_id, None)
+    return "🛑 بازی مافیا لغو شد و الماس‌ها برگردانده شد."
+
+
 async def mafia_game_loop(chat_id: int):
     """حلقه اصلی بازی بعد از لابی"""
     try:
-        await asyncio.sleep(MAFIA_JOIN_SEC)
+        game0 = MAFIA_GAMES.get(chat_id) or {}
+        lobby_sec = int(game0.get("lobby_sec") or MAFIA_JOIN_SEC)
+        need = int(game0.get("need_players") or MAFIA_MIN_PLAYERS)
+        # صبر لابی — اگر زودتر ظرفیت پر شد، حلقه زودتر ادامه می‌دهد
+        waited = 0
+        while waited < lobby_sec:
+            await asyncio.sleep(1)
+            waited += 1
+            g = MAFIA_GAMES.get(chat_id)
+            if not g or g.get("phase") != "lobby":
+                return
+            if len(g["players"]) >= int(g.get("need_players") or need):
+                break
         game = MAFIA_GAMES.get(chat_id)
         if not game or game.get("phase") != "lobby":
             return
         n = len(game["players"])
-        if n < MAFIA_MIN_PLAYERS:
+        need = int(game.get("need_players") or MAFIA_MIN_PLAYERS)
+        if n < need:
             await _mafia_refund_all(game)
-            await _mafia_group(chat_id, f"❌ بازی لغو شد — حداقل {MAFIA_MIN_PLAYERS} نفر لازم است.")
+            await _mafia_group(chat_id, f"❌ بازی لغو شد — حداقل {need} نفر لازم بود (فعلی: {n}).")
             for uid in list(game["players"].keys()):
                 MAFIA_USER_CHAT.pop(uid, None)
             MAFIA_GAMES.pop(chat_id, None)
@@ -15004,7 +15123,10 @@ async def group_handler(client, message):
             await message.reply_text("❌ شما الان در یک بازی مافیا هستید.")
             return
         bet = 0
+        need_players = MAFIA_MIN_PLAYERS
+        lobby_sec = MAFIA_JOIN_SEC
         parts = mafia_text.replace(".مافیا", "مافیا").split()
+        # .مافیا [الماس] [تعداد نفر]
         if len(parts) >= 2 and parts[1].isdigit():
             bet = int(parts[1])
             if bet < 0:
@@ -15012,6 +15134,14 @@ async def group_handler(client, message):
             if bet > 0 and bet < 10:
                 await message.reply_text("❌ حداقل شرط مافیا ۱۰ الماس است.")
                 return
+        if len(parts) >= 3 and parts[2].isdigit():
+            need_players = int(parts[2])
+            if need_players < MAFIA_MIN_PLAYERS:
+                need_players = MAFIA_MIN_PLAYERS
+            if need_players > MAFIA_MAX_PLAYERS:
+                need_players = MAFIA_MAX_PLAYERS
+        # زمان لابی متناسب با ظرفیت (حداقل ۳۰، به ازای هر نفر اضافه +۵ تا ۹۰)
+        lobby_sec = min(90, max(MAFIA_JOIN_SEC, 20 + need_players * 5))
         if bet > 0:
             if get_balance(user_id) < bet:
                 await message.reply_text("❌ الماس کافی برای شروع بازی ندارید.")
@@ -15024,6 +15154,8 @@ async def group_handler(client, message):
             "chat_id": chat_id,
             "host_id": user_id,
             "bet": bet,
+            "need_players": need_players,
+            "lobby_sec": lobby_sec,
             "phase": "lobby",
             "players": {
                 user_id: {
@@ -15037,74 +15169,44 @@ async def group_handler(client, message):
             "night": {},
             "day_votes": {},
             "vote_map": {},
+            "lobby_msg_id": None,
         }
         MAFIA_GAMES[chat_id] = game
         MAFIA_USER_CHAT[user_id] = chat_id
-        bet_line = f"\n💰 شرط هر نفر: <code>{bet:,}</code> الماس" if bet else "\n🏆 جایزه: برنده ۵۰ / بازنده ۱۰ الماس"
-        await message.reply_text(
-            f"🎭 <b>بازی مافیا شروع شد!</b>\n"
-            f"👥 تعداد بازیکن‌ها: <b>1</b> نفر{bet_line}\n\n"
-            f"⏳ {MAFIA_JOIN_SEC} ثانیه فرصت دارید تا عضو بشید\n"
-            f"برای عضو شدن: <code>.عضو</code>\n"
-            f"برای لغو (میزبان): <code>.لغو</code>",
+        sent = await message.reply_text(
+            _mafia_lobby_text(game),
+            reply_markup=_mafia_lobby_keyboard(chat_id),
             parse_mode=ParseMode.HTML,
         )
+        try:
+            game["lobby_msg_id"] = sent.id
+        except Exception:
+            pass
         asyncio.create_task(mafia_game_loop(chat_id))
         return
 
     if mafia_text in (".عضو", "عضو"):
         chat_id = message.chat.id
+        msg = await _mafia_try_join(message.from_user, chat_id)
         game = MAFIA_GAMES.get(chat_id)
-        if not game or game.get("phase") != "lobby":
-            await message.reply_text("❌ لابی فعالی نیست. با <code>.مافیا</code> شروع کنید.", parse_mode=ParseMode.HTML)
-            return
-        if user_id in game["players"]:
-            await message.reply_text("قبلاً عضو شدی.")
-            return
-        if user_id in MAFIA_USER_CHAT:
-            await message.reply_text("❌ در بازی دیگری هستی.")
-            return
-        if len(game["players"]) >= MAFIA_MAX_PLAYERS:
-            await message.reply_text(f"❌ ظرفیت کامل است (حداکثر {MAFIA_MAX_PLAYERS} نفر).")
-            return
-        bet = int(game.get("bet") or 0)
-        if bet > 0:
-            if get_balance(user_id) < bet:
-                await message.reply_text(f"❌ برای عضویت به {bet:,} الماس نیاز دارید.")
-                return
-            if not deduct_balance(user_id, bet):
-                await message.reply_text("❌ کسر الماس ناموفق.")
-                return
-        u = message.from_user
-        game["players"][user_id] = {
-            "name": u.first_name or str(user_id),
-            "username": u.username or "",
-            "role": None,
-            "alive": True,
-        }
-        MAFIA_USER_CHAT[user_id] = chat_id
-        await message.reply_text(
-            f"✅ عضو شدی!\n👥 تعداد: <b>{len(game['players'])}</b> / {MAFIA_MAX_PLAYERS}",
-            parse_mode=ParseMode.HTML,
-        )
+        if game and game.get("phase") == "lobby" and game.get("lobby_msg_id"):
+            try:
+                await manager_bot.edit_message_text(
+                    chat_id,
+                    game["lobby_msg_id"],
+                    _mafia_lobby_text(game),
+                    reply_markup=_mafia_lobby_keyboard(chat_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+        await message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
 
     if mafia_text in (".لغو", "لغو"):
         chat_id = message.chat.id
-        game = MAFIA_GAMES.get(chat_id)
-        if not game:
-            return
-        if game.get("phase") != "lobby":
-            await message.reply_text("❌ فقط در مرحله عضویت می‌توان لغو کرد.")
-            return
-        if user_id != game.get("host_id") and user_id not in GOD_ADMIN_IDS:
-            await message.reply_text("❌ فقط میزبان می‌تواند بازی را لغو کند.")
-            return
-        await _mafia_refund_all(game)
-        for uid in list(game["players"].keys()):
-            MAFIA_USER_CHAT.pop(uid, None)
-        MAFIA_GAMES.pop(chat_id, None)
-        await message.reply_text("🛑 بازی مافیا لغو شد و الماس‌ها برگردانده شد.")
+        msg = await _mafia_try_cancel(user_id, chat_id)
+        await message.reply_text(msg)
         return
 
     if mafia_text.startswith(".رای") or mafia_text.startswith("رای "):

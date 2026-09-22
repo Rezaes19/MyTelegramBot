@@ -562,6 +562,15 @@ REFERRAL_REWARD = 75     # پاداش زیرمجموعه
 MIN_GAME_AMOUNT = 20     # حداقل مبلغ نبرد
 TRANSFER_TAX_PERCENT = 10
 GAME_TAX_PERCENT = 5
+DIAMOND_PRICE_TOMAN = 30  # قیمت هر الماس (تومان)
+MIN_BUY_DIAMONDS = 1000  # حداقل خرید
+SHOP_STEP = 100  # گام +/-
+CARD_NUMBER = os.environ.get("CARD_NUMBER", "6037-****-****-****").strip()
+CARD_OWNER = os.environ.get("CARD_OWNER", "self MR").strip()
+SHOP_CART = {}  # user_id -> qty
+PENDING_RECEIPTS = {}  # user_id -> {qty, amount, ts}
+ADMIN_PENDING_ORDERS = {}  # order_id -> {user_id, qty, amount}
+
 
 # نبردهای فعال: (chat_id, message_id) -> info
 active_games = {}
@@ -622,18 +631,28 @@ def text_encrypt_smr(text: str) -> str:
 
 def text_decrypt_smr(text: str) -> str:
     import base64
-    s = (text or "").strip()
-    if s.startswith(_SMR_CRYPT_PREFIX):
-        s = s[len(_SMR_CRYPT_PREFIX):]
-    # padding
+    import re as _re
+    raw = (text or "").strip()
+    # استخراج توکن از متن (با یا بدون پیشوند/ایموجی/بک‌تیک)
+    m = _re.search(r"(?:SMR1\.)([A-Za-z0-9_\-]+)", raw)
+    if m:
+        s = m.group(1)
+    else:
+        s = raw
+        for ch in ("🔐", "`", " ", "\n", "\r"):
+            s = s.replace(ch, "")
+        if s.startswith(_SMR_CRYPT_PREFIX):
+            s = s[len(_SMR_CRYPT_PREFIX):]
+        s = s.strip()
+    if not s:
+        raise ValueError("متن رمز معتبر نیست")
     pad = "=" * (-len(s) % 4)
     try:
         return base64.urlsafe_b64decode(s + pad).decode("utf-8")
     except Exception:
-        # اگر کل پیام چند خط است، خط دارای پیشوند را پیدا کن
-        for line in (text or "").splitlines():
-            line = line.strip()
-            if line.startswith(_SMR_CRYPT_PREFIX):
+        for line in raw.splitlines():
+            line = line.strip().strip("`")
+            if "SMR1." in line:
                 return text_decrypt_smr(line)
         raise ValueError("متن رمز معتبر نیست")
 
@@ -11427,38 +11446,194 @@ async def _callback_panel_handler_impl(client, callback, data: str):
         )
         return
 
+
     if data == "mm_account":
         await callback.answer()
         uid = callback.from_user.id
         session_info = get_session_by_user_id(uid)
         has_self = "✅ فعال" if session_info else "❌ غیرفعال"
-        await mm_edit(
-            callback,
-            f"👤 **حساب کاربری | self MR**\n\n"
-            f"🆔 آیدی: `{uid}`\n"
-            f"💎 موجودی: `{get_balance(uid):,}` الماس\n"
-            f"🔐 سلف: {has_self}\n"
-            f"💰 هزینه فعال‌سازی: `{SELF_PRICE}`\n"
-            f"⏰ کسر ساعتی: `{HOURLY_COST}`",
-            [[_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")]],
+        try:
+            db = get_user_db(uid)
+            cur = db.cursor()
+            cur.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (uid,))
+            ref_cnt = (cur.fetchone() or [0])[0]
+            db.close()
+        except Exception:
+            ref_cnt = 0
+        bal = get_balance(uid)
+        toman = bal * DIAMOND_PRICE_TOMAN
+        phone = ""
+        try:
+            if session_info and len(session_info) >= 1:
+                phone = session_info[0] or ""
+        except Exception:
+            phone = ""
+        phone_line = f"`{phone}`" if phone else "—"
+        text = (
+            "💳 **حساب کاربری | self MR**\n\n"
+            f"🔑 آیدی عددی:\n`{uid}`\n\n"
+            f"📁 تعداد رفرال: `{ref_cnt}`\n\n"
+            f"📱 شماره ثبت‌شده:\n{phone_line}\n\n"
+            f"💎 موجودی الماس: `{bal:,}`\n\n"
+            f"💵 معادل تومانی: `{toman:,}` تومان\n\n"
+            f"🔐 سلف: {has_self}"
         )
-        return
-
-    if data == "mm_buy":
-        await callback.answer()
         await mm_edit(
             callback,
-            f"🛒 **خرید الماس | self MR**\n\n"
-            f"برای خرید الماس با پشتیبانی در ارتباط باشید:\n"
-            f"@{SUPPORT_USERNAME}",
+            text,
             [
-                [_mm_btn("🛡 پشتیبانی", url=f"https://t.me/{SUPPORT_USERNAME}", style="primary")],
+                [
+                    _mm_btn("🔁 انتقال الماس", callback_data="mm_transfer", style="primary"),
+                    _mm_btn("🛒 خرید الماس", callback_data="mm_buy", style="success"),
+                ],
                 [_mm_btn("🔙 بازگشت", callback_data="mm_home", style="danger")],
             ],
         )
         return
 
-    # ===== کیبورد عددی کد لاگین =====
+    if data == "mm_transfer":
+        await callback.answer()
+        await mm_edit(
+            callback,
+            "🔁 **انتقال الماس | self MR**\n\n"
+            "روی پیام کاربر در گپ/پیوی ریپلای کنید و بنویسید:\n"
+            "`انتقال 100`\n"
+            "یا\n"
+            "`انتقال الماس 100`\n\n"
+            "کارمزد طبق تنظیمات سیستم کسر می‌شود.",
+            [[_mm_btn("🔙 بازگشت", callback_data="mm_account", style="danger")]],
+        )
+        return
+
+    if data == "mm_buy":
+        await callback.answer()
+        uid = callback.from_user.id
+        if uid not in SHOP_CART:
+            SHOP_CART[uid] = MIN_BUY_DIAMONDS
+        await mm_edit(callback, shop_text(uid), shop_keyboard_for(uid))
+        return
+
+    if data == "shop_noop":
+        await callback.answer()
+        return
+
+    if data == "shop_plus":
+        await callback.answer()
+        uid = callback.from_user.id
+        SHOP_CART[uid] = shop_cart_qty(uid) + SHOP_STEP
+        await mm_edit(callback, shop_text(uid), shop_keyboard_for(uid))
+        return
+
+    if data == "shop_minus":
+        await callback.answer()
+        uid = callback.from_user.id
+        SHOP_CART[uid] = max(MIN_BUY_DIAMONDS, shop_cart_qty(uid) - SHOP_STEP)
+        await mm_edit(callback, shop_text(uid), shop_keyboard_for(uid))
+        return
+
+    if data == "shop_manual":
+        await callback.answer()
+        uid = callback.from_user.id
+        ADMIN_STATES[uid] = "shop_manual_qty"
+        await mm_edit(
+            callback,
+            f"✏️ تعداد الماس را به‌صورت عدد بفرستید\nحداقل: `{MIN_BUY_DIAMONDS:,}`",
+            [[_mm_btn("🔙 بازگشت", callback_data="mm_buy", style="danger")]],
+        )
+        return
+
+    if data == "shop_confirm":
+        await callback.answer()
+        uid = callback.from_user.id
+        if shop_cart_qty(uid) < MIN_BUY_DIAMONDS:
+            await callback.answer(f"حداقل خرید {MIN_BUY_DIAMONDS} الماس است", show_alert=True)
+            return
+        await mm_edit(
+            callback,
+            checkout_text(uid),
+            [
+                [_mm_btn("💳 کارت به کارت", callback_data="shop_card", style="success")],
+                [_mm_btn("🔙 بازگشت", callback_data="mm_buy", style="danger")],
+            ],
+        )
+        return
+
+    if data == "shop_card":
+        await callback.answer()
+        uid = callback.from_user.id
+        q = shop_cart_qty(uid)
+        PENDING_RECEIPTS[uid] = {"qty": q, "amount": q * DIAMOND_PRICE_TOMAN, "ts": time.time()}
+        ADMIN_STATES[uid] = "wait_receipt"
+        await mm_edit(
+            callback,
+            card_pay_text(uid),
+            [[_mm_btn("❌ لغو", callback_data="shop_cancel", style="danger")]],
+        )
+        return
+
+    if data == "shop_cancel":
+        await callback.answer("لغو شد")
+        uid = callback.from_user.id
+        PENDING_RECEIPTS.pop(uid, None)
+        if ADMIN_STATES.get(uid) in ("wait_receipt", "shop_manual_qty"):
+            ADMIN_STATES.pop(uid, None)
+        await mm_edit(callback, shop_text(uid), shop_keyboard_for(uid))
+        return
+
+    if data.startswith("order_ok_"):
+        await callback.answer()
+        if callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("فقط ادمین", show_alert=True)
+            return
+        try:
+            oid = data.split("order_ok_", 1)[1]
+            order = ADMIN_PENDING_ORDERS.pop(oid, None)
+            if not order:
+                await callback.answer("سفارش پیدا نشد", show_alert=True)
+                return
+            uid = int(order["user_id"])
+            qty = int(order["qty"])
+            add_balance(uid, qty)
+            try:
+                await manager_bot.send_message(
+                    uid,
+                    f"✅ **پرداخت تایید شد | self MR**\n\n💎 `{qty:,}` الماس واریز شد.\nموجودی: `{get_balance(uid):,}`",
+                )
+            except Exception:
+                pass
+            try:
+                await callback.message.reply_text(f"✅ تایید شد — +{qty:,} الماس برای `{uid}`")
+            except Exception:
+                pass
+        except Exception as e:
+            logging.warning("order_ok: %s", e)
+        return
+
+    if data.startswith("order_no_"):
+        await callback.answer()
+        if callback.from_user.id not in GOD_ADMIN_IDS:
+            await callback.answer("فقط ادمین", show_alert=True)
+            return
+        try:
+            oid = data.split("order_no_", 1)[1]
+            order = ADMIN_PENDING_ORDERS.pop(oid, None)
+            if order:
+                try:
+                    await manager_bot.send_message(
+                        int(order["user_id"]),
+                        "❌ پرداخت شما رد شد.\nدر صورت واریز با پشتیبانی در ارتباط باشید.",
+                    )
+                except Exception:
+                    pass
+            try:
+                await callback.message.reply_text("❌ سفارش رد شد.")
+            except Exception:
+                pass
+        except Exception as e:
+            logging.warning("order_no: %s", e)
+        return
+
+# ===== کیبورد عددی کد لاگین =====
     if data.startswith("login_d_") or data in ("login_del", "login_ok", "login_resend"):
         chat_id = callback.message.chat.id
         st = LOGIN_STATES.get(chat_id)
@@ -13171,6 +13346,69 @@ def _mm_btn(text, callback_data=None, url=None, style=None):
     if style in ("primary", "success", "danger"):
         b["style"] = style
     return b
+
+
+
+def shop_cart_qty(user_id: int) -> int:
+    q = int(SHOP_CART.get(int(user_id), MIN_BUY_DIAMONDS) or MIN_BUY_DIAMONDS)
+    if q < MIN_BUY_DIAMONDS:
+        q = MIN_BUY_DIAMONDS
+    SHOP_CART[int(user_id)] = q
+    return q
+
+
+def shop_text(user_id: int) -> str:
+    q = shop_cart_qty(user_id)
+    total = q * DIAMOND_PRICE_TOMAN
+    return (
+        f"🛒 **فروشگاه الماس | self MR**\n\n"
+        f"تعداد انتخابی: `{q:,}` الماس\n"
+        f"💰 قیمت هر الماس: `{DIAMOND_PRICE_TOMAN:,}` تومان\n"
+        f"🧺 جمع سبد خرید: `{total:,}` تومان\n\n"
+        f"تعداد را تنظیم کن و سپس تایید را بزن.\n"
+        f"⚠️ حداقل خرید: `{MIN_BUY_DIAMONDS:,}` الماس"
+    )
+
+
+def shop_keyboard_for(user_id: int):
+    q = shop_cart_qty(user_id)
+    return [
+        [_mm_btn("⚙️ تنظیم دستی", callback_data="shop_manual", style="primary")],
+        [
+            _mm_btn("➖ کمتر", callback_data="shop_minus", style="danger"),
+            _mm_btn(f"{q:,}", callback_data="shop_noop", style="primary"),
+            _mm_btn("➕ بیشتر", callback_data="shop_plus", style="success"),
+        ],
+        [_mm_btn("✅ تایید", callback_data="shop_confirm", style="success")],
+        [_mm_btn("🔙 بازگشت", callback_data="mm_account", style="danger")],
+    ]
+
+
+def checkout_text(user_id: int) -> str:
+    q = shop_cart_qty(user_id)
+    total = q * DIAMOND_PRICE_TOMAN
+    return (
+        f"🚀 **تسویه سبد خرید | self MR**\n\n"
+        f"💎 تعداد: `{q:,}` الماس\n"
+        f"💵 مبلغ نهایی: `{total:,}` تومان\n\n"
+        f"⚠️ حداقل خرید: `{MIN_BUY_DIAMONDS:,}` الماس\n\n"
+        f"روش پرداخت را انتخاب کنید:"
+    )
+
+
+def card_pay_text(user_id: int) -> str:
+    q = shop_cart_qty(user_id)
+    total = q * DIAMOND_PRICE_TOMAN
+    return (
+        f"💳 **پرداخت کارت‌به‌کارت | self MR**\n\n"
+        f"💎 تعداد: `{q:,}` الماس\n"
+        f"💵 مبلغ: `{total:,}` تومان\n\n"
+        f"📎 شماره کارت:\n`{CARD_NUMBER}`\n"
+        f"👤 به نام: {CARD_OWNER}\n\n"
+        f"پس از واریز، **عکس رسید** را همین‌جا بفرستید.\n"
+        f"ادمین بررسی می‌کند و الماس واریز می‌شود.\n\n"
+        f"برای انصراف دکمه لغو را بزنید."
+    )
 
 
 def main_menu_keyboard():
@@ -15102,6 +15340,79 @@ async def start_helper_bot():
         HELPER_BOT_ENABLED = False
         HELPER_BOT_INSTANCE = None
         return None
+
+
+
+
+
+@manager_bot.on_message(filters.private & filters.photo & filters.incoming)
+async def wait_receipt_photo_handler(client, message):
+    """دریافت عکس رسید خرید الماس"""
+    try:
+        uid = message.from_user.id if message.from_user else 0
+        if ADMIN_STATES.get(uid) != "wait_receipt":
+            return
+        info = PENDING_RECEIPTS.get(uid) or {}
+        qty = int(info.get("qty") or shop_cart_qty(uid))
+        amount = int(info.get("amount") or qty * DIAMOND_PRICE_TOMAN)
+        oid = f"{uid}_{int(time.time())}"
+        ADMIN_PENDING_ORDERS[oid] = {"user_id": uid, "qty": qty, "amount": amount}
+        ADMIN_STATES.pop(uid, None)
+        PENDING_RECEIPTS.pop(uid, None)
+        caption = (
+            f"🧾 **رسید خرید الماس**\n\n"
+            f"👤 کاربر: `{uid}`\n"
+            f"💎 تعداد: `{qty:,}`\n"
+            f"💵 مبلغ: `{amount:,}` تومان\n"
+            f"🆔 سفارش: `{oid}`"
+        )
+        for admin in GOD_ADMIN_IDS:
+            try:
+                await client.send_photo(
+                    admin,
+                    message.photo.file_id,
+                    caption=caption,
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("✅ تایید و واریز", callback_data=f"order_ok_{oid}"),
+                            InlineKeyboardButton("❌ رد", callback_data=f"order_no_{oid}"),
+                        ]
+                    ]),
+                )
+            except Exception as e:
+                logging.warning("send receipt to admin %s: %s", admin, e)
+        await message.reply_text(
+            "✅ رسید دریافت شد و برای ادمین ارسال شد.\nپس از تایید، الماس به حسابتان واریز می‌شود."
+        )
+    except Exception as e:
+        logging.warning("wait_receipt_photo_handler: %s", e)
+
+
+@manager_bot.on_message(filters.private & filters.text & filters.incoming & ~filters.command(["start", "Start"]))
+async def shop_manual_qty_handler(client, message):
+    """تنظیم دستی تعداد الماس فروشگاه"""
+    try:
+        uid = message.from_user.id if message.from_user else 0
+        if ADMIN_STATES.get(uid) != "shop_manual_qty":
+            return
+        txt = (message.text or "").strip().replace(",", "").replace("،", "")
+        if not txt.isdigit():
+            await message.reply_text("❌ فقط عدد بفرستید (مثال: 2000)")
+            return
+        q = int(txt)
+        if q < MIN_BUY_DIAMONDS:
+            await message.reply_text(f"❌ حداقل خرید `{MIN_BUY_DIAMONDS:,}` الماس است.")
+            return
+        SHOP_CART[uid] = q
+        ADMIN_STATES.pop(uid, None)
+        await message.reply_text(
+            shop_text(uid),
+            reply_markup=None,
+        )
+        # نمایش دوباره با دکمه‌های رنگی سخت است بدون callback؛ کاربر دوباره خرید را باز کند
+        await message.reply_text("✅ تعداد ذخیره شد. از منو دوباره **خرید الماس** را باز کنید.")
+    except Exception as e:
+        logging.warning("shop_manual_qty_handler: %s", e)
 
 
 

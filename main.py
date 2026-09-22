@@ -579,6 +579,19 @@ DOOZ_TIMERS = {}  # (chat_id, msg_id) -> asyncio.Task
 DOOZ_TURN_SEC = 30
 DOOZ_LAST_RESULT = {}  # key -> {text,prize,wbal,lbal}
 
+# ===== مافیا =====
+MAFIA_GAMES = {}  # chat_id -> game dict
+MAFIA_USER_CHAT = {}  # user_id -> chat_id (بازی فعال)
+MAFIA_JOIN_SEC = 30
+MAFIA_NIGHT_SEC = 40
+MAFIA_DISCUSS_SEC = 120
+MAFIA_VOTE_SEC = 30
+MAFIA_WIN_PRIZE = 50
+MAFIA_LOSE_PRIZE = 10
+MAFIA_MIN_PLAYERS = 5
+MAFIA_MAX_PLAYERS = 15
+
+
 
 # نقشه رمز ایموجی (حروف فارسی/انگلیسی/عدد)
 _EMOJI_CIPHER = {
@@ -14611,6 +14624,363 @@ async def private_handler(client, message):
 # =============================================
 # هندلر گروه
 # =============================================
+
+# =============================================
+# 🎭 سیستم بازی مافیا
+# =============================================
+
+def _mafia_mention(uid, name=None, username=None):
+    if username:
+        return f"@{username}"
+    n = (name or str(uid)).replace("<", "").replace(">", "")
+    return f'<a href="tg://user?id={uid}">{n}</a>'
+
+
+def _mafia_role_counts(n: int):
+    if n <= 6:
+        m = 1
+    elif n <= 9:
+        m = 2
+    else:
+        m = 3
+    return m, 1, 1  # mafia, doctor, detective
+
+
+def _mafia_alive(game):
+    return [uid for uid, p in game["players"].items() if p.get("alive")]
+
+
+def _mafia_alive_by_role(game, role):
+    return [uid for uid, p in game["players"].items() if p.get("alive") and p.get("role") == role]
+
+
+def _mafia_assign_roles(game):
+    ids = list(game["players"].keys())
+    random.shuffle(ids)
+    nm, nd, nq = _mafia_role_counts(len(ids))
+    roles = (["mafia"] * nm) + (["doctor"] * nd) + (["detective"] * nq)
+    roles += ["citizen"] * (len(ids) - len(roles))
+    random.shuffle(roles)
+    for uid, role in zip(ids, roles):
+        game["players"][uid]["role"] = role
+
+
+async def _mafia_pm(uid, text, parse_mode=ParseMode.HTML):
+    try:
+        await manager_bot.send_message(uid, text, parse_mode=parse_mode)
+        return True
+    except Exception as e:
+        logging.warning("mafia pm %s: %s", uid, e)
+        return False
+
+
+async def _mafia_group(chat_id, text, parse_mode=ParseMode.HTML):
+    try:
+        await manager_bot.send_message(chat_id, text, parse_mode=parse_mode)
+    except Exception as e:
+        logging.warning("mafia group %s: %s", chat_id, e)
+
+
+def _mafia_target_list(game, exclude_uids=None):
+    exclude_uids = set(exclude_uids or [])
+    lines = []
+    idx_map = {}
+    i = 1
+    for uid in _mafia_alive(game):
+        if uid in exclude_uids:
+            continue
+        p = game["players"][uid]
+        lines.append(f"{i}. {_mafia_mention(uid, p.get('name'), p.get('username'))}")
+        idx_map[i] = uid
+        i += 1
+    return "\n".join(lines), idx_map
+
+
+async def _mafia_refund_all(game):
+    bet = int(game.get("bet") or 0)
+    if bet <= 0:
+        return
+    for uid in list(game.get("players") or {}):
+        try:
+            add_balance(uid, bet)
+        except Exception:
+            pass
+
+
+async def _mafia_end(game, mafia_win: bool):
+    chat_id = game["chat_id"]
+    game["phase"] = "ended"
+    mafias = [uid for uid, p in game["players"].items() if p.get("role") == "mafia"]
+    others = [uid for uid, p in game["players"].items() if p.get("role") != "mafia"]
+    winners = mafias if mafia_win else others
+    losers = others if mafia_win else mafias
+
+    def names(ids):
+        parts = []
+        for uid in ids:
+            p = game["players"].get(uid) or {}
+            parts.append(_mafia_mention(uid, p.get("name"), p.get("username")))
+        return ", ".join(parts) if parts else "—"
+
+    bet = int(game.get("bet") or 0)
+    if bet > 0:
+        pot = bet * len(game["players"])
+        share = max(1, pot // max(1, len(winners))) if winners else 0
+        for uid in winners:
+            add_balance(uid, share)
+        prize_txt = f"🏆 جایزه هر برنده: <code>{share:,}</code> الماس (از مجموع {pot:,})"
+    else:
+        for uid in winners:
+            add_balance(uid, MAFIA_WIN_PRIZE)
+        for uid in losers:
+            add_balance(uid, MAFIA_LOSE_PRIZE)
+        prize_txt = (
+            f"🥇 برنده‌ها: <code>{MAFIA_WIN_PRIZE}</code> الماس\n"
+            f"🥈 بازنده‌ها: <code>{MAFIA_LOSE_PRIZE}</code> الماس"
+        )
+
+    title = "🎉 مافیا برنده شد!" if mafia_win else "🎉 شهروندها برنده شدن!"
+    await _mafia_group(
+        chat_id,
+        f"{title}\n\n"
+        f"🕵️ مافیاها: {names(mafias)}\n"
+        f"👥 شهروندها: {names(others)}\n\n"
+        f"{prize_txt}",
+    )
+    for uid in list(game["players"].keys()):
+        MAFIA_USER_CHAT.pop(uid, None)
+    MAFIA_GAMES.pop(chat_id, None)
+
+
+async def _mafia_check_win(game):
+    alive_m = len(_mafia_alive_by_role(game, "mafia"))
+    alive_all = len(_mafia_alive(game))
+    alive_town = alive_all - alive_m
+    if alive_m <= 0:
+        await _mafia_end(game, mafia_win=False)
+        return True
+    if alive_m >= alive_town:
+        await _mafia_end(game, mafia_win=True)
+        return True
+    return False
+
+
+async def mafia_game_loop(chat_id: int):
+    """حلقه اصلی بازی بعد از لابی"""
+    try:
+        await asyncio.sleep(MAFIA_JOIN_SEC)
+        game = MAFIA_GAMES.get(chat_id)
+        if not game or game.get("phase") != "lobby":
+            return
+        n = len(game["players"])
+        if n < MAFIA_MIN_PLAYERS:
+            await _mafia_refund_all(game)
+            await _mafia_group(chat_id, f"❌ بازی لغو شد — حداقل {MAFIA_MIN_PLAYERS} نفر لازم است.")
+            for uid in list(game["players"].keys()):
+                MAFIA_USER_CHAT.pop(uid, None)
+            MAFIA_GAMES.pop(chat_id, None)
+            return
+
+        game["phase"] = "starting"
+        _mafia_assign_roles(game)
+        await _mafia_group(chat_id, f"✅ بازی با <b>{n}</b> نفر شروع شد!\nنقش‌ها به پیوی ارسال می‌شود...")
+
+        # پخش نقش
+        for uid, p in game["players"].items():
+            role = p["role"]
+            if role == "mafia":
+                teammates = [
+                    _mafia_mention(t, game["players"][t].get("name"), game["players"][t].get("username"))
+                    for t in game["players"]
+                    if game["players"][t]["role"] == "mafia" and t != uid
+                ]
+                tm = ", ".join(teammates) if teammates else "تنها هستی"
+                await _mafia_pm(
+                    uid,
+                    f"🕵️ <b>تو مافیا هستی!</b>\nهر شب با هم‌تیمی‌هات یه نفر رو می‌کشید.\nهم‌تیمی: {tm}",
+                )
+            elif role == "doctor":
+                await _mafia_pm(uid, "👨‍⚕️ <b>تو دکتری!</b>\nهر شب می‌تونی یه نفر رو نجات بدی.")
+            elif role == "detective":
+                await _mafia_pm(uid, "🕵️ <b>تو کارآگاهی!</b>\nهر شب می‌تونی استعلام یه نفر رو بگیری.")
+            else:
+                await _mafia_pm(uid, "👤 <b>تو شهروند ساده‌ای!</b>\nروزها بحث کن و رای بده.")
+
+        await asyncio.sleep(3)
+
+        while chat_id in MAFIA_GAMES and MAFIA_GAMES[chat_id].get("phase") not in ("ended",):
+            game = MAFIA_GAMES[chat_id]
+            # ----- شب -----
+            game["phase"] = "night"
+            game["night"] = {"kill_votes": {}, "save": None, "investigate": None, "maps": {}}
+            await _mafia_group(
+                chat_id,
+                "🌙 <b>شب شد!</b>\nهمه بخوابید...\n\n😴 شهروندها چشماشون رو بستن\n🕵️ مافیا بیدار شد",
+            )
+
+            # مافیا
+            mafias = _mafia_alive_by_role(game, "mafia")
+            tlist, idx_map = _mafia_target_list(game, exclude_uids=[])
+            game["night"]["maps"]["mafia"] = idx_map
+            for uid in mafias:
+                await _mafia_pm(
+                    uid,
+                    f"🕵️ <b>کی رو می‌کشی؟</b>\n{tlist}\n\nعدد را بفرست (مثلاً <code>1</code>)\n⏳ {MAFIA_NIGHT_SEC} ثانیه",
+                )
+            await asyncio.sleep(MAFIA_NIGHT_SEC)
+            game = MAFIA_GAMES.get(chat_id)
+            if not game:
+                return
+
+            # دکتر
+            doctors = _mafia_alive_by_role(game, "doctor")
+            tlist, idx_map = _mafia_target_list(game)
+            game["night"]["maps"]["doctor"] = idx_map
+            for uid in doctors:
+                await _mafia_pm(
+                    uid,
+                    f"👨‍⚕️ <b>کی رو نجات می‌دی؟</b>\n{tlist}\n\nعدد را بفرست\n⏳ {MAFIA_NIGHT_SEC} ثانیه",
+                )
+            game["phase"] = "night_doctor"
+            await asyncio.sleep(MAFIA_NIGHT_SEC)
+            game = MAFIA_GAMES.get(chat_id)
+            if not game:
+                return
+
+            # کارآگاه
+            dets = _mafia_alive_by_role(game, "detective")
+            tlist, idx_map = _mafia_target_list(game)
+            game["night"]["maps"]["detective"] = idx_map
+            for uid in dets:
+                await _mafia_pm(
+                    uid,
+                    f"🕵️ <b>استعلام کی؟</b>\n{tlist}\n\nعدد را بفرست\n⏳ {MAFIA_NIGHT_SEC} ثانیه",
+                )
+            game["phase"] = "night_detective"
+            await asyncio.sleep(MAFIA_NIGHT_SEC)
+            game = MAFIA_GAMES.get(chat_id)
+            if not game:
+                return
+
+            # نتیجه استعلام
+            inv = game["night"].get("investigate")
+            for uid in dets:
+                if inv and inv in game["players"]:
+                    is_m = game["players"][inv]["role"] == "mafia"
+                    p = game["players"][inv]
+                    men = _mafia_mention(inv, p.get("name"), p.get("username"))
+                    if is_m:
+                        await _mafia_pm(uid, f"❌ {men} مافیا هست")
+                    else:
+                        await _mafia_pm(uid, f"✅ {men} مافیا نیست")
+                else:
+                    await _mafia_pm(uid, "⏱️ استعلام ثبت نشد.")
+
+            # حل قتل
+            votes = game["night"].get("kill_votes") or {}
+            # majority
+            kill_target = None
+            if votes:
+                from collections import Counter
+                cnt = Counter(votes.values())
+                kill_target = cnt.most_common(1)[0][0]
+            save = game["night"].get("save")
+            killed = None
+            if kill_target and kill_target != save:
+                if kill_target in game["players"] and game["players"][kill_target].get("alive"):
+                    game["players"][kill_target]["alive"] = False
+                    killed = kill_target
+
+            await asyncio.sleep(2)
+            # day announce
+            if killed:
+                p = game["players"][killed]
+                men = _mafia_mention(killed, p.get("name"), p.get("username"))
+                await _mafia_group(chat_id, f"☀️ <b>روز شد!</b>\nدیشب {men} کشته شد 💀")
+            elif kill_target and kill_target == save:
+                p = game["players"][kill_target]
+                men = _mafia_mention(kill_target, p.get("name"), p.get("username"))
+                await _mafia_group(
+                    chat_id,
+                    f"☀️ <b>روز شد!</b>\nدیشب {men} هدف مافیا بود\nولی دکتر نجاتش داد 🏥",
+                )
+            else:
+                await _mafia_group(chat_id, "☀️ <b>روز شد!</b>\nدیشب کسی کشته نشد.")
+
+            if await _mafia_check_win(game):
+                return
+
+            # بحث
+            game["phase"] = "day_discuss"
+            game["day_votes"] = {}
+            await _mafia_group(
+                chat_id,
+                f"💬 <b>{MAFIA_DISCUSS_SEC // 60} دقیقه فرصت بحث</b>\nهمه حرف بزنید و مافیا رو پیدا کنید",
+            )
+            await asyncio.sleep(MAFIA_DISCUSS_SEC)
+            game = MAFIA_GAMES.get(chat_id)
+            if not game:
+                return
+
+            # رای‌گیری
+            game["phase"] = "day_vote"
+            game["day_votes"] = {}
+            alive_txt, _ = _mafia_target_list(game)
+            await _mafia_group(
+                chat_id,
+                f"🗳️ <b>رای‌گیری شروع شد!</b>\nبرای رای دادن: <code>.رای @user</code> یا <code>.رای 1</code>\n\n"
+                f"بازیکنان زنده:\n{alive_txt}\n\n⏳ {MAFIA_VOTE_SEC} ثانیه فرصت",
+            )
+            # map numbers for vote
+            _, vote_map = _mafia_target_list(game)
+            game["vote_map"] = vote_map
+            await asyncio.sleep(MAFIA_VOTE_SEC)
+            game = MAFIA_GAMES.get(chat_id)
+            if not game:
+                return
+
+            votes = game.get("day_votes") or {}
+            expelled = None
+            result_lines = []
+            if votes:
+                from collections import Counter
+                cnt = Counter(votes.values())
+                for t, n in cnt.most_common():
+                    p = game["players"].get(t) or {}
+                    result_lines.append(f"{_mafia_mention(t, p.get('name'), p.get('username'))}: {n} رای")
+                expelled = cnt.most_common(1)[0][0]
+            res = "🗳️ <b>نتایج رای‌گیری:</b>\n" + ("\n".join(result_lines) if result_lines else "هیچ رایی ثبت نشد.")
+            if expelled and expelled in game["players"] and game["players"][expelled].get("alive"):
+                game["players"][expelled]["alive"] = False
+                p = game["players"][expelled]
+                role = p.get("role")
+                role_fa = {"mafia": "مافیا 🕵️", "doctor": "دکتر 👨‍⚕️", "detective": "کارآگاه 🕵️", "citizen": "شهروند ساده 👤"}.get(role, role)
+                men = _mafia_mention(expelled, p.get("name"), p.get("username"))
+                res += f"\n\n❌ {men} اخراج شد\n{men} {role_fa} بود"
+            else:
+                res += "\n\nاین دور کسی اخراج نشد."
+            await _mafia_group(chat_id, res)
+            await asyncio.sleep(10)
+
+            if await _mafia_check_win(game):
+                return
+            game["round"] = game.get("round", 1) + 1
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.error("mafia_game_loop: %s", e)
+        try:
+            await _mafia_group(chat_id, f"❌ خطا در بازی مافیا — بازی متوقف شد.")
+        except Exception:
+            pass
+        game = MAFIA_GAMES.pop(chat_id, None)
+        if game:
+            await _mafia_refund_all(game)
+            for uid in list(game.get("players") or {}):
+                MAFIA_USER_CHAT.pop(uid, None)
+
+
 @manager_bot.on_message(filters.group)
 async def group_handler(client, message):
     text = message.text
@@ -14621,6 +14991,168 @@ async def group_handler(client, message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id:
         return
+
+
+    # ====== مافیا ======
+    mafia_text = text.strip()
+    if mafia_text.startswith(".مافیا") or mafia_text == "مافیا" or mafia_text.startswith("مافیا "):
+        chat_id = message.chat.id
+        if chat_id in MAFIA_GAMES and MAFIA_GAMES[chat_id].get("phase") not in ("ended",):
+            await message.reply_text("❌ یک بازی مافیا در این گروه در جریانه.")
+            return
+        if user_id in MAFIA_USER_CHAT:
+            await message.reply_text("❌ شما الان در یک بازی مافیا هستید.")
+            return
+        bet = 0
+        parts = mafia_text.replace(".مافیا", "مافیا").split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            bet = int(parts[1])
+            if bet < 0:
+                bet = 0
+            if bet > 0 and bet < 10:
+                await message.reply_text("❌ حداقل شرط مافیا ۱۰ الماس است.")
+                return
+        if bet > 0:
+            if get_balance(user_id) < bet:
+                await message.reply_text("❌ الماس کافی برای شروع بازی ندارید.")
+                return
+            if not deduct_balance(user_id, bet):
+                await message.reply_text("❌ کسر الماس ناموفق بود.")
+                return
+        u = message.from_user
+        game = {
+            "chat_id": chat_id,
+            "host_id": user_id,
+            "bet": bet,
+            "phase": "lobby",
+            "players": {
+                user_id: {
+                    "name": u.first_name or str(user_id),
+                    "username": u.username or "",
+                    "role": None,
+                    "alive": True,
+                }
+            },
+            "round": 1,
+            "night": {},
+            "day_votes": {},
+            "vote_map": {},
+        }
+        MAFIA_GAMES[chat_id] = game
+        MAFIA_USER_CHAT[user_id] = chat_id
+        bet_line = f"\n💰 شرط هر نفر: <code>{bet:,}</code> الماس" if bet else "\n🏆 جایزه: برنده ۵۰ / بازنده ۱۰ الماس"
+        await message.reply_text(
+            f"🎭 <b>بازی مافیا شروع شد!</b>\n"
+            f"👥 تعداد بازیکن‌ها: <b>1</b> نفر{bet_line}\n\n"
+            f"⏳ {MAFIA_JOIN_SEC} ثانیه فرصت دارید تا عضو بشید\n"
+            f"برای عضو شدن: <code>.عضو</code>\n"
+            f"برای لغو (میزبان): <code>.لغو</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(mafia_game_loop(chat_id))
+        return
+
+    if mafia_text in (".عضو", "عضو"):
+        chat_id = message.chat.id
+        game = MAFIA_GAMES.get(chat_id)
+        if not game or game.get("phase") != "lobby":
+            await message.reply_text("❌ لابی فعالی نیست. با <code>.مافیا</code> شروع کنید.", parse_mode=ParseMode.HTML)
+            return
+        if user_id in game["players"]:
+            await message.reply_text("قبلاً عضو شدی.")
+            return
+        if user_id in MAFIA_USER_CHAT:
+            await message.reply_text("❌ در بازی دیگری هستی.")
+            return
+        if len(game["players"]) >= MAFIA_MAX_PLAYERS:
+            await message.reply_text(f"❌ ظرفیت کامل است (حداکثر {MAFIA_MAX_PLAYERS} نفر).")
+            return
+        bet = int(game.get("bet") or 0)
+        if bet > 0:
+            if get_balance(user_id) < bet:
+                await message.reply_text(f"❌ برای عضویت به {bet:,} الماس نیاز دارید.")
+                return
+            if not deduct_balance(user_id, bet):
+                await message.reply_text("❌ کسر الماس ناموفق.")
+                return
+        u = message.from_user
+        game["players"][user_id] = {
+            "name": u.first_name or str(user_id),
+            "username": u.username or "",
+            "role": None,
+            "alive": True,
+        }
+        MAFIA_USER_CHAT[user_id] = chat_id
+        await message.reply_text(
+            f"✅ عضو شدی!\n👥 تعداد: <b>{len(game['players'])}</b> / {MAFIA_MAX_PLAYERS}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if mafia_text in (".لغو", "لغو"):
+        chat_id = message.chat.id
+        game = MAFIA_GAMES.get(chat_id)
+        if not game:
+            return
+        if game.get("phase") != "lobby":
+            await message.reply_text("❌ فقط در مرحله عضویت می‌توان لغو کرد.")
+            return
+        if user_id != game.get("host_id") and user_id not in GOD_ADMIN_IDS:
+            await message.reply_text("❌ فقط میزبان می‌تواند بازی را لغو کند.")
+            return
+        await _mafia_refund_all(game)
+        for uid in list(game["players"].keys()):
+            MAFIA_USER_CHAT.pop(uid, None)
+        MAFIA_GAMES.pop(chat_id, None)
+        await message.reply_text("🛑 بازی مافیا لغو شد و الماس‌ها برگردانده شد.")
+        return
+
+    if mafia_text.startswith(".رای") or mafia_text.startswith("رای "):
+        chat_id = message.chat.id
+        game = MAFIA_GAMES.get(chat_id)
+        if not game or game.get("phase") != "day_vote":
+            return
+        if user_id not in game["players"] or not game["players"][user_id].get("alive"):
+            await message.reply_text("❌ فقط بازیکنان زنده می‌توانند رای بدهند.")
+            return
+        target = None
+        # .رای @user or .رای 1
+        rest = mafia_text.split(None, 1)
+        arg = rest[1].strip() if len(rest) > 1 else ""
+        if arg.isdigit():
+            target = (game.get("vote_map") or {}).get(int(arg))
+        elif arg.startswith("@"):
+            uname = arg.lstrip("@").lower()
+            for uid, p in game["players"].items():
+                if (p.get("username") or "").lower() == uname and p.get("alive"):
+                    target = uid
+                    break
+        elif message.entities:
+            for ent in message.entities:
+                if ent.type.name in ("MENTION", "TEXT_MENTION") or str(ent.type) in ("MessageEntityType.MENTION", "MessageEntityType.TEXT_MENTION"):
+                    if getattr(ent, "user", None):
+                        target = ent.user.id
+                        break
+                    # @username mention
+                    try:
+                        uname = text[ent.offset + 1: ent.offset + ent.length].lstrip("@")
+                        for uid, p in game["players"].items():
+                            if (p.get("username") or "").lower() == uname.lower() and p.get("alive"):
+                                target = uid
+                                break
+                    except Exception:
+                        pass
+        if not target or target not in game["players"] or not game["players"][target].get("alive"):
+            await message.reply_text("❌ هدف نامعتبر. مثال: <code>.رای 1</code> یا <code>.رای @user</code>", parse_mode=ParseMode.HTML)
+            return
+        if target == user_id:
+            await message.reply_text("❌ به خودت نمی‌توانی رای بدهی.")
+            return
+        game.setdefault("day_votes", {})[user_id] = target
+        p = game["players"][target]
+        await message.reply_text(f"✅ رای شما ثبت شد → {_mafia_mention(target, p.get('name'), p.get('username'))}", parse_mode=ParseMode.HTML)
+        return
+
 
     # ====== موجودی ======
     if text.strip() == "موجودی":
@@ -15413,6 +15945,69 @@ async def shop_manual_qty_handler(client, message):
         await message.reply_text("✅ تعداد ذخیره شد. از منو دوباره **خرید الماس** را باز کنید.")
     except Exception as e:
         logging.warning("shop_manual_qty_handler: %s", e)
+
+
+
+
+@manager_bot.on_message(filters.private & filters.text & filters.incoming)
+async def mafia_night_private_handler(client, message):
+    """انتخاب شب مافیا/دکتر/کارآگاه با عدد در پیوی"""
+    try:
+        uid = message.from_user.id if message.from_user else 0
+        chat_id = MAFIA_USER_CHAT.get(uid)
+        if not chat_id:
+            return
+        game = MAFIA_GAMES.get(chat_id)
+        if not game:
+            return
+        phase = game.get("phase")
+        if phase not in ("night", "night_doctor", "night_detective"):
+            return
+        p = game["players"].get(uid)
+        if not p or not p.get("alive"):
+            return
+        txt = (message.text or "").strip()
+        if not txt.isdigit():
+            return
+        num = int(txt)
+        role = p.get("role")
+        night = game.setdefault("night", {})
+        maps = night.setdefault("maps", {})
+
+        if phase == "night" and role == "mafia":
+            idx_map = maps.get("mafia") or {}
+            target = idx_map.get(num)
+            if not target:
+                await message.reply_text("❌ شماره نامعتبر")
+                return
+            night.setdefault("kill_votes", {})[uid] = target
+            tp = game["players"][target]
+            await message.reply_text(f"✅ انتخاب قتل: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            return
+
+        if phase == "night_doctor" and role == "doctor":
+            idx_map = maps.get("doctor") or {}
+            target = idx_map.get(num)
+            if not target:
+                await message.reply_text("❌ شماره نامعتبر")
+                return
+            night["save"] = target
+            tp = game["players"][target]
+            await message.reply_text(f"✅ نجات: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            return
+
+        if phase == "night_detective" and role == "detective":
+            idx_map = maps.get("detective") or {}
+            target = idx_map.get(num)
+            if not target:
+                await message.reply_text("❌ شماره نامعتبر")
+                return
+            night["investigate"] = target
+            tp = game["players"][target]
+            await message.reply_text(f"✅ استعلام: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            return
+    except Exception as e:
+        logging.warning("mafia_night_private: %s", e)
 
 
 

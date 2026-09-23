@@ -582,10 +582,10 @@ DOOZ_LAST_RESULT = {}  # key -> {text,prize,wbal,lbal}
 # ===== مافیا =====
 MAFIA_GAMES = {}  # chat_id -> game dict
 MAFIA_USER_CHAT = {}  # user_id -> chat_id (بازی فعال)
-MAFIA_JOIN_SEC = 30
-MAFIA_NIGHT_SEC = 40
+MAFIA_JOIN_SEC = 90  # ۱ دقیقه و ۳۰ ثانیه لابی
+MAFIA_NIGHT_SEC = 45
 MAFIA_DISCUSS_SEC = 120
-MAFIA_VOTE_SEC = 30
+MAFIA_VOTE_SEC = 60  # هر دور ۶۰ ثانیه رای‌گیری
 MAFIA_WIN_PRIZE = 50
 MAFIA_LOSE_PRIZE = 10
 MAFIA_MIN_PLAYERS = 5
@@ -7408,6 +7408,119 @@ async def reply_based_controller(client, message):
         return
 
 
+
+    # ========== حجم چت ==========
+    if cmd.startswith(".حجم چت") or cmd.startswith("حجم چت"):
+        try:
+            target_id = None
+            uname = None
+            rest = cmd
+            for p in (".حجم چت", "حجم چت"):
+                if rest.startswith(p):
+                    rest = rest[len(p):].strip()
+                    break
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_id = message.reply_to_message.from_user.id
+                uname = message.reply_to_message.from_user.username or message.reply_to_message.from_user.first_name
+            if rest.startswith("@"):
+                uname = rest.lstrip("@").split()[0]
+                try:
+                    ch = await client.get_users(uname)
+                    target_id = ch.id
+                    uname = ch.username or ch.first_name or uname
+                except Exception:
+                    try:
+                        await message.edit_text("❌ کاربر پیدا نشد.")
+                    except Exception:
+                        pass
+                    return
+            if not target_id and message.entities:
+                for ent in message.entities:
+                    if getattr(ent, "user", None):
+                        target_id = ent.user.id
+                        uname = ent.user.username or ent.user.first_name
+                        break
+            if not target_id:
+                try:
+                    await message.edit_text("❌ مثال:\n`.حجم چت @user`\nیا ریپلای + `.حجم چت`")
+                except Exception:
+                    pass
+                return
+            try:
+                await message.edit_text("⏳ در حال محاسبه حجم چت...")
+            except Exception:
+                pass
+            photos = videos = voices = files = texts = stickers = 0
+            total_size = 0
+            scanned = 0
+            async for m in client.get_chat_history(target_id, limit=8000):
+                scanned += 1
+                if m.photo:
+                    photos += 1
+                    try:
+                        total_size += int(getattr(m.photo, "file_size", 0) or 0)
+                    except Exception:
+                        pass
+                elif m.video or m.video_note:
+                    videos += 1
+                    med = m.video or m.video_note
+                    try:
+                        total_size += int(getattr(med, "file_size", 0) or 0)
+                    except Exception:
+                        pass
+                elif m.voice or m.audio:
+                    voices += 1
+                    med = m.voice or m.audio
+                    try:
+                        total_size += int(getattr(med, "file_size", 0) or 0)
+                    except Exception:
+                        pass
+                elif m.document:
+                    files += 1
+                    try:
+                        total_size += int(getattr(m.document, "file_size", 0) or 0)
+                    except Exception:
+                        pass
+                elif m.sticker:
+                    stickers += 1
+                elif m.text:
+                    texts += 1
+
+            def fmt_sz(b):
+                b = float(b or 0)
+                if b >= 1024 ** 3:
+                    return f"{b / 1024 ** 3:.2f} GB"
+                if b >= 1024 ** 2:
+                    return f"{b / 1024 ** 2:.1f} MB"
+                if b >= 1024:
+                    return f"{b / 1024:.1f} KB"
+                return f"{int(b)} B"
+
+            who = f"@{uname}" if uname and not str(uname).startswith("@") else (uname or str(target_id))
+            if who and not who.startswith("@") and not who.isdigit():
+                # keep name
+                pass
+            out = (
+                f"📊 حجم چت با {who}:\n"
+                f"📸 عکس: {photos:,} عدد\n"
+                f"🎬 ویدیو: {videos:,} عدد\n"
+                f"🎤 ویس/آهنگ: {voices:,} عدد\n"
+                f"📁 فایل: {files:,} عدد\n"
+                f"🎨 استیکر: {stickers:,} عدد\n"
+                f"💬 متن: {texts:,} پیام\n"
+                f"📦 حجم تقریبی مدیا: {fmt_sz(total_size)}\n"
+                f"🔎 پیام‌های بررسی‌شده: {scanned:,}"
+            )
+            await message.edit_text(out)
+        except Exception as e:
+            logging.warning("chat volume: %s", e)
+            try:
+                await message.edit_text(f"❌ خطا در محاسبه حجم چت: {e}")
+            except Exception:
+                pass
+        return
+
+
     # ========== متن رمزی ==========
     if cmd.startswith(".رمزنگاری") or cmd.startswith("رمزنگاری"):
         body = cmd
@@ -10206,9 +10319,9 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("🔐 رمز ایموجی", f"panel_page_50_{user_id}", style="primary"),
             ],
             [
-                _styled_btn("🛡 امنیتی", f"panel_page_3_{user_id}", style="primary"),
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
+                _styled_btn("📊 حجم چت", f"panel_page_62_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
@@ -10408,6 +10521,10 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
     if page == 61:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+    if page == 62:
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -13027,7 +13144,20 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "ریپلای + .رمزگشایی"
                 ),
 
-
+                19: (
+                    "🧠 هوش مصنوعی | self MR\n\n"
+                    "دستورات:\n"
+                    ".هوش متن گسترده + متن\n"
+                    ".سرچ + چیزی که می‌خوای\n"
+                    "ریپلای + .متن آهنگ\n\n"
+                    "از دستورات نقطه‌ای استفاده کنید."
+                ),
+                62: (
+                    "📊 حجم چت | self MR\n\n"
+                    "دستورات:\n"
+                    ".حجم چت @user\n"
+                    "ریپلای + .حجم چت"
+                ),
 
             }
             try:
@@ -15141,7 +15271,7 @@ async def group_handler(client, message):
             if need_players > MAFIA_MAX_PLAYERS:
                 need_players = MAFIA_MAX_PLAYERS
         # زمان لابی متناسب با ظرفیت (حداقل ۳۰، به ازای هر نفر اضافه +۵ تا ۹۰)
-        lobby_sec = min(90, max(MAFIA_JOIN_SEC, 20 + need_players * 5))
+        lobby_sec = MAFIA_JOIN_SEC
         if bet > 0:
             if get_balance(user_id) < bet:
                 await message.reply_text("❌ الماس کافی برای شروع بازی ندارید.")
@@ -16051,65 +16181,101 @@ async def shop_manual_qty_handler(client, message):
 
 
 
-@manager_bot.on_message(filters.private & filters.text & filters.incoming)
+@manager_bot.on_message(filters.private & filters.text & filters.incoming, group=-5)
 async def mafia_night_private_handler(client, message):
     """انتخاب شب مافیا/دکتر/کارآگاه با عدد در پیوی"""
     try:
         uid = message.from_user.id if message.from_user else 0
-        chat_id = MAFIA_USER_CHAT.get(uid)
-        if not chat_id:
+        if not uid:
             return
-        game = MAFIA_GAMES.get(chat_id)
+        chat_id = MAFIA_USER_CHAT.get(uid)
+        game = MAFIA_GAMES.get(chat_id) if chat_id else None
+        if not game:
+            for cid, g in list(MAFIA_GAMES.items()):
+                if uid in (g.get("players") or {}) and g.get("phase") in ("night", "night_doctor", "night_detective"):
+                    game = g
+                    chat_id = cid
+                    MAFIA_USER_CHAT[uid] = cid
+                    break
         if not game:
             return
         phase = game.get("phase")
         if phase not in ("night", "night_doctor", "night_detective"):
             return
-        p = game["players"].get(uid)
+        p = (game.get("players") or {}).get(uid)
         if not p or not p.get("alive"):
             return
         txt = (message.text or "").strip()
-        if not txt.isdigit():
+        num = None
+        if txt.isdigit():
+            num = int(txt)
+        else:
+            m = re.match(r"^(?:\.?)(?:کشتن|نجات|استعلام|قتل)?\s*(\d+)$", txt)
+            if m:
+                num = int(m.group(1))
+        if num is None:
             return
-        num = int(txt)
         role = p.get("role")
         night = game.setdefault("night", {})
         maps = night.setdefault("maps", {})
 
+        def resolve(role_key):
+            idx_map = maps.get(role_key) or {}
+            # normalize
+            norm = {}
+            for k, v in idx_map.items():
+                try:
+                    norm[int(k)] = int(v)
+                except Exception:
+                    continue
+            maps[role_key] = norm
+            return norm.get(num)
+
         if phase == "night" and role == "mafia":
-            idx_map = maps.get("mafia") or {}
-            target = idx_map.get(num)
+            target = resolve("mafia")
             if not target:
-                await message.reply_text("❌ شماره نامعتبر")
+                await message.reply_text("❌ شماره نامعتبر — عدد لیست را بفرست.")
                 return
-            night.setdefault("kill_votes", {})[uid] = target
-            tp = game["players"][target]
-            await message.reply_text(f"✅ انتخاب قتل: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            night.setdefault("kill_votes", {})[int(uid)] = int(target)
+            tp = game["players"][int(target)]
+            await message.reply_text(
+                f"✅ قتل ثبت شد: {_mafia_mention(int(target), tp.get('name'), tp.get('username'))}",
+                parse_mode=ParseMode.HTML,
+            )
+            logging.info("mafia kill vote uid=%s -> %s", uid, target)
             return
 
         if phase == "night_doctor" and role == "doctor":
-            idx_map = maps.get("doctor") or {}
-            target = idx_map.get(num)
+            target = resolve("doctor")
             if not target:
-                await message.reply_text("❌ شماره نامعتبر")
+                await message.reply_text("❌ شماره نامعتبر — عدد لیست را بفرست.")
                 return
-            night["save"] = target
-            tp = game["players"][target]
-            await message.reply_text(f"✅ نجات: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            night["save"] = int(target)
+            tp = game["players"][int(target)]
+            await message.reply_text(
+                f"✅ نجات ثبت شد: {_mafia_mention(int(target), tp.get('name'), tp.get('username'))}",
+                parse_mode=ParseMode.HTML,
+            )
+            logging.info("mafia save uid=%s -> %s", uid, target)
             return
 
         if phase == "night_detective" and role == "detective":
-            idx_map = maps.get("detective") or {}
-            target = idx_map.get(num)
+            target = resolve("detective")
             if not target:
-                await message.reply_text("❌ شماره نامعتبر")
+                await message.reply_text("❌ شماره نامعتبر — عدد لیست را بفرست.")
                 return
-            night["investigate"] = target
-            tp = game["players"][target]
-            await message.reply_text(f"✅ استعلام: {_mafia_mention(target, tp.get('name'), tp.get('username'))}", parse_mode=ParseMode.HTML)
+            night["investigate"] = int(target)
+            tp = game["players"][int(target)]
+            await message.reply_text(
+                f"✅ استعلام ثبت شد: {_mafia_mention(int(target), tp.get('name'), tp.get('username'))}",
+                parse_mode=ParseMode.HTML,
+            )
+            logging.info("mafia investigate uid=%s -> %s", uid, target)
             return
     except Exception as e:
         logging.warning("mafia_night_private: %s", e)
+
+
 
 
 

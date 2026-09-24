@@ -1,4 +1,4 @@
-pyrogram
+
 yt-dlp
 aiohttp
 pydub

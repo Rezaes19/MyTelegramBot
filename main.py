@@ -591,6 +591,16 @@ MAFIA_LOSE_PRIZE = 10
 MAFIA_MIN_PLAYERS = 5
 MAFIA_MAX_PLAYERS = 15
 
+# ===== عکس استارزی (Telegram Stars paid media) =====
+STARZY_PHOTO = {}  # user_id -> {link, time, last_fire}
+STARZY_LOCK = None  # lazy asyncio.Lock
+
+def _starzy_lock():
+    global STARZY_LOCK
+    if STARZY_LOCK is None:
+        STARZY_LOCK = asyncio.Lock()
+    return STARZY_LOCK
+
 
 
 # نقشه رمز ایموجی (حروف فارسی/انگلیسی/عدد)
@@ -3209,6 +3219,17 @@ def apply_user_settings_from_db(user_id: int):
             PROFILE_SNOOPS[user_id] = {}
         FORCE_JOIN_PV_STATUS[user_id] = bool(settings.get("force_join_pv", False))
         FORCE_JOIN_CHANNELS[user_id] = list(settings.get("force_join_channels") or [])
+
+        try:
+            sz = settings.get("starzy_photo") or {}
+            if isinstance(sz, dict) and (sz.get("link") or sz.get("time")):
+                STARZY_PHOTO[user_id] = {
+                    "link": str(sz.get("link") or "").strip(),
+                    "time": str(sz.get("time") or "").strip(),
+                    "last_fire": str(sz.get("last_fire") or ""),
+                }
+        except Exception:
+            pass
         EDIT_ALERT_STATUS[user_id] = bool(settings.get("edit_alert", False))
         DELETE_ALERT_STATUS[user_id] = bool(settings.get("delete_alert", False))
         ROTATING_NAMES[user_id] = list(settings.get("rotating_names") or [])
@@ -3296,6 +3317,7 @@ def persist_all_user_settings(user_id: int):
             "emoji_char_map": EMOJI_CHAR_TO_PREMIUM.get(user_id) or {},
             "force_join_pv": FORCE_JOIN_PV_STATUS.get(user_id, False),
             "force_join_channels": list(FORCE_JOIN_CHANNELS.get(user_id) or []),
+            "starzy_photo": STARZY_PHOTO.get(user_id) or {},
             "edit_alert": EDIT_ALERT_STATUS.get(user_id, False),
             "delete_alert": DELETE_ALERT_STATUS.get(user_id, False),
             "rotating_names": list(ROTATING_NAMES.get(user_id) or []),
@@ -7347,6 +7369,248 @@ async def apply_golden_profile_frame(client, user_id: int) -> str:
 
 
 
+
+# =============================================
+# ⭐ عکس استارزی — باز کردن مدیای پولی با Stars رأس ساعت
+# =============================================
+
+def _parse_starzy_time(s: str):
+    """HH:MM یا H:MM → (hour, minute) یا None"""
+    s = (s or "").strip().replace(".", ":").replace(" ", "")
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h < 0 or h > 23 or mi < 0 or mi > 59:
+        return None
+    return h, mi
+
+
+def _parse_telegram_msg_link(link: str):
+    """
+    لینک‌های پشتیبانی‌شده:
+    https://t.me/c/1234567890/42
+    https://t.me/username/42
+    https://t.me/username/42?single
+    """
+    link = (link or "").strip()
+    if not link:
+        return None
+    link = link.split()[0]
+    m = re.search(
+        r"(?:https?://)?(?:www\.)?t\.me/(?:c/(\d+)/(\d+)|([A-Za-z0-9_]+)/(\d+))",
+        link,
+    )
+    if not m:
+        return None
+    if m.group(1) and m.group(2):
+        # private channel/supergroup
+        chat_id = int("-100" + m.group(1))
+        msg_id = int(m.group(2))
+        return chat_id, msg_id
+    if m.group(3) and m.group(4):
+        return m.group(3), int(m.group(4))
+    return None
+
+
+async def _starzy_get_stars_amount(client, chat_id, msg_id) -> int:
+    """خواندن هزینه Stars از پیام (مدیای پولی)"""
+    msg = await client.get_messages(chat_id, msg_id)
+    if not msg:
+        raise ValueError("پیام پیدا نشد")
+    # Pyrogram high-level
+    media = getattr(msg, "media", None)
+    # برخی نسخه‌ها paid_media / stars
+    for attr in ("stars_amount", "star_count", "paid_media"):
+        val = getattr(msg, attr, None)
+        if val is not None and not callable(val):
+            if isinstance(val, (int, float)) and int(val) > 0:
+                return int(val)
+    if media is not None:
+        for attr in ("stars_amount", "star_count"):
+            val = getattr(media, attr, None)
+            if isinstance(val, (int, float)) and int(val) > 0:
+                return int(val)
+    # raw fallback
+    try:
+        from pyrogram import raw
+        peer = await client.resolve_peer(chat_id)
+        r = await client.invoke(
+            raw.functions.messages.GetMessages(
+                id=[raw.types.InputMessageID(id=int(msg_id))]
+            )
+        )
+        # GetMessages needs peer for channels - try get_messages already did
+    except Exception:
+        pass
+    # try message._raw
+    raw_msg = getattr(msg, "message", None) or getattr(msg, "_raw", None)
+    if raw_msg is not None:
+        med = getattr(raw_msg, "media", None)
+        if med is not None:
+            amt = getattr(med, "stars_amount", None)
+            if isinstance(amt, (int, float)) and int(amt) > 0:
+                return int(amt)
+    raise ValueError("این پیام مدیای استارزی (پولی) نیست یا هزینه مشخص نیست")
+
+
+async def _starzy_pay_and_unlock(client, chat_id, msg_id) -> tuple:
+    """
+    پرداخت Stars و باز کردن مدیا.
+    Returns: (ok: bool, stars: int, info: str)
+    """
+    from pyrogram import raw
+    stars = 0
+    try:
+        stars = await _starzy_get_stars_amount(client, chat_id, msg_id)
+    except Exception as e:
+        # ادامه بده — بعضی وقت‌ها form خودش مبلغ را می‌دهد
+        logging.warning("starzy amount pre-check: %s", e)
+
+    peer = await client.resolve_peer(chat_id)
+    invoice = raw.types.InputInvoiceMessage(peer=peer, msg_id=int(msg_id))
+
+    # GetPaymentForm
+    try:
+        form = await client.invoke(raw.functions.payments.GetPaymentForm(invoice=invoice))
+    except Exception as e:
+        err = str(e)
+        if "MEDIA_ALREADY_PAID" in err or "already" in err.lower():
+            return True, stars, "قبلاً باز شده بود"
+        raise
+
+    form_id = getattr(form, "form_id", None)
+    # مبلغ از فرم
+    try:
+        inv = getattr(form, "invoice", None)
+        prices = getattr(inv, "prices", None) or []
+        total = 0
+        for p in prices:
+            total += int(getattr(p, "amount", 0) or 0)
+        if total > 0:
+            stars = total
+    except Exception:
+        pass
+
+    if form_id is None:
+        raise ValueError("فرم پرداخت دریافت نشد")
+
+    # SendStarsForm (لایه‌های جدید) یا SendPaymentForm
+    try:
+        if hasattr(raw.functions.payments, "SendStarsForm"):
+            result = await client.invoke(
+                raw.functions.payments.SendStarsForm(form_id=form_id, invoice=invoice)
+            )
+        else:
+            # fallback قدیمی
+            result = await client.invoke(
+                raw.functions.payments.SendPaymentForm(
+                    form_id=form_id,
+                    invoice=invoice,
+                    credentials=raw.types.InputPaymentCredentials(
+                        save=False,
+                        data=raw.types.DataJSON(data="{}"),
+                    ),
+                )
+            )
+    except Exception as e:
+        err = str(e)
+        if "MEDIA_ALREADY_PAID" in err:
+            return True, stars, "قبلاً پرداخت شده"
+        if "BALANCE_TOO_LOW" in err:
+            return False, stars, "موجودی Stars کافی نیست"
+        raise
+
+    return True, stars, "پرداخت و باز شدن موفق"
+
+
+async def starzy_photo_scheduler_task(client, user_id: int):
+    """هر ۲۰ ثانیه چک می‌کند؛ رأس دقیقهٔ تنظیم‌شده (تهران) باز می‌کند."""
+    await asyncio.sleep(8)
+    while True:
+        try:
+            if not is_self_on(user_id):
+                await asyncio.sleep(30)
+                continue
+            conf = STARZY_PHOTO.get(user_id)
+            if not conf or not conf.get("link") or not conf.get("time"):
+                await asyncio.sleep(20)
+                continue
+            parsed_t = _parse_starzy_time(conf["time"])
+            if not parsed_t:
+                await asyncio.sleep(30)
+                continue
+            h, mi = parsed_t
+            now = datetime.now(TEHRAN_TIMEZONE)
+            if now.hour != h or now.minute != mi:
+                await asyncio.sleep(15)
+                continue
+            day_key = now.strftime("%Y-%m-%d")
+            if conf.get("last_fire") == day_key:
+                await asyncio.sleep(40)
+                continue
+            # قفل تا دوبار شلیک نشود
+            async with _starzy_lock():
+                conf = STARZY_PHOTO.get(user_id) or conf
+                if conf.get("last_fire") == day_key:
+                    await asyncio.sleep(40)
+                    continue
+                link = conf["link"]
+                parsed = _parse_telegram_msg_link(link)
+                if not parsed:
+                    try:
+                        await client.send_message("me", f"❌ عکس استارزی: لینک نامعتبر\n`{link}`")
+                    except Exception:
+                        pass
+                    conf["last_fire"] = day_key
+                    STARZY_PHOTO[user_id] = conf
+                    try:
+                        persist_all_user_settings(user_id)
+                    except Exception:
+                        pass
+                    continue
+                chat_ref, msg_id = parsed
+                try:
+                    ok, stars, info = await _starzy_pay_and_unlock(client, chat_ref, msg_id)
+                    conf["last_fire"] = day_key
+                    STARZY_PHOTO[user_id] = conf
+                    try:
+                        persist_all_user_settings(user_id)
+                    except Exception:
+                        pass
+                    try:
+                        if ok:
+                            await client.send_message(
+                                "me",
+                                f"⭐ <b>عکس استارزی باز شد</b>\n"
+                                f"💰 هزینه: <code>{stars}</code> Stars\n"
+                                f"🕒 {conf['time']}\n"
+                                f"✅ {info}",
+                                parse_mode=ParseMode.HTML,
+                            )
+                        else:
+                            await client.send_message(
+                                "me",
+                                f"⭐ عکس استارزی ناموفق\n💰 {stars} Stars\n❌ {info}",
+                            )
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logging.error("starzy unlock uid=%s: %s", user_id, e)
+                    try:
+                        await client.send_message("me", f"❌ خطا در باز کردن عکس استارزی:\n`{e}`")
+                    except Exception:
+                        pass
+                    conf["last_fire"] = day_key
+                    STARZY_PHOTO[user_id] = conf
+            await asyncio.sleep(50)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.warning("starzy scheduler uid=%s: %s", user_id, e)
+            await asyncio.sleep(30)
+
+
 async def reply_based_controller(client, message):
     user_id = client.me.id
     cmd = (message.text or "").strip()
@@ -7407,6 +7671,137 @@ async def reply_based_controller(client, message):
                 pass
         return
 
+
+
+
+    # ========== عکس استارزی ==========
+    if cmd.startswith(".تنظیم عکس استارزی") or cmd.startswith("تنظیم عکس استارزی"):
+        body = cmd
+        for p in (".تنظیم عکس استارزی", "تنظیم عکس استارزی"):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        if not body and message.reply_to_message:
+            body = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if not body or "t.me/" not in body:
+            try:
+                await message.edit_text(
+                    "❌ مثال:\n`.تنظیم عکس استارزی + https://t.me/c/123/456`\n"
+                    "لینک پیام حاوی عکس/ویدیو استارزی را بفرستید."
+                )
+            except Exception:
+                pass
+            return
+        link = body.split()[0]
+        if not _parse_telegram_msg_link(link):
+            try:
+                await message.edit_text("❌ لینک پیام معتبر نیست.")
+            except Exception:
+                pass
+            return
+        conf = STARZY_PHOTO.get(user_id) or {}
+        conf["link"] = link
+        conf.setdefault("time", "")
+        conf["last_fire"] = ""
+        STARZY_PHOTO[user_id] = conf
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        tshow = conf.get("time") or "هنوز تنظیم نشده"
+        try:
+            await message.edit_text(
+                f"✅ عکس استارزی ذخیره شد.\n🔗 `{link}`\n🕒 تایم فعلی: `{tshow}`\n\n"
+                f"با `.تنظیم تایم استارزی 16:00` ساعت باز شدن را بگذارید."
+            )
+        except Exception:
+            pass
+        return
+
+    if (
+        cmd.startswith(".تنظیم تایم استارزی")
+        or cmd.startswith("تنظیم تایم استارزی")
+        or cmd.startswith(".تنظیم تایم عکس استارزی")
+        or cmd.startswith("تنظیم تایم عکس استارزی")
+    ):
+        body = cmd
+        for p in (
+            ".تنظیم تایم عکس استارزی",
+            "تنظیم تایم عکس استارزی",
+            ".تنظیم تایم استارزی",
+            "تنظیم تایم استارزی",
+        ):
+            if body.startswith(p):
+                body = body[len(p):].strip()
+                if body.startswith("+"):
+                    body = body[1:].strip()
+                break
+        parsed = _parse_starzy_time(body)
+        if not parsed:
+            try:
+                await message.edit_text("❌ مثال:\n`.تنظیم تایم استارزی 16:00`\n`.تنظیم تایم استارزی 00:00`")
+            except Exception:
+                pass
+            return
+        h, mi = parsed
+        timestr = f"{h:02d}:{mi:02d}"
+        conf = STARZY_PHOTO.get(user_id) or {}
+        conf["time"] = timestr
+        conf["last_fire"] = ""  # اجازه شلیک امروز دوباره اگر تایم عوض شد
+        STARZY_PHOTO[user_id] = conf
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        link = conf.get("link") or "هنوز لینک تنظیم نشده"
+        try:
+            await message.edit_text(
+                f"✅ تایم عکس استارزی: `{timestr}` (تهران)\n"
+                f"🔗 `{link}`\n\n"
+                f"رأس همین ساعت، هزینه Stars کم و عکس باز می‌شود."
+            )
+        except Exception:
+            pass
+        return
+
+    if cmd in (".عکس استارزی خاموش", "عکس استارزی خاموش", ".خاموش عکس استارزی"):
+        STARZY_PHOTO.pop(user_id, None)
+        try:
+            persist_all_user_settings(user_id)
+        except Exception:
+            pass
+        try:
+            await message.edit_text("❌ عکس استارزی خاموش و پاک شد.")
+        except Exception:
+            pass
+        return
+
+    if cmd in (".عکس استارزی", "عکس استارزی", ".وضعیت عکس استارزی"):
+        conf = STARZY_PHOTO.get(user_id) or {}
+        if not conf.get("link"):
+            try:
+                await message.edit_text(
+                    "⭐ عکس استارزی فعال نیست.\n\n"
+                    "دستورات:\n"
+                    "`.تنظیم عکس استارزی + لینک`\n"
+                    "`.تنظیم تایم استارزی 16:00`\n"
+                    "`.عکس استارزی خاموش`"
+                )
+            except Exception:
+                pass
+            return
+        try:
+            await message.edit_text(
+                f"⭐ وضعیت عکس استارزی\n"
+                f"🔗 `{conf.get('link')}`\n"
+                f"🕒 `{conf.get('time') or '—'}`\n"
+                f"📅 آخرین اجرا: `{conf.get('last_fire') or '—'}`"
+            )
+        except Exception:
+            pass
+        return
 
 
     # ========== حجم چت ==========
@@ -10262,7 +10657,8 @@ async def start_bot_instance(session_string: str, phone: str, user_id: int, font
         asyncio.create_task(sender_loop_task(client, user_id)),
         asyncio.create_task(meow_loop_task(client, user_id)),
         asyncio.create_task(anti_login_task(client, user_id)),
-        asyncio.create_task(status_action_task(client, user_id))
+        asyncio.create_task(status_action_task(client, user_id)),
+        asyncio.create_task(starzy_photo_scheduler_task(client, user_id)),
     ]
     ACTIVE_BOTS[user_id] = (client, tasks)
     logging.info(f"✅ Bot started for user {user_id}")
@@ -10322,6 +10718,7 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
                 _styled_btn("📊 حجم چت", f"panel_page_62_{user_id}", style="primary"),
+                _styled_btn("⭐ عکس استارزی", f"panel_page_63_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
@@ -10525,6 +10922,10 @@ def build_panel_keyboard(user_id, page=1):
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
     if page == 62:
+        return [
+            [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
+        ]
+    if page == 63:
         return [
             [_styled_btn("⬅️ بازگشت", f"panel_page_1_{user_id}", style="danger")],
         ]
@@ -13157,6 +13558,17 @@ async def _callback_panel_handler_impl(client, callback, data: str):
                     "دستورات:\n"
                     ".حجم چت @user\n"
                     "ریپلای + .حجم چت"
+                ),
+                63: (
+                    "⭐ عکس استارزی | self MR\n\n"
+                    "دستورات:\n"
+                    ".تنظیم عکس استارزی + لینک پیام\n"
+                    ".تنظیم تایم استارزی 16:00\n"
+                    ".تنظیم تایم عکس استارزی 00:00\n"
+                    ".عکس استارزی\n"
+                    ".عکس استارزی خاموش\n\n"
+                    "رأس ساعت تنظیم‌شده (تهران)،\n"
+                    "هزینه Stars کم و مدیا باز می‌شود."
                 ),
 
             }

@@ -7413,115 +7413,308 @@ def _parse_telegram_msg_link(link: str):
     return None
 
 
+
+
 async def _starzy_get_stars_amount(client, chat_id, msg_id) -> int:
-    """خواندن هزینه Stars از پیام (مدیای پولی)"""
+    """خواندن هزینه Stars از پیام"""
     msg = await client.get_messages(chat_id, msg_id)
     if not msg:
         raise ValueError("پیام پیدا نشد")
-    # Pyrogram high-level
-    media = getattr(msg, "media", None)
-    # برخی نسخه‌ها paid_media / stars
-    for attr in ("stars_amount", "star_count", "paid_media"):
+    for attr in ("stars_amount", "star_count"):
         val = getattr(msg, attr, None)
-        if val is not None and not callable(val):
-            if isinstance(val, (int, float)) and int(val) > 0:
-                return int(val)
+        if isinstance(val, (int, float)) and int(val) > 0:
+            return int(val)
+    media = getattr(msg, "media", None)
     if media is not None:
         for attr in ("stars_amount", "star_count"):
             val = getattr(media, attr, None)
             if isinstance(val, (int, float)) and int(val) > 0:
                 return int(val)
-    # raw fallback
-    try:
-        from pyrogram import raw
-        peer = await client.resolve_peer(chat_id)
-        r = await client.invoke(
-            raw.functions.messages.GetMessages(
-                id=[raw.types.InputMessageID(id=int(msg_id))]
-            )
-        )
-        # GetMessages needs peer for channels - try get_messages already did
-    except Exception:
-        pass
-    # try message._raw
-    raw_msg = getattr(msg, "message", None) or getattr(msg, "_raw", None)
+        paid = getattr(media, "paid_media", None) or getattr(msg, "paid_media", None)
+        if paid is not None:
+            for attr in ("stars_amount", "star_count", "star_count_amount"):
+                val = getattr(paid, attr, None)
+                if isinstance(val, (int, float)) and int(val) > 0:
+                    return int(val)
+    raw_msg = getattr(msg, "_raw", None)
     if raw_msg is not None:
         med = getattr(raw_msg, "media", None)
         if med is not None:
             amt = getattr(med, "stars_amount", None)
             if isinstance(amt, (int, float)) and int(amt) > 0:
                 return int(amt)
-    raise ValueError("این پیام مدیای استارزی (پولی) نیست یا هزینه مشخص نیست")
+    return 0
+
+
+async def _starzy_save_to_me(client, chat_id, msg_id, caption="⭐ عکس استارزی"):
+    """کپی/دانلود مدیا به Saved Messages"""
+    try:
+        await client.copy_message("me", chat_id, msg_id)
+        return True
+    except Exception as e1:
+        logging.warning("starzy copy: %s", e1)
+    try:
+        msg = await client.get_messages(chat_id, msg_id)
+        path = await client.download_media(msg)
+        if path:
+            if str(path).lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+                await client.send_video("me", path, caption=caption)
+            elif str(path).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                await client.send_photo("me", path, caption=caption)
+            else:
+                await client.send_document("me", path, caption=caption)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            return True
+    except Exception as e2:
+        logging.warning("starzy download: %s", e2)
+    return False
 
 
 async def _starzy_pay_and_unlock(client, chat_id, msg_id) -> tuple:
     """
-    پرداخت Stars و باز کردن مدیا.
-    Returns: (ok: bool, stars: int, info: str)
+    باز کردن مدیای استارزی با چند مسیر (kurigram/pyrofork + raw).
+    Returns: (ok, stars, info)
     """
     from pyrogram import raw
+
+    msg_id = int(msg_id)
     stars = 0
     try:
-        stars = await _starzy_get_stars_amount(client, chat_id, msg_id)
+        stars = int(await _starzy_get_stars_amount(client, chat_id, msg_id) or 0)
     except Exception as e:
-        # ادامه بده — بعضی وقت‌ها form خودش مبلغ را می‌دهد
-        logging.warning("starzy amount pre-check: %s", e)
+        logging.warning("starzy amount: %s", e)
 
+    # پیام را بگیر
+    try:
+        msg = await client.get_messages(chat_id, msg_id)
+    except Exception as e:
+        raise ValueError(f"خواندن پیام ممکن نشد: {e}")
+    if not msg:
+        raise ValueError("پیام پیدا نشد — لینک یا دسترسی را چک کن")
+
+    # ----- مسیر A: message.pay() (kurigram) -----
+    if hasattr(msg, "pay") and callable(msg.pay):
+        try:
+            await msg.pay()
+            await asyncio.sleep(1.0)
+            await _starzy_save_to_me(client, chat_id, msg_id, f"⭐ استارزی ({stars} Stars)")
+            return True, stars, "با message.pay باز شد"
+        except Exception as e:
+            err = str(e)
+            logging.warning("starzy msg.pay: %s", e)
+            if "MEDIA_ALREADY_PAID" in err or "ALREADY" in err.upper():
+                await _starzy_save_to_me(client, chat_id, msg_id)
+                return True, stars, "قبلاً پرداخت شده بود"
+            if "BALANCE_TOO_LOW" in err:
+                return False, stars, f"موجودی Stars کم است (حدود {stars})"
+
+    # ----- مسیر B: get_payment_form + send_payment_form (high-level) -----
+    try:
+        form = None
+        invoice_obj = None
+        # B1: client.get_payment_form(chat_id=..., message_id=...)
+        if hasattr(client, "get_payment_form"):
+            try:
+                form = await client.get_payment_form(chat_id=chat_id, message_id=msg_id)
+            except TypeError:
+                try:
+                    # بعضی فورک‌ها invoice می‌گیرند
+                    inv_cls = None
+                    try:
+                        from pyrogram.types import InputInvoiceMessage as IIM
+                        inv_cls = IIM
+                    except Exception:
+                        try:
+                            from pyrogram import types as _pt
+                            inv_cls = getattr(_pt, "InputInvoiceMessage", None)
+                        except Exception:
+                            inv_cls = None
+                    if inv_cls is not None:
+                        try:
+                            invoice_obj = inv_cls(chat_id=chat_id, message_id=msg_id)
+                        except TypeError:
+                            invoice_obj = inv_cls(chat_id, msg_id)
+                        form = await client.get_payment_form(invoice_obj)
+                except Exception as e:
+                    logging.warning("starzy get_payment_form alt: %s", e)
+            except Exception as e:
+                logging.warning("starzy get_payment_form: %s", e)
+                if "MEDIA_ALREADY_PAID" in str(e):
+                    await _starzy_save_to_me(client, chat_id, msg_id)
+                    return True, stars, "قبلاً پرداخت شده بود"
+                if "BALANCE_TOO_LOW" in str(e):
+                    return False, stars, f"موجودی Stars کم است (حدود {stars})"
+
+        if form is not None and hasattr(client, "send_payment_form"):
+            # مبلغ از فرم
+            try:
+                for attr in ("total_amount", "stars_amount", "star_count"):
+                    v = getattr(form, attr, None)
+                    if isinstance(v, (int, float)) and int(v) > 0:
+                        stars = int(v)
+                        break
+                inv = getattr(form, "invoice", None)
+                if inv is not None:
+                    prices = getattr(inv, "prices", None) or []
+                    total = sum(int(getattr(p, "amount", 0) or 0) for p in prices)
+                    if total > 0:
+                        stars = total
+            except Exception:
+                pass
+
+            form_id = getattr(form, "id", None) or getattr(form, "form_id", None)
+            try:
+                if invoice_obj is not None:
+                    await client.send_payment_form(payment_form_id=form_id, input_invoice=invoice_obj)
+                else:
+                    try:
+                        await client.send_payment_form(chat_id=chat_id, message_id=msg_id)
+                    except TypeError:
+                        await client.send_payment_form(payment_form_id=form_id)
+                await asyncio.sleep(1.0)
+                await _starzy_save_to_me(client, chat_id, msg_id, f"⭐ استارزی ({stars} Stars)")
+                return True, stars, "با send_payment_form باز شد"
+            except Exception as e:
+                logging.warning("starzy send_payment_form: %s", e)
+                if "MEDIA_ALREADY_PAID" in str(e):
+                    await _starzy_save_to_me(client, chat_id, msg_id)
+                    return True, stars, "قبلاً پرداخت شده بود"
+                if "BALANCE_TOO_LOW" in str(e):
+                    return False, stars, f"موجودی Stars کم است (حدود {stars})"
+    except Exception as e:
+        logging.warning("starzy high-level path: %s", e)
+
+    # ----- مسیر C: raw API -----
     peer = await client.resolve_peer(chat_id)
-    invoice = raw.types.InputInvoiceMessage(peer=peer, msg_id=int(msg_id))
-
-    # GetPaymentForm
+    invoice = None
     try:
-        form = await client.invoke(raw.functions.payments.GetPaymentForm(invoice=invoice))
+        invoice = raw.types.InputInvoiceMessage(peer=peer, msg_id=msg_id)
     except Exception as e:
-        err = str(e)
-        if "MEDIA_ALREADY_PAID" in err or "already" in err.lower():
-            return True, stars, "قبلاً باز شده بود"
-        raise
+        logging.warning("starzy InputInvoiceMessage: %s", e)
 
-    form_id = getattr(form, "form_id", None)
-    # مبلغ از فرم
-    try:
-        inv = getattr(form, "invoice", None)
-        prices = getattr(inv, "prices", None) or []
-        total = 0
-        for p in prices:
-            total += int(getattr(p, "amount", 0) or 0)
-        if total > 0:
-            stars = total
-    except Exception:
-        pass
+    form = None
+    form_id = None
+    last_err = None
 
-    if form_id is None:
-        raise ValueError("فرم پرداخت دریافت نشد")
+    if invoice is not None:
+        try:
+            try:
+                form = await client.invoke(
+                    raw.functions.payments.GetPaymentForm(invoice=invoice)
+                )
+            except TypeError:
+                form = await client.invoke(
+                    raw.functions.payments.GetPaymentForm(
+                        invoice=invoice,
+                        theme_params=raw.types.DataJSON(data="{}"),
+                    )
+                )
+            form_id = getattr(form, "form_id", None)
+        except Exception as e:
+            last_err = e
+            logging.warning("starzy raw GetPaymentForm(invoice): %s", e)
 
-    # SendStarsForm (لایه‌های جدید) یا SendPaymentForm
-    try:
-        if hasattr(raw.functions.payments, "SendStarsForm"):
-            result = await client.invoke(
+    if form is None:
+        try:
+            form = await client.invoke(
+                raw.functions.payments.GetPaymentForm(peer=peer, msg_id=msg_id)
+            )
+            form_id = getattr(form, "form_id", None)
+        except Exception as e:
+            last_err = e
+            logging.warning("starzy raw GetPaymentForm(peer): %s", e)
+
+    if form is not None:
+        try:
+            inv = getattr(form, "invoice", None)
+            prices = getattr(inv, "prices", None) or []
+            total = sum(int(getattr(p, "amount", 0) or 0) for p in prices)
+            if total > 0:
+                stars = total
+        except Exception:
+            pass
+
+    if form is None or form_id is None:
+        err_s = str(last_err or "")
+        if "MEDIA_ALREADY_PAID" in err_s:
+            await _starzy_save_to_me(client, chat_id, msg_id)
+            return True, stars, "قبلاً پرداخت شده بود"
+        if "PAYMENT_UNSUPPORTED" in err_s:
+            raise ValueError(
+                "سشن هنوز Stars را پشتیبانی نمی‌کند.\n"
+                "۱) در requirements فقط kurigram باشد (pyrogram را حذف کن)\n"
+                "۲) سرور را از نو Deploy کن تا پکیج عوض شود\n"
+                "۳) موجودی Stars اکانت را چک کن"
+            )
+        raise ValueError(f"فرم پرداخت گرفته نشد: {err_s or 'unknown'}")
+
+    paid = False
+    pay_err = None
+
+    if hasattr(raw.functions.payments, "SendStarsForm") and invoice is not None:
+        try:
+            await client.invoke(
                 raw.functions.payments.SendStarsForm(form_id=form_id, invoice=invoice)
             )
-        else:
-            # fallback قدیمی
-            result = await client.invoke(
-                raw.functions.payments.SendPaymentForm(
-                    form_id=form_id,
-                    invoice=invoice,
-                    credentials=raw.types.InputPaymentCredentials(
-                        save=False,
-                        data=raw.types.DataJSON(data="{}"),
-                    ),
-                )
-            )
-    except Exception as e:
-        err = str(e)
-        if "MEDIA_ALREADY_PAID" in err:
-            return True, stars, "قبلاً پرداخت شده"
-        if "BALANCE_TOO_LOW" in err:
-            return False, stars, "موجودی Stars کافی نیست"
-        raise
+            paid = True
+        except Exception as e:
+            pay_err = e
+            logging.warning("starzy SendStarsForm: %s", e)
 
-    return True, stars, "پرداخت و باز شدن موفق"
+    if not paid:
+        try:
+            cred = raw.types.InputPaymentCredentials(
+                save=False,
+                data=raw.types.DataJSON(data="{}"),
+            )
+            try:
+                if invoice is not None:
+                    await client.invoke(
+                        raw.functions.payments.SendPaymentForm(
+                            form_id=form_id,
+                            invoice=invoice,
+                            credentials=cred,
+                        )
+                    )
+                else:
+                    await client.invoke(
+                        raw.functions.payments.SendPaymentForm(
+                            form_id=form_id,
+                            credentials=cred,
+                        )
+                    )
+                paid = True
+            except TypeError:
+                await client.invoke(
+                    raw.functions.payments.SendPaymentForm(
+                        form_id=form_id,
+                        credentials=cred,
+                    )
+                )
+                paid = True
+        except Exception as e:
+            pay_err = e
+            logging.warning("starzy SendPaymentForm: %s", e)
+
+    if not paid:
+        err_s = str(pay_err or "")
+        if "MEDIA_ALREADY_PAID" in err_s:
+            paid = True
+        elif "BALANCE_TOO_LOW" in err_s:
+            return False, stars, f"موجودی Stars کم است (حدود {stars})"
+        else:
+            raise ValueError(f"پرداخت ناموفق: {err_s}")
+
+    await asyncio.sleep(1.2)
+    saved = await _starzy_save_to_me(client, chat_id, msg_id, f"⭐ استارزی ({stars} Stars)")
+    info = "پرداخت OK"
+    if saved:
+        info += " — ذخیره در Saved Messages"
+    return True, stars, info
+
 
 
 async def starzy_photo_scheduler_task(client, user_id: int):
@@ -7765,6 +7958,50 @@ async def reply_based_controller(client, message):
         except Exception:
             pass
         return
+
+
+    if cmd in (".باز کردن عکس استارزی", "باز کردن عکس استارزی", ".استارزی الان"):
+        conf = STARZY_PHOTO.get(user_id) or {}
+        link = conf.get("link") or ""
+        if not link:
+            # لینک بعد از دستور
+            body = cmd
+            for p in (".باز کردن عکس استارزی", "باز کردن عکس استارزی", ".استارزی الان"):
+                if body.startswith(p):
+                    body = body[len(p):].strip()
+                    break
+            link = body.split()[0] if body else ""
+        if not link:
+            try:
+                await message.edit_text("❌ اول با `.تنظیم عکس استارزی + لینک` لینک را بگذارید\nیا `.باز کردن عکس استارزی + لینک`")
+            except Exception:
+                pass
+            return
+        parsed = _parse_telegram_msg_link(link)
+        if not parsed:
+            try:
+                await message.edit_text("❌ لینک نامعتبر")
+            except Exception:
+                pass
+            return
+        try:
+            await message.edit_text("⏳ در حال باز کردن عکس استارزی...")
+        except Exception:
+            pass
+        try:
+            chat_ref, mid = parsed
+            ok, stars, info = await _starzy_pay_and_unlock(client, chat_ref, mid)
+            if ok:
+                await message.edit_text(f"✅ باز شد\n💰 `{stars}` Stars\n{info}")
+            else:
+                await message.edit_text(f"❌ ناموفق\n💰 `{stars}` Stars\n{info}")
+        except Exception as e:
+            try:
+                await message.edit_text(f"❌ خطا:\n`{e}`")
+            except Exception:
+                pass
+        return
+
 
     if cmd in (".عکس استارزی خاموش", "عکس استارزی خاموش", ".خاموش عکس استارزی"):
         STARZY_PHOTO.pop(user_id, None)
@@ -10718,7 +10955,6 @@ def build_panel_keyboard(user_id, page=1):
                 _styled_btn("⚡ اکشن‌ها", f"panel_page_4_{user_id}", style="primary"),
                 _styled_btn("🔒 قفل پیوی", f"toggle_pv_{user_id}", PV_LOCK_STATUS.get(user_id, False)),
                 _styled_btn("📊 حجم چت", f"panel_page_62_{user_id}", style="primary"),
-                _styled_btn("⭐ عکس استارزی", f"panel_page_63_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("💱 قیمت ارز", f"panel_page_6_{user_id}", style="primary"),
@@ -10797,6 +11033,9 @@ def build_panel_keyboard(user_id, page=1):
             ],
             [
                 _styled_btn("🔐 متن رمزی", f"panel_page_61_{user_id}", style="primary"),
+            ],
+            [
+                _styled_btn("⭐ عکس استارزی", f"panel_page_63_{user_id}", style="primary"),
             ],
             [
                 _styled_btn("⬅️ بستن پنل", f"close_panel_{user_id}", style="danger"),
